@@ -6,6 +6,14 @@ from app.services.auth_service import hash_password
 
 SEED_USERS = [
     {
+        "username": "medtech",
+        "password": "password123",
+        "role": "MEDTECH",
+        "is_active": True,
+        "locked_at": None,
+        "failed_attempts": 0,
+    },
+    {
         "username": "receptionist",
         "password": "password123",
         "role": "RECEPTIONIST",
