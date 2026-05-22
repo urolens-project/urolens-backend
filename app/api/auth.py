@@ -36,24 +36,24 @@ async def login(
             detail="Invalid credentials.",
         )
 
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive.",
+        )
+
+    if user.get("locked_at") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is locked.",
+        )
+
     if not verify_password(body.password, user["hashed_password"]):
         await increment_failed_attempts(user["user_id"])
         await audit_logger.log_login_failed(ip_address, user_id=user["user_id"])
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials.",
-        )
-
-    if user.get("locked_at") is not None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="account_locked",
-        )
-
-    if not user.get("is_active", True):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="account_inactive",
         )
 
     await reset_failed_attempts(user["user_id"])
@@ -67,7 +67,11 @@ async def login(
         user["user_id"], session_record["session_id"], ip_address
     )
 
-    return LoginResponse(access_token=token, role=user["role"])
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        role=user["role"],
+    )
 
 
 @router.post(
