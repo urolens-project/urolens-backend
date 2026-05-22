@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 
-from app.config import JWT_ALGORITHM, JWT_EXPIRY_HOURS, JWT_SIGNING_KEY, MAX_FAILED_ATTEMPTS, ZERO_UUID
+from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SIGNING_KEY, MAX_FAILED_ATTEMPTS
 from app.db.supabase import supabase
 
 
@@ -70,14 +70,15 @@ async def close_session(session_id) -> None:
     ).eq("session_id", str(session_id)).execute()
 
 
-def issue_jwt(user_id, role: str, session_id) -> str:
+def issue_jwt(user_id, username: str, role: str, session_id) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "user_id": str(user_id),
+        "username": username,
         "role": role,
         "session_id": str(session_id),
         "iat": now,
-        "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM)
 

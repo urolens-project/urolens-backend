@@ -6,6 +6,11 @@ from app.services.auth_service import decode_jwt, is_session_active
 
 security_scheme = HTTPBearer()
 
+_UNAUTHORIZED = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Authentication required.",
+)
+
 
 async def get_current_user(
     request: Request,
@@ -18,19 +23,11 @@ async def get_current_user(
         claims = decode_jwt(token)
     except Exception:
         await audit_logger.log_access_denied(ip_address)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token.",
-        )
+        raise _UNAUTHORIZED
 
     session_id = claims.get("session_id")
     if not session_id or not await is_session_active(session_id):
-        await audit_logger.log_access_denied(
-            ip_address, user_id=claims.get("user_id")
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token.",
-        )
+        await audit_logger.log_access_denied(ip_address, user_id=claims.get("user_id"))
+        raise _UNAUTHORIZED
 
     return claims

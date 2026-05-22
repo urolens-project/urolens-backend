@@ -8,9 +8,6 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "Bearer"
     role: str
-
-
-class LogoutResponse(BaseModel):
-    message: str
+    user_id: str
