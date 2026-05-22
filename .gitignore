@@ -1,32 +1,11 @@
-# Python Environment Isolation
+﻿# Core Isolation
 venv/
 .venv/
 env/
 ENV/
-
-# Bytecode
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Configuration Secrets
 .env
 .env.*
-secrets.json
-
-# Local Testing Database Backups
+**/__pycache__/
+*.pyc
 *.db
 *.sqlite3
-
-# PostgreSQL / System Runtime Artifacts
-*.log
-.pytest_cache/
-.coverage
-htmlcov/
-
-# IDE / OS Tailings
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
