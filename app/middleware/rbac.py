@@ -1,7 +1,6 @@
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.db.supabase import get_supabase
 from app.services import audit_logger
 from app.services.auth_service import decode_jwt, is_session_active
 
