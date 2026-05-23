@@ -4,9 +4,8 @@ from src.urolens.core.database import get_db
 
 from src.urolens.domains.intake.router import router as intake_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
-
-# Initialize tables from metadata bound to engine
-# Base.metadata.create_all(bind=engine)
+from src.urolens.api import patients
+from app.api import auth
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -18,9 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register feature domains
 app.include_router(intake_router)
-app.include_router(lab_requests_router) # This will now cleanly mount /api/v1/lab-requests
+app.include_router(lab_requests_router)
+app.include_router(patients.router)
+app.include_router(auth.router)
 
 @app.get("/")
 def root_health_check():
