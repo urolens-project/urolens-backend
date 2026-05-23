@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
+from app.api.sync import router as sync_router
 
 app = FastAPI(
     title="UroLens Backend",
@@ -54,3 +55,4 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 app.include_router(auth_router)
+app.include_router(sync_router)
