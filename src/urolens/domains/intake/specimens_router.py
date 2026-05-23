@@ -20,18 +20,27 @@ class SpecimenReceivePayload(BaseModel):
     free_text_note: Optional[Optional[str]] = None
 
 
-@router.get("/search-request")
+@router.get("/search-request", response_model=List[dict])
 def search_pending_lab_requests(q: str):
     """
     TASK-WEB-06-5: Find valid lab requests currently in PENDING_SAMPLE status
     """
     try:
+        # Strip trailing gaps or prefix tags to secure character wildcards
+        clean_q = q.strip()
+        if clean_q.lower().startswith("dr."):
+            clean_q = clean_q[3:].strip()
+            
+        # Format the parameters using clean logical escaping bounds
+        filter_condition = f"request_uid.ilike.%{clean_q}%,physician_name.ilike.%{clean_q}%"
+        
         response = supabase.table("lab_requests")\
             .select("lab_request_id, request_uid, test_type, physician_name, patient_id")\
             .eq("status", "PENDING_SAMPLE")\
-            .or_(f"request_uid.ilike.%{q}%,physician_name.ilike.%{q}%")\
+            .or_(filter_condition)\
             .limit(5)\
             .execute()
+            
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -54,7 +63,6 @@ def receive_specimen_endpoint(payload: SpecimenReceivePayload):
             
         parent_request = req_query.data
         
-        # Look up patient details to fill out the denormalized profile tracking block
         pat_query = supabase.table("patients")\
             .select("first_name, last_name, patient_uid")\
             .eq("patient_id", parent_request.get("patient_id"))\
