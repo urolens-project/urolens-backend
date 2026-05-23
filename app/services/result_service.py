@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+_PHT = timezone(timedelta(hours=8))
 
 from fastapi import HTTPException, status
 
@@ -43,7 +45,7 @@ async def confirm_result(
             detail="Result does not belong to your specimens.",
         )
 
-    confirmed_at = datetime.now(timezone.utc).isoformat()
+    confirmed_at = datetime.now(_PHT).isoformat()
     await (
         supabase.table("analysis_results")
         .update({
