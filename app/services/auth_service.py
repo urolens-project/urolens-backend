@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -6,8 +5,6 @@ import jwt
 
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SIGNING_KEY, MAX_FAILED_ATTEMPTS
 from app.db.supabase import supabase
-
-ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -45,12 +42,6 @@ async def increment_failed_attempts(user_id) -> None:
 async def reset_failed_attempts(user_id) -> None:
     await supabase.table("users").update(
         {"failed_attempts": 0, "locked_at": None}
-    ).eq("user_id", str(user_id)).execute()
-
-
-async def lock_account(user_id) -> None:
-    await supabase.table("users").update(
-        {"locked_at": datetime.now(timezone.utc).isoformat()}
     ).eq("user_id", str(user_id)).execute()
 
 

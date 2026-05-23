@@ -1,21 +1,19 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+import os
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# 1. Update your connection string format:
-# Format: postgresql://username:password@localhost:5432/database_name
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:052805@localhost:5432/urolens_db"
+load_dotenv()
 
-# 2. Initialize the engine without the SQLite-specific connect_args
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+supabase_url = os.getenv("SUPABASE_URL")
+# Reads your service key from the .env
+supabase_key = os.getenv("SUPABASE_SERVICE_KEY") 
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+if not supabase_url or not supabase_key:
+    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env file!")
 
-Base = declarative_base()
+# This client replaces your old SessionLocal engines
+supabase: Client = create_client(supabase_url, supabase_key)
 
+# Keep a dummy function here just in case other files import it to prevent crashes
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield supabase
