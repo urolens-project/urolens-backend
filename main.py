@@ -1,9 +1,14 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
+from app.api.results import router as results_router
+from app.api.specimens import router as specimens_router
 from app.api.sync import router as sync_router
 from src.urolens.domains.intake.router import router as intake_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
@@ -63,6 +68,8 @@ app.include_router(lab_requests_router)
 # ── Mobile developer routers ──────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(sync_router)
+app.include_router(specimens_router)
+app.include_router(results_router)
 
 
 @app.get("/")

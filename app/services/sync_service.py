@@ -11,7 +11,7 @@ _SPECIMEN_COLS = (
 _QUEUE_COLS = "assignment_id, specimen_id, medtech_id, assigned_at, status, updated_at"
 _RESULT_COLS = (
     "result_id, specimen_id, ai_findings, flagged_anomalies, "
-    "smart_diagnosis, status, image_id, updated_at"
+    "smart_diagnosis, status, image_id, model_version, updated_at"
 )
 
 
