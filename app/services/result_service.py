@@ -64,3 +64,57 @@ async def confirm_result(
         "status": "PENDING_SUPERVISOR_APPROVAL",
         "confirmed_at": confirmed_at,
     }
+
+
+async def override_parameter(
+    result_id: str,
+    user_id: str,
+    parameter_name: str,
+    original_ai_value: str,
+    corrected_value: str,
+    rationale: str,
+) -> dict:
+    result = await (
+        supabase.table("analysis_results")
+        .select("result_id, specimen_id")
+        .eq("result_id", result_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis result not found.")
+
+    spec_result = await (
+        supabase.table("specimens")
+        .select("medtech_id")
+        .eq("specimen_id", rows[0]["specimen_id"])
+        .execute()
+    )
+    spec_rows = spec_result.data or []
+    if not spec_rows or spec_rows[0]["medtech_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Result does not belong to your specimens.",
+        )
+
+    now = datetime.now(_PHT).isoformat()
+    insert_result = await (
+        supabase.table("manual_overrides")
+        .insert({
+            "result_id": result_id,
+            "parameter_name": parameter_name,
+            "original_ai_value": original_ai_value,
+            "corrected_value": corrected_value,
+            "rationale": rationale,
+            "overridden_by": user_id,
+            "overridden_at": now,
+        })
+        .execute()
+    )
+    override_row = (insert_result.data or [{}])[0]
+
+    return {
+        "override_id": str(override_row.get("override_id", "")),
+        "result_id": result_id,
+        "parameter_name": parameter_name,
+    }
