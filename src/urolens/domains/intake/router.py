@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from datetime import date, datetime
 import random
 
-from src.urolens.core.database import get_db
-from src.urolens.domains.intake.models import Patient
+# Import the cloud API client instance directly
+from src.urolens.core.database import supabase 
 
 router = APIRouter(
     prefix="/api/v1/intake",
     tags=["Patient Intake"]
 )
+
+REAL_USER_ID = "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
 
 class PatientRegistrationRequest(BaseModel):
     first_name: str
@@ -25,44 +26,56 @@ class PatientRegistrationRequest(BaseModel):
     emergency_relationship: str | None = None
     emergency_phone: str | None = None
 
+@router.get("/patients/search")
+def search_patients_endpoint(q: str):
+    try:
+        # Search for records matching the text pattern against first or last names
+        response = supabase.table("patients")\
+            .select("patient_id, patient_uid, first_name, last_name")\
+            .or_(f"first_name.ilike.%{q}%,last_name.ilike.%{q}%,patient_uid.ilike.%{q}%")\
+            .limit(5)\
+            .execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/patients", status_code=status.HTTP_201_CREATED)
-def register_patient_endpoint(payload: PatientRegistrationRequest, db: Session = Depends(get_db)):
+def register_patient_endpoint(payload: PatientRegistrationRequest):
     try:
         generated_sequence_id = f"URLNS-2026-{random.randint(10000, 99999)}"
-        
         payload_data = payload.dict()
-        is_walkin_session = payload_data.get("is_walkin", False)
         
-        new_patient_record = Patient(
-            id=generated_sequence_id,
-            first_name=payload_data.get("first_name"),
-            middle_name=payload_data.get("middle_name"),
-            last_name=payload_data.get("last_name"),
-            date_of_birth=payload_data.get("date_of_birth"),
-            gender=payload_data.get("gender"),
-            contact_number=payload_data.get("contact_number"),
-            complete_address=payload_data.get("complete_address"),
-            is_walkin=is_walkin_session,
-            # Safely fall back to None if fields are missing from the frontend form
-            emergency_name=payload_data.get("emergency_name") if is_walkin_session else None,
-            emergency_relationship=payload_data.get("emergency_relationship") if is_walkin_session else None,
-            emergency_phone=payload_data.get("emergency_phone") if is_walkin_session else None,
-        )
+        incoming_gender = payload_data.get("gender", "OTHER")
+        if incoming_gender:
+            incoming_gender = incoming_gender.upper()
         
-        db.add(new_patient_record)
-        db.commit()
-        db.refresh(new_patient_record)
+        # Package the keys to match your Supabase column names exactly
+        patient_record_payload = {
+            "patient_uid": generated_sequence_id,
+            "first_name": payload_data.get("first_name"),
+            "middle_name": payload_data.get("middle_name"),
+            "last_name": payload_data.get("last_name"),
+            "date_of_birth": str(payload_data.get("date_of_birth")),
+            "sex": incoming_gender,
+            "contact_no": payload_data.get("contact_number"),
+            "address": payload_data.get("complete_address"),
+            "is_walkin": payload_data.get("is_walkin", False),
+            "registered_by": REAL_USER_ID,
+            "record_flag": "COMPLETE"
+        }
+        
+        # Shoot the data packet straight up to the Supabase REST API layer
+        response = supabase.table("patients").insert(patient_record_payload).execute()
         
         return {
             "success": True,
             "patient_id": generated_sequence_id,
-            "message": "Patient serialization committed into core table matrix successfully.",
+            "message": "Patient serialization committed into cloud table matrix successfully.",
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database pipeline transaction write failure: {str(e)}"
+            detail=f"Supabase Cloud API write failure: {str(e)}"
         )

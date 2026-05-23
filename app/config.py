@@ -1,12 +1,10 @@
 import os
 
-SUPABASE_URL = os.getenv(
-    "SUPABASE_URL",
-    "https://fctpcvqkqokzizjcirpl.supabase.co",
-)
-SUPABASE_SERVICE_KEY = os.getenv(
-    "SUPABASE_SERVICE_KEY",
-    "sb_secret_X8GWf-389TnwObK4fhQflQ_KNHJ5CF3",
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/urolens_db",
 )
 JWT_SIGNING_KEY = os.getenv(
     "JWT_SIGNING_KEY",

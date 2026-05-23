@@ -1,9 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+from app.config import ZERO_UUID
 from app.db.supabase import supabase
-
-ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 async def _create_audit_entry(
