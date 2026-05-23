@@ -6,7 +6,8 @@ from app.db.supabase import supabase
 # Columns to select per table — only what the mobile sync needs
 _SPECIMEN_COLS = (
     "specimen_id, sample_uid, patient_name, patient_uid, test_type, "
-    "status, priority_level, received_at, assigned_at, medtech_id, updated_at"
+    "status, priority_level, received_at, assigned_at, medtech_id, "
+    "rejection_reason, rejection_note, rejected_at, updated_at"
 )
 _QUEUE_COLS = "assignment_id, specimen_id, medtech_id, assigned_at, status, updated_at"
 _RESULT_COLS = (
