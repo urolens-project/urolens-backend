@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.urolens.core.database import get_db
 
+from app.api.auth import router as auth_router
+from app.api.sync import router as sync_router
 from src.urolens.domains.intake.router import router as intake_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
 
@@ -22,6 +24,8 @@ app.add_middleware(
 app.include_router(intake_router)
 app.include_router(lab_requests_router) # This will now cleanly mount /api/v1/lab-requests
 
+app.include_router(auth_router)
+app.include_router(sync_router)
 @app.get("/")
 def root_health_check():
     return {"status": "healthy", "service": "UroLens Core Platform Architecture"}
