@@ -4,21 +4,21 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from src.urolens.domains.intake.router import router as intake_router
-from src.urolens.domains.intake.specimens_router import router as specimens_router
-from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
-from src.urolens.domains.intake.labeling_router import router as labeling_router
 from fastapi.responses import JSONResponse
 
-from app.api.auth import router as auth_router
-from app.api.results import router as results_router
-from app.api.specimens import router as specimens_router
-from app.api.sync import router as sync_router
+# Web developer routers
 from src.urolens.domains.intake.router import router as intake_router
-from src.urolens.domains.intake.specimens_router import router as specimens_router
+from src.urolens.domains.intake.specimens_router import router as src_specimens_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
+from src.urolens.domains.intake.labeling_router import router as labeling_router
 from src.urolens.api import patients
 from app.api import auth
+
+# Mobile developer routers
+from app.api.results import router as results_router
+from app.api.specimens import router as mobile_specimens_router
+from app.api.sync import router as sync_router
+from app.api.images import router as images_router
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -75,13 +75,14 @@ app.include_router(lab_requests_router)
 app.include_router(labeling_router)
 app.include_router(patients.router)
 app.include_router(auth.router)
-app.include_router(specimens_router)
+app.include_router(src_specimens_router)
 
 # ── Mobile developer routers ──────────────────────────────────────────────────
-# app.include_router(auth_router)
-# app.include_router(sync_router)
-# app.include_router(specimens_router)
-# app.include_router(results_router)
+
+app.include_router(sync_router)
+app.include_router(mobile_specimens_router)
+app.include_router(results_router)
+app.include_router(images_router)
 
 
 @app.get("/")
