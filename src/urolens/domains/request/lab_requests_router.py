@@ -35,11 +35,18 @@ def get_physicians_endpoint():
         # Fetch user_id and full name parameters directly from the users table
         # If your table uses a 'role' flag, you can add .eq("role", "PHYSICIAN") or "DOCTOR"
         response = supabase.table("users")\
-            .select("user_id, name")\
+            .select("user_id, username")\
+            .eq("role", "PHYSICIAN")\
+            .eq("is_active", True)\
             .execute()
-            
+
+        if response.data is None:
+            return []
+
         return response.data
+
     except Exception as e:
+        logger.error(f"Physicians fetch failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to query database physician registry: {str(e)}"
@@ -54,11 +61,14 @@ def create_lab_request_endpoint(payload: LabRequestCreatePayload):
         computed_id = payload_data.get("physician_id")
         computed_name = payload_data.get("physician_name")
         
-        # If they selected a database doctor, look up their name to keep lab_requests descriptive
         if computed_id and not computed_name:
-            user_query = supabase.table("users").select("name").eq("user_id", str(computed_id)).single().execute()
+            user_query = supabase.table("users")\
+                .select("username")\
+                .eq("user_id", str(computed_id))\
+                .single()\
+                .execute()
             if user_query.data:
-                computed_name = user_query.data.get("name")
+                computed_name = user_query.data.get("username")
 
         lab_request_record = {
             "request_uid": generated_request_uid,
