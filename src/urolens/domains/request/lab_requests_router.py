@@ -32,6 +32,8 @@ class LabRequestCreatePayload(BaseModel):
 @router.get("/physicians", status_code=status.HTTP_200_OK)
 def get_physicians_endpoint():
     try:
+        # Fetch user_id and full name parameters directly from the users table
+        # If your table uses a 'role' flag, you can add .eq("role", "PHYSICIAN") or "DOCTOR"
         response = supabase.table("users")\
             .select("user_id, username")\
             .eq("role", "PHYSICIAN")\
@@ -59,9 +61,12 @@ def create_lab_request_endpoint(payload: LabRequestCreatePayload):
         computed_id = payload_data.get("physician_id")
         computed_name = payload_data.get("physician_name")
         
-        # If they selected a database doctor, look up their name to keep lab_requests descriptive
         if computed_id and not computed_name:
-            user_query = supabase.table("users").select("username").eq("user_id", str(computed_id)).single().execute()
+            user_query = supabase.table("users")\
+                .select("username")\
+                .eq("user_id", str(computed_id))\
+                .single()\
+                .execute()
             if user_query.data:
                 computed_name = user_query.data.get("username")
 

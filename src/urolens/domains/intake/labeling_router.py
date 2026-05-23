@@ -110,65 +110,35 @@ def confirm_label_affixed_endpoint(
             .execute()
 
         if not label_query.data:
-            if not payload.offline_override:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No label found. Print label first, or enable offline override."
-                )
+            raise HTTPException(status_code=400, detail="Safety Constraint Violation: Barcode print transaction trace must be executed before labels can be physically affixed.")
 
-            # OFFLINE OVERRIDE — create minimal label record
-            spec_query = supabase.table("specimens")\
-                .select("*")\
-                .eq("specimen_id", str(id))\
-                .single()\
-                .execute()
+        target_label_id = label_query.data[0].get("label_id")
 
-            if not spec_query.data:
-                raise HTTPException(status_code=404, detail="Specimen not found.")
+        # 2. Advance the local specimen container tracking state to 'LABELED'
+        # Crucial Note: Check your check constraints. If your DB has constraints on specimens table, 'LABELED' matches standard setup templates
+        spec_update = supabase.table("specimens").update({"status": "LABELED"}).eq("specimen_id", str(id)).execute()
+        if not spec_update.data:
+            raise Exception("Failure advancing state index trace inside public.specimens container.")
 
-            specimen = spec_query.data
-            offline_label = {
-                "specimen_id": str(id),
-                "sample_uid": specimen.get("sample_uid"),
-                "label_content_json": {
-                    "patient_name": specimen.get("patient_name"),
-                    "patient_uid": specimen.get("patient_uid"),
-                    "sample_uid": specimen.get("sample_uid"),
-                    "test_type": specimen.get("test_type"),
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "offline_override": True
-                },
-                "generated_by": "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
-            }
-            label_tx = supabase.table("sample_labels").insert(offline_label).execute()
-            if not label_tx.data:
-                raise Exception("Offline label insert failed.")
-            target_label_id = label_tx.data[0]["label_id"]
-            logger.warning(f"Offline override used for specimen {id}. Label created: {target_label_id}")
+        # 3. Complete verification ticks on your labels subledger table row
+        supabase.table("sample_labels").update({
+            "affixed_confirmed": True,
+            "affixed_at": datetime.utcnow().isoformat()
+        }).eq("label_id", target_label_id).execute()
 
-        else:
-            target_label_id = label_query.data[0].get("label_id")
-            if not target_label_id:
-                raise HTTPException(status_code=400, detail="Label record exists but label_id is null.")
-
-        supabase.table("specimens")\
-            .update({"status": "LABELED"})\
-            .eq("specimen_id", str(id))\
-            .execute()
-
-        supabase.table("sample_labels")\
-            .update({
-                "affixed_confirmed": True,
-                "affixed_at": datetime.utcnow().isoformat()
-            })\
-            .eq("label_id", target_label_id)\
-            .execute()
+        # 4. Post state transformations straight to internal system audit logging logs
+        audit_entry = {
+            "action": "LABEL_AFFIXED",
+            "reference_id": str(id),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        # Un-comment if audit logs tracking tables are online:
+        # supabase.table("audit_logs").insert(audit_entry).execute()
 
         return {
             "success": True,
-            "message": "Specimen advanced to LABELED.",
-            "updated_status": "LABELED",
-            "offline_override_used": payload.offline_override
+            "message": "Specimen successfully advanced to LABELED status step tracker line items.",
+            "updated_status": "LABELED"
         }
     except HTTPException as he:
         raise he
