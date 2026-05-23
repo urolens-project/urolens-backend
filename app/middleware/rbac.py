@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -9,6 +11,11 @@ security_scheme = HTTPBearer()
 _UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Authentication required.",
+)
+
+_FORBIDDEN = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Insufficient permissions.",
 )
 
 
@@ -31,3 +38,14 @@ async def get_current_user(
         raise _UNAUTHORIZED
 
     return claims
+
+
+class RequireRole:
+    def __init__(self, allowed_roles: List[str]):
+        self.allowed_roles = allowed_roles
+
+    async def __call__(self, request: Request, current_user: dict = Depends(get_current_user)) -> dict:
+        user_role = current_user.get("role", "")
+        if user_role not in self.allowed_roles:
+            raise _FORBIDDEN
+        return current_user
