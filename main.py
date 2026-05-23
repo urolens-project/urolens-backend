@@ -17,7 +17,7 @@ from app.api.sync import router as sync_router
 from src.urolens.domains.intake.router import router as intake_router
 from src.urolens.domains.intake.specimens_router import router as specimens_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
-from src.urolens.api import patients
+from src.urolens.api import patients, queue
 from app.api import auth
 
 app = FastAPI(title="UroLens LIS Engine")
@@ -74,6 +74,7 @@ app.include_router(intake_router)
 app.include_router(lab_requests_router)
 app.include_router(labeling_router)
 app.include_router(patients.router)
+app.include_router(queue.router)
 app.include_router(auth.router)
 app.include_router(specimens_router)
 
