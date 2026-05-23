@@ -4,6 +4,10 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from src.urolens.domains.intake.router import router as intake_router
+from src.urolens.domains.intake.specimens_router import router as specimens_router
+from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
+from src.urolens.domains.intake.labeling_router import router as labeling_router
 from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
@@ -68,6 +72,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(intake_router)
 app.include_router(lab_requests_router)
+app.include_router(labeling_router)
 app.include_router(patients.router)
 app.include_router(auth.router)
 app.include_router(specimens_router)
