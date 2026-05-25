@@ -31,14 +31,41 @@ class ConfirmPayload(BaseModel):
 
 @router.get("/search-received")
 def search_received_specimens(q: str):
+    from src.urolens.core.encryption import decrypt_pii
     try:
+        q_lower = q.strip().lower()
+
+        # sample_uid and patient_uid are plain text — search them via SQL.
+        # patient_name is encrypted so fetch all RECEIVED and filter in Python.
         response = supabase.table("specimens")\
             .select("specimen_id, sample_uid, patient_name, patient_uid, test_type, status")\
             .eq("status", "RECEIVED")\
-            .ilike("patient_name", f"%{q}%")\
-            .limit(5)\
+            .limit(200)\
             .execute()
-        return response.data
+
+        results = []
+        for row in (response.data or []):
+            try:
+                name = decrypt_pii(row["patient_name"])
+            except Exception:
+                name = row.get("patient_name", "")
+
+            uid = row.get("patient_uid", "")
+            sample_uid = row.get("sample_uid", "")
+
+            if q_lower in name.lower() or q_lower in uid.lower() or q_lower in sample_uid.lower():
+                results.append({
+                    "specimen_id": row["specimen_id"],
+                    "sample_uid": sample_uid,
+                    "patient_name": name,
+                    "patient_uid": uid,
+                    "test_type": row.get("test_type"),
+                    "status": row.get("status"),
+                })
+            if len(results) == 5:
+                break
+
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -57,8 +84,14 @@ def generate_specimen_label_endpoint(
         if specimen.get("status") != "RECEIVED":
             raise HTTPException(status_code=400, detail=f"Specimen is in state '{specimen.get('status')}'. Must be RECEIVED.")
 
+        from src.urolens.core.encryption import decrypt_pii
+        try:
+            patient_name = decrypt_pii(specimen.get("patient_name", ""))
+        except Exception:
+            patient_name = specimen.get("patient_name", "")
+
         label_content_json = {
-            "patient_name": specimen.get("patient_name"),
+            "patient_name": patient_name,
             "patient_uid": specimen.get("patient_uid"),
             "sample_uid": specimen.get("sample_uid"),
             "test_type": specimen.get("test_type"),
@@ -128,11 +161,17 @@ def confirm_label_affixed_endpoint(
                 raise HTTPException(status_code=404, detail="Specimen not found.")
 
             specimen = spec_query.data
+            from src.urolens.core.encryption import decrypt_pii
+            try:
+                offline_patient_name = decrypt_pii(specimen.get("patient_name", ""))
+            except Exception:
+                offline_patient_name = specimen.get("patient_name", "")
+
             offline_label = {
                 "specimen_id": str(id),
                 "sample_uid": specimen.get("sample_uid"),
                 "label_content_json": {
-                    "patient_name": specimen.get("patient_name"),
+                    "patient_name": offline_patient_name,
                     "patient_uid": specimen.get("patient_uid"),
                     "sample_uid": specimen.get("sample_uid"),
                     "test_type": specimen.get("test_type"),
