@@ -98,7 +98,6 @@ class PatientService:
             entity_id=patient_id,
             user_id=created_by,
             detail_json={"patient_uid": patient_uid},
-            db=self.db,
             request=request,
         )
 
