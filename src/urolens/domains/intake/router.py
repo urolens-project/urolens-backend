@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from datetime import date, datetime
-import random
+import random, logging
 
-# Import the cloud API client instance directly
 from src.urolens.core.database import supabase 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/api/v1/intake",
     tags=["Patient Intake"]
@@ -18,23 +18,21 @@ class PatientRegistrationRequest(BaseModel):
     middle_name: str | None = None
     last_name: str
     date_of_birth: date
-    gender: str
-    contact_number: str
-    complete_address: str
+    sex: str                    # was: gender
+    contact_no: str | None = None    # was: contact_number
+    address: str | None = None       # was: complete_address
     is_walkin: bool
-    emergency_name: str | None = None
-    emergency_relationship: str | None = None
-    emergency_phone: str | None = None
+    consent: dict | None = None
 
 @router.get("/patients/search")
-def search_patients_endpoint(q: str):
+async def search_patients_endpoint(q: str):
     from src.urolens.core.encryption import decrypt_pii
     try:
         q_lower = q.strip().lower()
 
         # Patient UIDs are stored as plain text — search them directly.
         # Names are encrypted so ilike won't match; fetch all and filter in Python.
-        response = supabase.table("patients")\
+        response = await supabase.table("patients")\
             .select("patient_id, patient_uid, first_name, last_name")\
             .limit(200)\
             .execute()
@@ -64,42 +62,40 @@ def search_patients_endpoint(q: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/patients", status_code=status.HTTP_201_CREATED)
-def register_patient_endpoint(payload: PatientRegistrationRequest):
+async def register_patient_endpoint(payload: PatientRegistrationRequest):
     try:
         generated_sequence_id = f"URLNS-2026-{random.randint(10000, 99999)}"
         payload_data = payload.dict()
         
-        incoming_gender = payload_data.get("gender", "OTHER")
-        if incoming_gender:
-            incoming_gender = incoming_gender.upper()
+        incoming_sex = payload_data.get("sex", "OTHER")
+        if incoming_sex:
+            incoming_sex = incoming_sex.upper()
         
-        # Package the keys to match your Supabase column names exactly
         patient_record_payload = {
             "patient_uid": generated_sequence_id,
             "first_name": payload_data.get("first_name"),
             "middle_name": payload_data.get("middle_name"),
             "last_name": payload_data.get("last_name"),
             "date_of_birth": str(payload_data.get("date_of_birth")),
-            "sex": incoming_gender,
-            "contact_no": payload_data.get("contact_number"),
-            "address": payload_data.get("complete_address"),
+            "sex": incoming_sex,
+            "contact_no": payload_data.get("contact_no"),
+            "address": payload_data.get("address"),
             "is_walkin": payload_data.get("is_walkin", False),
             "registered_by": REAL_USER_ID,
             "record_flag": "COMPLETE"
         }
         
-        # Shoot the data packet straight up to the Supabase REST API layer
-        response = supabase.table("patients").insert(patient_record_payload).execute()
+        response = await supabase.table("patients").insert(patient_record_payload).execute()
         
         return {
             "success": True,
             "patient_id": generated_sequence_id,
-            "message": "Patient serialization committed into cloud table matrix successfully.",
+            "message": "Patient registered successfully.",
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Supabase Cloud API write failure: {str(e)}"
+            detail=f"Supabase write failure: {str(e)}"
         )

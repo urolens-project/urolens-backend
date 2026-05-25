@@ -119,7 +119,6 @@ class AIIntegrationService:
                 "height_px": height,
                 "file_size_bytes": len(raw_bytes),
             },
-            db=self.db,
             request=request,
         )
 

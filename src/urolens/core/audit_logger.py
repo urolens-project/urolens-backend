@@ -4,14 +4,13 @@ import uuid
 from typing import Any
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from supabase import AsyncClient
 
-from ..core.database import get_db
-from ..models.audit_log import AuditLog
+from app.db.supabase import get_supabase
 
 
 class AuditLogger:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncClient) -> None:
         self._db = db
 
     async def record(
@@ -21,26 +20,22 @@ class AuditLogger:
         entity_id: uuid.UUID | str,
         user_id: uuid.UUID | str | None,
         detail_json: dict[str, Any] | None = None,
-        db: AsyncSession | None = None,
         request: Any = None,
     ) -> None:
-        session = db or self._db
-
         ip_address: str | None = None
         if request and hasattr(request, "client") and request.client:
             ip_address = request.client.host
 
-        entry = AuditLog(
-            event_type=event_type,
-            entity_type=entity_type,
-            entity_id=uuid.UUID(str(entity_id)) if not isinstance(entity_id, uuid.UUID) else entity_id,
-            user_id=uuid.UUID(str(user_id)) if user_id and not isinstance(user_id, uuid.UUID) else user_id,
-            ip_address=ip_address,
-            detail_json=detail_json,
-        )
-        session.add(entry)
-        await session.flush()
+        await self._db.table("audit_logs").insert({
+            "log_id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "entity_type": entity_type,
+            "entity_id": str(entity_id),
+            "user_id": str(user_id) if user_id else None,
+            "ip_address": ip_address,
+            "detail_json": detail_json,
+        }).execute()
 
 
-def get_audit_logger(db: AsyncSession = Depends(get_db)) -> AuditLogger:
+def get_audit_logger(db: AsyncClient = Depends(get_supabase)) -> AuditLogger:
     return AuditLogger(db=db)

@@ -178,7 +178,6 @@ class QueueService:
                 "specimen_id": str(data.specimen_id),
                 "medtech_id": str(data.medtech_id),
             },
-            db=self.db,
             request=request,
         )
 

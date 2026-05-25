@@ -4,8 +4,11 @@ from typing import Optional
 from datetime import datetime
 import random
 import uuid
+import logging
 
 from src.urolens.core.database import supabase 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/lab-requests",
@@ -30,11 +33,9 @@ class LabRequestCreatePayload(BaseModel):
     clinical_notes: Optional[str] = None
 
 @router.get("/physicians", status_code=status.HTTP_200_OK)
-def get_physicians_endpoint():
+async def get_physicians_endpoint():
     try:
-        # Fetch user_id and full name parameters directly from the users table
-        # If your table uses a 'role' flag, you can add .eq("role", "PHYSICIAN") or "DOCTOR"
-        response = supabase.table("users")\
+        response = await supabase.table("users")\
             .select("user_id, username")\
             .eq("role", "PHYSICIAN")\
             .eq("is_active", True)\
@@ -53,7 +54,7 @@ def get_physicians_endpoint():
         )
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_lab_request_endpoint(payload: LabRequestCreatePayload):
+async def create_lab_request_endpoint(payload: LabRequestCreatePayload):
     try:
         generated_request_uid = f"REQ-2026-{random.randint(10000, 99999)}"
         payload_data = payload.dict()
@@ -62,7 +63,7 @@ def create_lab_request_endpoint(payload: LabRequestCreatePayload):
         computed_name = payload_data.get("physician_name")
         
         if computed_id and not computed_name:
-            user_query = supabase.table("users")\
+            user_query = await supabase.table("users")\
                 .select("username")\
                 .eq("user_id", str(computed_id))\
                 .single()\
@@ -73,15 +74,15 @@ def create_lab_request_endpoint(payload: LabRequestCreatePayload):
         lab_request_record = {
             "request_uid": generated_request_uid,
             "patient_id": str(payload_data.get("patient_id")),
-            "physician_id": str(computed_id) if computed_id else None, # Clean UUID mapping link
+            "physician_id": str(computed_id) if computed_id else None,
             "physician_name": computed_name,
-            "test_type": payload_data.get("test_type").upper().replace(" ", "_"), 
+            "test_type": payload_data.get("test_type").upper().replace(" ", "_"),
             "clinical_notes": payload_data.get("clinical_notes"),
-            "status": "PENDING_SAMPLE", 
+            "status": "PENDING_SAMPLE",
             "encoded_by": CURRENT_ENCODER_ID
         }
         
-        response = supabase.table("lab_requests").insert(lab_request_record).execute()
+        response = await supabase.table("lab_requests").insert(lab_request_record).execute()
         return {
             "success": True,
             "request_id": generated_request_uid,

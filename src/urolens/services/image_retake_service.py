@@ -76,7 +76,6 @@ class ImageRetakeService:
             entity_id=image_id,
             user_id=medtech_id,
             detail_json={"specimen_id": str(image.specimen_id)},
-            db=self.db,
             request=request,
         )
 
