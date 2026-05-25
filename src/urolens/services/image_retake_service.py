@@ -1,4 +1,5 @@
-# src/urolens/services/image_retake_service.py
+from __future__ import annotations
+
 """
 Image Retake Service — T2.7
 
@@ -7,13 +8,12 @@ screen re-opens so a new image can be uploaded.
 
 Responsibilities
 ----------------
-- Validate the image can be discarded (must be UPLOADED/PROCESSED, not already DISCARDED).
+- Validate the image can be discarded (must be ACTIVE, not already DISCARDED/REPLACED).
 - Delegate the actual status update to AIIntegrationService.discard_image().
 - Emit the IMAGE_DISCARDED audit event.
 - The AnalysisResult row remains intact — it will be updated when the new image
   is uploaded and inference runs again.
 """
-from __future__ import annotations
 
 import uuid
 from typing import Any
@@ -49,7 +49,7 @@ class ImageRetakeService:
         Raises
         ------
         NotFoundError  — image not found
-        ConflictError  — image is already DISCARDED or in PROCESSING state
+        ConflictError  — image is already DISCARDED or REPLACED
         """
         image = await self.db.get(Image, image_id)
         if image is None:
@@ -58,10 +58,10 @@ class ImageRetakeService:
         if image.status == ImageStatus.DISCARDED:
             raise ConflictError("This image has already been discarded.")
 
-        if image.status == ImageStatus.PROCESSING:
+        if image.status == ImageStatus.REPLACED:
             raise ConflictError(
-                "Image is currently being processed by the AI engine. "
-                "Please wait until analysis completes before discarding."
+                "This image has been superseded by a newer upload. "
+                "Please upload a new image."
             )
 
         discarded = await self.ai_svc.discard_image(
