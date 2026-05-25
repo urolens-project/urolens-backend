@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+_PHT = timezone(timedelta(hours=8))
 
 from fastapi import HTTPException, status
 
@@ -42,7 +44,7 @@ async def reject_specimen(
             detail="Specimen is already rejected.",
         )
 
-    rejected_at = datetime.now(timezone.utc).isoformat()
+    rejected_at = datetime.now(_PHT).isoformat()
     await (
         supabase.table("specimens")
         .update({
