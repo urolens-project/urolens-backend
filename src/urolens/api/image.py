@@ -12,6 +12,7 @@ POST /api/v1/images/{image_id}/discard  — mark image DISCARDED for retake flow
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import uuid
@@ -24,11 +25,13 @@ from pydantic import BaseModel
 from ..core.exceptions import ImageFormatError, ImageResolutionError
 from ..middleware.rbac import RequireRole
 from ..models.user import UserRole
+from ..services.image_retake_service import ImageRetakeService
 from app.db.supabase import supabase as sb
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
+_retake_service = ImageRetakeService()
 
 MIN_WIDTH = 640
 MIN_HEIGHT = 480
@@ -36,6 +39,42 @@ ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
 MIME_TO_FORMAT = {"image/jpeg": "JPEG", "image/png": "PNG"}
 AI_MODEL_VERSION = "mvp-v1.0"
 STORAGE_BUCKET = "images"
+
+
+# ── AI inference hook ────────────────────────────────────────────────────────
+
+async def _try_run_inference(
+    raw_bytes: bytes,
+    result_id: uuid.UUID,
+    now_iso: str,
+) -> dict | None:
+    """
+    Attempt AI inference via the urolens_ai package.
+
+    When the AI engineer delivers the package, installing it activates inference
+    automatically — no other code change required.
+
+    Returns the findings dict on success, None when the package is absent or
+    inference fails (the analysis_results row stays PENDING_CONFIRM in either case).
+    """
+    try:
+        from urolens_ai import infer  # type: ignore[import]
+    except ImportError:
+        return None
+
+    try:
+        result = infer(raw_bytes)
+        findings: dict = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        await (
+            sb.table("analysis_results")
+            .update({"ai_findings": findings, "updated_at": now_iso})
+            .eq("result_id", str(result_id))
+            .execute()
+        )
+        return findings
+    except Exception as exc:
+        log.warning("AI inference failed for result %s: %s", result_id, exc)
+        return None
 
 
 # ── Response schemas ──────────────────────────────────────────────────────────
@@ -81,9 +120,14 @@ async def upload_image(
         )
 
     # ── 2. Validate resolution ────────────────────────────────────────────────
+    # PIL.Image.open is synchronous/blocking — run in a thread to avoid
+    # stalling the event loop on large images.
     try:
-        pil_img = PILImage.open(io.BytesIO(raw_bytes))
-        width, height = pil_img.size
+        def _read_dimensions() -> tuple[int, int]:
+            img = PILImage.open(io.BytesIO(raw_bytes))
+            return img.size
+
+        width, height = await asyncio.to_thread(_read_dimensions)
     except Exception as exc:
         raise ImageFormatError(f"Cannot read image file: {exc}")
 
@@ -118,18 +162,11 @@ async def upload_image(
         except Exception as exc:
             log.warning("Could not mark previous image as REPLACED: %s", exc)
 
-    # ── 4. Upload image bytes to Supabase Storage ─────────────────────────────
+    # ── 4. Storage path (upload deferred until AI integration) ───────────────
+    # The storage_key is saved to DB now so it can be used later.
+    # Actual file upload is skipped here: the 20 s Supabase Storage timeout
+    # blocks the response when the bucket is not yet configured.
     storage_key = f"specimens/{specimen_id}/images/{image_id}.jpg"
-    try:
-        await sb.storage.from_(STORAGE_BUCKET).upload(
-            storage_key,
-            raw_bytes,
-            {"content-type": content_type, "upsert": "false"},
-        )
-    except Exception as exc:
-        # Storage bucket may not exist — log and continue.
-        # The DB row is still created so the mobile flow can proceed.
-        log.warning("Supabase Storage upload skipped (%s). Continuing without file.", exc)
 
     # ── 5. Insert images row ──────────────────────────────────────────────────
     image_payload: dict = {
@@ -188,13 +225,16 @@ async def upload_image(
             .execute()
         )
 
+    # ── 7. Attempt AI inference (no-op until urolens_ai is installed) ──────────
+    ai_findings = await _try_run_inference(raw_bytes, result_id, now_iso)
+
     return AnalysisResultResponse(
         id=result_id,
         result_id=result_id,
         specimen_id=specimen_id,
         image_id=image_id,
         status="PENDING_CONFIRM",
-        ai_findings=None,
+        ai_findings=ai_findings,
         flagged_anomalies=None,
     )
 
@@ -210,26 +250,10 @@ async def discard_image(
     request: Request,
     claims: dict = Depends(RequireRole([UserRole.MEDTECH])),
 ) -> ImageDiscardResponse:
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    result = await (
-        sb.table("images")
-        .update({"status": "DISCARDED", "discarded_at": now_iso, "updated_at": now_iso})
-        .eq("image_id", str(image_id))
-        .execute()
+    medtech_id = uuid.UUID(claims["user_id"])
+    result = await _retake_service.discard_and_retake(
+        image_id=image_id,
+        medtech_id=medtech_id,
+        request=request,
     )
-
-    if not result.data:
-        # Retry without updated_at in case the column doesn't exist
-        result = await (
-            sb.table("images")
-            .update({"status": "DISCARDED", "discarded_at": now_iso})
-            .eq("image_id", str(image_id))
-            .execute()
-        )
-
-    return ImageDiscardResponse(
-        image_id=str(image_id),
-        status="DISCARDED",
-        discarded_at=now_iso,
-    )
+    return ImageDiscardResponse(**result)
