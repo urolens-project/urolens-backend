@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from app.db.supabase import supabase
 from app.services.auth_service import hash_password
 
