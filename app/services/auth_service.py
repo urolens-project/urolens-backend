@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -7,10 +8,19 @@ from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SIGNING_K
 from app.db.supabase import supabase
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(
-        plain_password.encode("utf-8"), hashed_password.encode("utf-8")
-    )
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # bcrypt is CPU-bound and synchronous — run in a thread so the event loop
+    # isn't blocked while it hashes (typically 200–400 ms at cost factor 12).
+    # ValueError is raised if the stored value is not a valid bcrypt hash
+    # (e.g. plaintext was accidentally stored); treat that as a failed check.
+    try:
+        return await asyncio.to_thread(
+            bcrypt.checkpw,
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8"),
+        )
+    except ValueError:
+        return False
 
 
 def hash_password(plain_password: str) -> str:
