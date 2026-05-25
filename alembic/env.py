@@ -6,7 +6,13 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.config import DATABASE_URL
-from src.urolens.core.database import Base
+from src.urolens.models.base import Base
+import src.urolens.models.image  # noqa: F401 — register tables with Base
+import src.urolens.models.analysis_result  # noqa: F401
+import src.urolens.models.result_confirmation  # noqa: F401
+import src.urolens.models.manual_override  # noqa: F401
+import src.urolens.models.smart_diagnosis_output  # noqa: F401
+import src.urolens.models.audit_log  # noqa: F401
 
 config = context.config
 

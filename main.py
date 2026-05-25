@@ -5,6 +5,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+
 
 # Web developer routers
 from src.urolens.domains.intake.router import router as intake_router
@@ -18,7 +20,7 @@ from app.api import auth
 from app.api.results import router as results_router
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
-from app.api.images import router as images_router
+from src.urolens.api.image import router as images_router
 
 app = FastAPI(title="UroLens LIS Engine")
 

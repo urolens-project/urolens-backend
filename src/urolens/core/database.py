@@ -1,20 +1,43 @@
-import os
-from dotenv import load_dotenv
-from supabase import create_client, Client
-from sqlalchemy.orm import declarative_base
+from __future__ import annotations
 
-load_dotenv()
+from typing import AsyncGenerator
 
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-if not supabase_url or not supabase_key:
-    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env file!")
+# Re-export Base so legacy web-dev domain modules that import
+# `from src.urolens.core.database import Base` continue to work.
+from ..models.base import Base  # noqa: F401
 
-supabase: Client = create_client(supabase_url, supabase_key)
+from .config import DATABASE_URL
 
-Base = declarative_base()
+# Re-export Supabase client used by legacy web-dev domain routers.
+try:
+    from app.db.supabase import supabase  # noqa: F401
+except Exception:
+    supabase = None  # type: ignore[assignment]
+
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    expire_on_commit=False,
+    autoflush=False,
+    autocommit=False,
+)
 
 
-def get_db():
-    yield supabase
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
