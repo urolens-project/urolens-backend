@@ -1,7 +1,14 @@
 from datetime import date, datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel
+
+
+class SexEnum(str, Enum):
+    MALE = "MALE"
+    FEMALE = "FEMALE"
+    OTHER = "OTHER"
 
 
 class ConsentData(BaseModel):
@@ -12,10 +19,13 @@ class ConsentData(BaseModel):
 
 class PatientCreateRequest(BaseModel):
     first_name: str
+    middle_name: str | None = None
     last_name: str
     date_of_birth: date
+    sex: SexEnum
     contact_no: str | None = None
     address: str | None = None
+    clinical_history: str | None = None
     consent: ConsentData
 
 
@@ -23,10 +33,13 @@ class PatientResponse(BaseModel):
     patient_id: UUID
     patient_uid: str
     first_name: str
+    middle_name: str | None = None
     last_name: str
     date_of_birth: str
+    sex: str
     contact_no: str | None = None
     address: str | None = None
+    clinical_history: str | None = None
     is_walkin: bool
     record_flag: str | None = None
     created_at: datetime
