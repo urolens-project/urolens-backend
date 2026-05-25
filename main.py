@@ -20,7 +20,7 @@ from app.api import auth
 from app.api.results import router as results_router
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
-from app.api.images import router as images_router
+from src.urolens.api.image import router as images_router
 
 app = FastAPI(title="UroLens LIS Engine")
 
