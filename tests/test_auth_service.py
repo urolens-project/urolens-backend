@@ -47,7 +47,7 @@ class TestJWT:
         role = "PHYSICIAN"
         session_id = uuid.uuid4()
 
-        token = issue_jwt(user_id, role, session_id)
+        token = issue_jwt(user_id, "testuser", role, session_id)
         claims = decode_jwt(token)
 
         assert claims["user_id"] == str(user_id)
@@ -62,13 +62,13 @@ class TestJWT:
         role = "RECEPTIONIST"
         session_id = uuid.uuid4()
 
-        token = issue_jwt(user_id, role, session_id)
+        token = issue_jwt(user_id, "testuser", role, session_id)
         claims = decode_jwt(token)
 
         iat = datetime.fromtimestamp(claims["iat"], tz=timezone.utc)
         exp = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
         delta = exp - iat
-        assert delta == timedelta(hours=8)
+        assert delta == timedelta(hours=1)
 
     def test_decode_invalid_token_raises(self):
         with pytest.raises(Exception):
