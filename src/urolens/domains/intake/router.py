@@ -28,14 +28,38 @@ class PatientRegistrationRequest(BaseModel):
 
 @router.get("/patients/search")
 def search_patients_endpoint(q: str):
+    from src.urolens.core.encryption import decrypt_pii
     try:
-        # Search for records matching the text pattern against first or last names
+        q_lower = q.strip().lower()
+
+        # Patient UIDs are stored as plain text — search them directly.
+        # Names are encrypted so ilike won't match; fetch all and filter in Python.
         response = supabase.table("patients")\
             .select("patient_id, patient_uid, first_name, last_name")\
-            .or_(f"first_name.ilike.%{q}%,last_name.ilike.%{q}%,patient_uid.ilike.%{q}%")\
-            .limit(5)\
+            .limit(200)\
             .execute()
-        return response.data
+
+        results = []
+        for row in (response.data or []):
+            try:
+                first = decrypt_pii(row["first_name"])
+                last = decrypt_pii(row["last_name"])
+            except Exception:
+                first = ""
+                last = ""
+
+            uid = row.get("patient_uid", "")
+            if q_lower in first.lower() or q_lower in last.lower() or q_lower in uid.lower():
+                results.append({
+                    "patient_id": row["patient_id"],
+                    "patient_uid": uid,
+                    "first_name": first,
+                    "last_name": last,
+                })
+            if len(results) == 5:
+                break
+
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
