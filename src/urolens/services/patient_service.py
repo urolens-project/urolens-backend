@@ -7,6 +7,16 @@ from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.core.encryption import encrypt_pii, decrypt_pii
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
 
+from __future__ import annotations
+ 
+import logging
+from typing import Any
+ 
+import httpx
+ 
+logger = logging.getLogger(__name__)
+ 
+EXPO_PUSH_URL = "https://exp.host/--/push/v2/send"
 
 class PatientService:
     def __init__(self, db: AsyncClient, audit_logger: AuditLogger):
@@ -161,3 +171,113 @@ class PatientService:
             except (ValueError, IndexError):
                 continue
         return f"PAT-{max_num + 1:06d}"
+
+class NotificationService:
+    """
+    Thin wrapper around the Expo push notification HTTP API.
+ 
+    Usage:
+        service = NotificationService()
+        await service.send_sample_assigned(token, sample_id="abc-123")
+        await service.send_result_returned(token, sample_id="abc-123",
+                                           specimen_id="sp-456",
+                                           return_reason="Recheck RBC count")
+    """
+ 
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        # Allow injection for unit testing; otherwise create a default client.
+        self._client = client or httpx.AsyncClient(timeout=10.0)
+ 
+    # ------------------------------------------------------------------
+    # Public notification methods
+    # ------------------------------------------------------------------
+ 
+    async def send_sample_assigned(
+        self,
+        expo_push_token: str,
+        *,
+        sample_id: str,
+    ) -> None:
+        """
+        Notify a MedTech that a new sample has been assigned to them.
+        Tapping navigates to the queue screen (handled on mobile).
+        """
+        await self._send(
+            token=expo_push_token,
+            title="New Sample Assigned",
+            body="A new urine sample has been added to your queue.",
+            data={
+                "type": "SAMPLE_ASSIGNED",
+                "sampleId": sample_id,
+            },
+        )
+ 
+    async def send_result_returned(
+        self,
+        expo_push_token: str,
+        *,
+        sample_id: str,
+        specimen_id: str,
+        return_reason: str,
+    ) -> None:
+        """
+        Notify a MedTech that a Supervisor has returned a result for correction.
+        Tapping navigates directly to the sample detail screen (handled on mobile).
+        """
+        await self._send(
+            token=expo_push_token,
+            title="Result Returned for Correction",
+            body=f"Supervisor: {return_reason}",
+            data={
+                "type": "RESULT_RETURNED",
+                "sampleId": sample_id,
+                "specimenId": specimen_id,
+                "returnReason": return_reason,
+            },
+        )
+ 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+ 
+    async def _send(
+        self,
+        token: str,
+        title: str,
+        body: str,
+        data: dict[str, Any],
+    ) -> None:
+        """
+        POST a single push message to the Expo push API.
+        Failures are logged but never re-raised — push notifications must
+        never break the business flow that triggered them.
+        """
+        message = {
+            "to": token,
+            "title": title,
+            "body": body,
+            "data": data,
+            "sound": "default",
+            "priority": "high",
+        }
+ 
+        try:
+            response = await self._client.post(
+                EXPO_PUSH_URL,
+                json=message,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip, deflate",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            logger.info("[NotificationService] Push sent: %s | result: %s", token[:20], result)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[NotificationService] Failed to send push notification to %s: %s",
+                token[:20],
+                exc,
+            )
+ 
