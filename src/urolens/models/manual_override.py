@@ -1,49 +1,56 @@
-# Path: urolens-backend/src/urolens/models/manual_override.py
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
-from sqlalchemy import ForeignKey, DateTime, String, Numeric
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 
 from .base import Base
 
+if TYPE_CHECKING:
+    from .analysis_result import AnalysisResult
+
 
 class ManualOverride(Base):
+    """
+    MedTech correction to an individual AI-detected parameter.
+    BOTH the original AI value AND the corrected value are stored.
+    Source: Migration 0016 — T2.6 Manual Override.
+    """
+
     __tablename__ = "manual_overrides"
 
-    id: Mapped[uuid.UUID] = mapped_column(
+    override_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     result_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("analysis_results.id", ondelete="RESTRICT"),
+        ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    parameter: Mapped[str] = mapped_column(String(100), nullable=False)
-
-    # Both values are stored — original is NEVER overwritten (SRP: this table is the record)
-    original_ai_value: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
-    corrected_value: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
-
-    rationale: Mapped[str] = mapped_column(String(2000), nullable=False)
-
-    overridden_by: Mapped[uuid.UUID] = mapped_column(
+    medtech_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
     )
+    parameter_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    original_ai_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     overridden_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    # Relationships
-    result = relationship("AnalysisResult", back_populates="manual_overrides")
-    overridden_by_user = relationship("User", foreign_keys=[overridden_by])
+    # ── Relationships ────────────────────────────────────────────────────────
+    analysis_result: Mapped["AnalysisResult"] = relationship(
+        back_populates="manual_overrides"
+    )
 
-    def __repr__(self) -> str:
-        return (
-            f"<ManualOverride id={self.id} parameter={self.parameter!r} "
-            f"original={self.original_ai_value} corrected={self.corrected_value}>"
-        )
+    @property
+    def id(self) -> uuid.UUID:
+        return self.override_id

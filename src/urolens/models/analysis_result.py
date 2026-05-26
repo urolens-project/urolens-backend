@@ -1,4 +1,3 @@
-# src/urolens/models/analysis_result.py
 from __future__ import annotations
 
 import enum
@@ -22,47 +21,56 @@ if TYPE_CHECKING:
 
 
 class ResultStatus(str, enum.Enum):
-    PENDING_REVIEW = "PENDING_REVIEW"
+    PENDING_CONFIRM = "PENDING_CONFIRM"
     PENDING_SUPERVISOR_APPROVAL = "PENDING_SUPERVISOR_APPROVAL"
     APPROVED = "APPROVED"
+    RELEASED = "RELEASED"
     RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
+    CRITICAL_ESCALATED = "CRITICAL_ESCALATED"
     FAILED = "FAILED"
 
 
 class AnalysisResult(Base):
     """
-    The central record for a specimen's AI analysis.
+    AI inference output attached to a specimen. The central record of the
+    MedTech and Supervisor workflows. One row per specimen.
+    Source: Migration 0014 — T2.5, T2.6, T3.1, T3.2, T3.3, T3.4, T3.5.
 
-    ai_findings is the raw JSONB from urolens_ai.infer():
-      { "RBC": 12, "WBC": 4, "Epithelial": 0, "Bacteria": 0, ... }
-
-    smart_diagnosis_json is populated after smart_diagnosis_service.run().
-    smart_diagnosis_unavailable is set true when the rule engine fails —
-    the confirmation still succeeds but the Supervisor is notified.
+    ai_findings: raw YOLOv8 output { "uric_acid_crystals": 12, "rbc_casts": 0, ... }
+    flagged_anomalies: particles where AI count exceeds clinical threshold
+    particle_classes: MedTech-confirmed classification after any overrides applied
     """
 
     __tablename__ = "analysis_results"
 
-    id: Mapped[uuid.UUID] = mapped_column(
+    result_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     specimen_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("specimens.id", ondelete="RESTRICT"),
+        ForeignKey("specimens.specimen_id", ondelete="RESTRICT"),
         nullable=False,
         unique=True,
         index=True,
     )
-    image_id: Mapped[uuid.UUID] = mapped_column(
+    image_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("images.id", ondelete="RESTRICT"),
-        nullable=False,
+        ForeignKey("images.image_id", ondelete="RESTRICT"),
+        nullable=True,
     )
 
     # ── AI Output ────────────────────────────────────────────────────────────
-    ai_findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    smart_diagnosis_json: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
+    ai_findings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    flagged_anomalies: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    particle_classes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    model_version: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="mvp-v1.0"
     )
     smart_diagnosis_unavailable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
@@ -70,10 +78,12 @@ class AnalysisResult(Base):
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(
-        String(48), nullable=False, default=ResultStatus.PENDING_REVIEW
+        String(48), nullable=False, default=ResultStatus.PENDING_CONFIRM
     )
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+        nullable=True,
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -92,7 +102,7 @@ class AnalysisResult(Base):
 
     # ── Relationships ────────────────────────────────────────────────────────
     specimen: Mapped["Specimen"] = relationship(back_populates="analysis_result")
-    image: Mapped["Image"] = relationship(back_populates="analysis_result")
+    image: Mapped["Image | None"] = relationship(back_populates="analysis_result")
     confirmation: Mapped["ResultConfirmation | None"] = relationship(
         back_populates="analysis_result", uselist=False
     )
@@ -105,6 +115,9 @@ class AnalysisResult(Base):
 
     # ── Helpers ──────────────────────────────────────────────────────────────
     @property
+    def id(self) -> uuid.UUID:
+        return self.result_id
+
+    @property
     def has_pending_retake(self) -> bool:
-        """True if the linked image was discarded — blocks confirmation."""
         return self.image is not None and self.image.is_discarded

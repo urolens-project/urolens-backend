@@ -13,14 +13,14 @@ from src.urolens.domains.intake.router import router as intake_router
 from src.urolens.domains.intake.specimens_router import router as src_specimens_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
 from src.urolens.domains.intake.labeling_router import router as labeling_router
-from src.urolens.api import patients
+from src.urolens.api import patients, queue
 from app.api import auth
 
 # Mobile developer routers
 from app.api.results import router as results_router
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
-from app.api.images import router as images_router
+from src.urolens.api.image import router as images_router
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -76,6 +76,7 @@ app.include_router(intake_router)
 app.include_router(lab_requests_router)
 app.include_router(labeling_router)
 app.include_router(patients.router)
+app.include_router(queue.router)
 app.include_router(auth.router)
 app.include_router(src_specimens_router)
 

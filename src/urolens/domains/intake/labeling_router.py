@@ -30,26 +30,51 @@ class ConfirmPayload(BaseModel):
 
 
 @router.get("/search-received")
-def search_received_specimens(q: str):
+async def search_received_specimens(q: str):
+    from src.urolens.core.encryption import decrypt_pii
     try:
-        response = supabase.table("specimens")\
+        q_lower = q.strip().lower()
+
+        response = await supabase.table("specimens")\
             .select("specimen_id, sample_uid, patient_name, patient_uid, test_type, status")\
             .eq("status", "RECEIVED")\
-            .ilike("patient_name", f"%{q}%")\
-            .limit(5)\
+            .limit(200)\
             .execute()
-        return response.data
+
+        results = []
+        for row in (response.data or []):
+            try:
+                name = decrypt_pii(row["patient_name"])
+            except Exception:
+                name = row.get("patient_name", "")
+
+            uid = row.get("patient_uid", "")
+            sample_uid = row.get("sample_uid", "")
+
+            if q_lower in name.lower() or q_lower in uid.lower() or q_lower in sample_uid.lower():
+                results.append({
+                    "specimen_id": row["specimen_id"],
+                    "sample_uid": sample_uid,
+                    "patient_name": name,
+                    "patient_uid": uid,
+                    "test_type": row.get("test_type"),
+                    "status": row.get("status"),
+                })
+            if len(results) == 5:
+                break
+
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{id}/label", status_code=status.HTTP_201_CREATED)
-def generate_specimen_label_endpoint(
+async def generate_specimen_label_endpoint(
     id: uuid.UUID,
     operator_id: uuid.UUID = Depends(get_current_user_id)
 ):
     try:
-        spec_query = supabase.table("specimens").select("*").eq("specimen_id", str(id)).single().execute()
+        spec_query = await supabase.table("specimens").select("*").eq("specimen_id", str(id)).single().execute()
         if not spec_query.data:
             raise HTTPException(status_code=404, detail="Specimen record not found.")
 
@@ -57,8 +82,14 @@ def generate_specimen_label_endpoint(
         if specimen.get("status") != "RECEIVED":
             raise HTTPException(status_code=400, detail=f"Specimen is in state '{specimen.get('status')}'. Must be RECEIVED.")
 
+        from src.urolens.core.encryption import decrypt_pii
+        try:
+            patient_name = decrypt_pii(specimen.get("patient_name", ""))
+        except Exception:
+            patient_name = specimen.get("patient_name", "")
+
         label_content_json = {
-            "patient_name": specimen.get("patient_name"),
+            "patient_name": patient_name,
             "patient_uid": specimen.get("patient_uid"),
             "sample_uid": specimen.get("sample_uid"),
             "test_type": specimen.get("test_type"),
@@ -71,7 +102,7 @@ def generate_specimen_label_endpoint(
             "label_content_json": label_content_json,
             "generated_by": str(operator_id)
         }
-        label_tx = supabase.table("sample_labels").insert(label_record).execute()
+        label_tx = await supabase.table("sample_labels").insert(label_record).execute()
         if not label_tx.data:
             raise Exception("Label insert failed.")
 
@@ -82,7 +113,7 @@ def generate_specimen_label_endpoint(
             "specimen_id": str(id),
             "status": "SENT"
         }
-        print_tx = supabase.table("print_jobs").insert(print_job_record).execute()
+        print_tx = await supabase.table("print_jobs").insert(print_job_record).execute()
         if not print_tx.data:
             raise Exception("Print job insert failed.")
 
@@ -99,26 +130,24 @@ def generate_specimen_label_endpoint(
 
 
 @router.post("/{id}/label/confirm")
-def confirm_label_affixed_endpoint(
+async def confirm_label_affixed_endpoint(
     id: uuid.UUID,
     payload: ConfirmPayload = Body(...)
 ):
     try:
-        label_query = supabase.table("sample_labels")\
+        label_query = await supabase.table("sample_labels")\
             .select("label_id")\
             .eq("specimen_id", str(id))\
             .execute()
 
         if not label_query.data:
-            # ✅ NOW actually checks the flag
             if not payload.offline_override:
                 raise HTTPException(
                     status_code=400,
                     detail="No label found. Print label first, or enable offline override."
                 )
 
-            # OFFLINE OVERRIDE — create minimal label record
-            spec_query = supabase.table("specimens")\
+            spec_query = await supabase.table("specimens")\
                 .select("*")\
                 .eq("specimen_id", str(id))\
                 .single()\
@@ -128,11 +157,17 @@ def confirm_label_affixed_endpoint(
                 raise HTTPException(status_code=404, detail="Specimen not found.")
 
             specimen = spec_query.data
+            from src.urolens.core.encryption import decrypt_pii
+            try:
+                offline_patient_name = decrypt_pii(specimen.get("patient_name", ""))
+            except Exception:
+                offline_patient_name = specimen.get("patient_name", "")
+
             offline_label = {
                 "specimen_id": str(id),
                 "sample_uid": specimen.get("sample_uid"),
                 "label_content_json": {
-                    "patient_name": specimen.get("patient_name"),
+                    "patient_name": offline_patient_name,
                     "patient_uid": specimen.get("patient_uid"),
                     "sample_uid": specimen.get("sample_uid"),
                     "test_type": specimen.get("test_type"),
@@ -141,7 +176,7 @@ def confirm_label_affixed_endpoint(
                 },
                 "generated_by": "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
             }
-            label_tx = supabase.table("sample_labels").insert(offline_label).execute()
+            label_tx = await supabase.table("sample_labels").insert(offline_label).execute()
             if not label_tx.data:
                 raise Exception("Offline label insert failed.")
 
@@ -153,12 +188,12 @@ def confirm_label_affixed_endpoint(
             if not target_label_id:
                 raise HTTPException(status_code=400, detail="Label record exists but label_id is null.")
 
-        supabase.table("specimens")\
+        await supabase.table("specimens")\
             .update({"status": "LABELED"})\
             .eq("specimen_id", str(id))\
             .execute()
 
-        supabase.table("sample_labels").update({
+        await supabase.table("sample_labels").update({
             "affixed_confirmed": True,
             "affixed_at": datetime.utcnow().isoformat()
         }).eq("label_id", target_label_id).execute()

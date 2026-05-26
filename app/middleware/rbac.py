@@ -45,7 +45,7 @@ class RequireRole:
         self.allowed_roles = allowed_roles
 
     async def __call__(self, request: Request, current_user: dict = Depends(get_current_user)) -> dict:
-        user_role = current_user.get("role", "")
-        if user_role not in self.allowed_roles:
+        user_role = current_user.get("role", "").lower()
+        if user_role not in {r.lower() for r in self.allowed_roles}:
             raise _FORBIDDEN
         return current_user

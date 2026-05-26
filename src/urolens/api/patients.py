@@ -3,7 +3,7 @@ from supabase import AsyncClient
 
 from app.db.supabase import get_supabase
 from app.middleware.rbac import RequireRole
-from src.urolens.core.audit_logger import AuditLogger
+from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
 from src.urolens.core.enums import UserRole
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
 from src.urolens.services.patient_service import PatientService
@@ -13,8 +13,9 @@ router = APIRouter()
 
 async def get_patient_service(
     db: AsyncClient = Depends(get_supabase),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> PatientService:
-    return PatientService(db=db, audit_logger=AuditLogger())
+    return PatientService(db=db, audit_logger=audit_logger)
 
 
 @router.post("/api/v1/patients", response_model=PatientResponse, status_code=201)
