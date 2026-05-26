@@ -173,10 +173,10 @@ async def get_full_result(result_id: str) -> dict:
             supabase.table("patients")
             .select("patient_uid, first_name, last_name, date_of_birth, sex")
             .eq("patient_uid", patient_uid)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        pat = pat_res.data or {}
+        pat = (pat_res.data or [{}])[0] if pat_res else {}
 
     # Medtech name
     medtech_name = ""
@@ -185,10 +185,10 @@ async def get_full_result(result_id: str) -> dict:
             supabase.table("users")
             .select("username")
             .eq("user_id", spec["medtech_id"])
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        medtech_name = (u_res.data or {}).get("username", "")
+        medtech_name = ((u_res.data or [{}])[0] if u_res else {}).get("username", "")
 
     # Image URL
     image_url: Optional[str] = None
@@ -197,10 +197,10 @@ async def get_full_result(result_id: str) -> dict:
             supabase.table("images")
             .select("storage_key")
             .eq("image_id", ar["image_id"])
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        image_url = _image_public_url((img_res.data or {}).get("storage_key"))
+        image_url = _image_public_url(((img_res.data or [{}])[0] if img_res else {}).get("storage_key"))
 
     overrides = [
         {
