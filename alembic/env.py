@@ -13,6 +13,8 @@ import src.urolens.models.result_confirmation  # noqa: F401
 import src.urolens.models.manual_override  # noqa: F401
 import src.urolens.models.smart_diagnosis_output  # noqa: F401
 import src.urolens.models.audit_log  # noqa: F401
+import src.urolens.models.result_view  # noqa: F401
+import src.urolens.models.patient  # noqa: F401
 
 config = context.config
 
