@@ -66,6 +66,54 @@ async def confirm_result(
     }
 
 
+async def get_smart_diagnosis(result_id: str) -> dict:
+    # Check the result exists
+    result = await (
+        supabase.table("analysis_results")
+        .select("result_id, smart_diagnosis_unavailable")
+        .eq("result_id", result_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis result not found.")
+
+    if rows[0]["smart_diagnosis_unavailable"]:
+        return {"result_id": result_id, "status": "FLAGGED_UNAVAILABLE"}
+
+    # Fetch smart diagnosis output
+    output = await (
+        supabase.table("smart_diagnosis_outputs")
+        .select("*")
+        .eq("result_id", result_id)
+        .execute()
+    )
+    output_rows = output.data or []
+
+    if not output_rows or output_rows[0]["status"] == "FLAGGED_UNAVAILABLE":
+        return {"result_id": result_id, "status": "FLAGGED_UNAVAILABLE"}
+
+    row = output_rows[0]
+    evidence_raw = row.get("evidence_map") or {}
+
+    return {
+        "output_id": str(row["output_id"]),
+        "result_id": result_id,
+        "status": "ATTACHED",
+        "gout_score": row["gout_score"],
+        "uti_score": row["uti_score"],
+        "tricho_score": row["tricho_score"],
+        "evidence_map": {
+            "gout":   evidence_raw.get("gout", []),
+            "uti":    evidence_raw.get("uti", []),
+            "tricho": evidence_raw.get("tricho", []),
+        },
+        "no_significant_indicators": row.get("no_significant_indicators", False),
+        "engine_version": row.get("engine_version", ""),
+        "generated_at": str(row.get("generated_at", "")),
+    }
+
+
 async def override_parameter(
     result_id: str,
     user_id: str,
