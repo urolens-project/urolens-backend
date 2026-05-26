@@ -18,7 +18,7 @@ async def get_queue_service(
     notification_service = NotificationService(db=db)
     return QueueService(
         db=db,
-        audit_logger=AuditLogger(),
+        audit_logger=AuditLogger(db=db),
         notification_service=notification_service,
     )
 
