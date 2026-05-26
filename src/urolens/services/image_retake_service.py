@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 """
-Image Retake Service — T2.7
+Image Retake Service — T2.7 (Supabase implementation)
 
 Handles the Retake flow: the MedTech discards the current image and the capture
 screen re-opens so a new image can be uploaded.
@@ -9,75 +7,99 @@ screen re-opens so a new image can be uploaded.
 Responsibilities
 ----------------
 - Validate the image can be discarded (must be ACTIVE, not already DISCARDED/REPLACED).
-- Delegate the actual status update to AIIntegrationService.discard_image().
-- Emit the IMAGE_DISCARDED audit event.
+- Mark the image as DISCARDED in Supabase.
+- Emit the IMAGE_DISCARDED audit event to the audit_logs table.
 - The AnalysisResult row remains intact — it will be updated when the new image
   is uploaded and inference runs again.
 """
+from __future__ import annotations
 
+import json
+import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from ..core.audit_logger import AuditLogger
 from ..core.exceptions import ConflictError, NotFoundError
-from ..models.image import Image, ImageStatus
-from .ai_integration_service import AIIntegrationService
+from app.db.supabase import supabase as sb
+
+log = logging.getLogger(__name__)
 
 
 class ImageRetakeService:
-    def __init__(
-        self,
-        db: AsyncSession,
-        audit_logger: AuditLogger,
-        ai_integration_service: AIIntegrationService,
-    ) -> None:
-        self.db = db
-        self.audit_logger = audit_logger
-        self.ai_svc = ai_integration_service
-
     async def discard_and_retake(
         self,
         image_id: uuid.UUID,
         medtech_id: uuid.UUID,
-        request: Any,
-    ) -> Image:
+        request: Any = None,
+    ) -> dict:
         """
         Mark the image DISCARDED so the MedTech can submit a new one.
+
+        Returns a dict with image_id, status, discarded_at.
 
         Raises
         ------
         NotFoundError  — image not found
         ConflictError  — image is already DISCARDED or REPLACED
         """
-        image = await self.db.get(Image, image_id)
-        if image is None:
+        # ── 1. Fetch current image state ──────────────────────────────────────
+        result = await (
+            sb.table("images")
+            .select("image_id, specimen_id, status")
+            .eq("image_id", str(image_id))
+            .execute()
+        )
+        rows = result.data or []
+
+        if not rows:
             raise NotFoundError(f"Image {image_id} not found.")
 
-        if image.status == ImageStatus.DISCARDED:
+        image = rows[0]
+
+        if image["status"] == "DISCARDED":
             raise ConflictError("This image has already been discarded.")
 
-        if image.status == ImageStatus.REPLACED:
+        if image["status"] == "REPLACED":
             raise ConflictError(
                 "This image has been superseded by a newer upload. "
                 "Please upload a new image."
             )
 
-        discarded = await self.ai_svc.discard_image(
-            image_id=image_id,
-            discarded_by=medtech_id,
-            request=request,
-        )
+        # ── 2. Mark image DISCARDED ───────────────────────────────────────────
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            await (
+                sb.table("images")
+                .update({"status": "DISCARDED", "discarded_at": now_iso, "updated_at": now_iso})
+                .eq("image_id", str(image_id))
+                .execute()
+            )
+        except Exception:
+            # Retry without updated_at if that column doesn't exist
+            await (
+                sb.table("images")
+                .update({"status": "DISCARDED", "discarded_at": now_iso})
+                .eq("image_id", str(image_id))
+                .execute()
+            )
 
-        await self.audit_logger.record(
-            event_type="IMAGE_DISCARDED",
-            entity_type="image",
-            entity_id=image_id,
-            user_id=medtech_id,
-            detail_json={"specimen_id": str(image.specimen_id)},
-            request=request,
-        )
+        # ── 3. Write audit log (non-fatal) ────────────────────────────────────
+        try:
+            ip_address: str | None = None
+            if request and hasattr(request, "client") and request.client:
+                ip_address = request.client.host
 
-        await self.db.commit()
-        return discarded
+            await sb.table("audit_logs").insert({
+                "event_type": "IMAGE_DISCARDED",
+                "entity_type": "image",
+                "entity_id": str(image_id),
+                "user_id": str(medtech_id),
+                "ip_address": ip_address,
+                "detail_json": json.dumps({"specimen_id": image["specimen_id"]}),
+                "occurred_at": now_iso,
+            }).execute()
+        except Exception as exc:
+            log.warning("Could not write IMAGE_DISCARDED audit log: %s", exc)
+
+        return {"image_id": str(image_id), "status": "DISCARDED", "discarded_at": now_iso}
