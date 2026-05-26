@@ -294,16 +294,10 @@ async def approve_result(result_id: str, user_id: str, notes: Optional[str]) -> 
     await _require_pending(result_id)
 
     now = datetime.now(_PHT).isoformat()
-    await (
-        supabase.table("result_approvals")
-        .insert({
-            "result_id": result_id,
-            "approved_by": user_id,
-            "notes": notes,
-            "approved_at": now,
-        })
-        .execute()
-    )
+    row: dict = {"result_id": result_id, "approved_by": user_id, "approved_at": now}
+    if notes:
+        row["notes"] = notes
+    await supabase.table("result_approvals").insert(row).execute()
     await (
         supabase.table("analysis_results")
         .update({"status": "APPROVED", "updated_at": now})
@@ -320,16 +314,14 @@ async def return_result(result_id: str, user_id: str, reason: str) -> dict:
     await _require_pending(result_id)
 
     now = datetime.now(_PHT).isoformat()
-    await (
-        supabase.table("result_returns")
-        .insert({
-            "result_id": result_id,
-            "returned_by": user_id,
-            "reason": reason,
-            "returned_at": now,
-        })
-        .execute()
-    )
+    return_row: dict = {
+        "result_id": result_id,
+        "returned_by": user_id,
+        "returned_at": now,
+    }
+    if reason:
+        return_row["reason"] = reason
+    await supabase.table("result_returns").insert(return_row).execute()
     await (
         supabase.table("analysis_results")
         .update({"status": "RETURNED_FOR_CORRECTION", "updated_at": now})
@@ -357,17 +349,15 @@ async def escalate_result(
     await _require_pending(result_id)
 
     now = datetime.now(_PHT).isoformat()
-    await (
-        supabase.table("escalations")
-        .insert({
-            "result_id": result_id,
-            "escalated_by": user_id,
-            "escalation_path": escalation_path,
-            "escalation_note": escalation_note,
-            "escalated_at": now,
-        })
-        .execute()
-    )
+    esc_row: dict = {
+        "result_id": result_id,
+        "escalated_by": user_id,
+        "escalation_path": escalation_path,
+        "escalated_at": now,
+    }
+    if escalation_note:
+        esc_row["escalation_note"] = escalation_note
+    await supabase.table("escalations").insert(esc_row).execute()
     await (
         supabase.table("analysis_results")
         .update({"status": "CRITICAL_ESCALATED", "updated_at": now})
