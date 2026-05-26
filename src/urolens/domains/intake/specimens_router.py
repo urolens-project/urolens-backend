@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
@@ -18,6 +18,18 @@ class SpecimenReceivePayload(BaseModel):
     visual_check_passed: bool
     rejection_reason: Optional[str] = None 
     free_text_note: Optional[Optional[str]] = None
+
+
+@router.get("", status_code=status.HTTP_200_OK)
+async def list_specimens_endpoint(specimen_status: Optional[str] = Query(default=None, alias="status")):
+    try:
+        query = supabase.table("specimens").select("*")
+        if specimen_status:
+            query = query.eq("status", specimen_status.upper())
+        response = await query.execute()
+        return response.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/search-request", response_model=List[dict])
