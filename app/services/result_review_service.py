@@ -159,7 +159,7 @@ async def get_full_result(result_id: str) -> dict:
 
     review_task = supabase.table("result_reviews").select(
         "annotation_notes"
-    ).eq("result_id", result_id).order("created_at", desc=True).limit(1).execute()
+    ).eq("result_id", result_id).limit(1).execute()
 
     spec_res, overrides_res, review_res = await asyncio.gather(spec_task, overrides_task, review_task)
 
