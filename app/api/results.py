@@ -16,6 +16,7 @@ from app.schemas.results import (
     PendingResultListResponse,
     ReturnRequest,
     ReturnResponse,
+    SmartDiagnosisResponse,
 )
 from app.services import result_service, result_review_service
 
@@ -25,6 +26,18 @@ _supervisor = RequireRole(["supervisor"])
 
 
 # ── MedTech endpoints ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/{result_id}/smart-diagnosis",
+    response_model=SmartDiagnosisResponse,
+    summary="Get Smart Diagnosis output for a result",
+)
+async def get_smart_diagnosis(
+    result_id: str,
+    claims: dict = Depends(_supervisor),
+):
+    return await result_service.get_smart_diagnosis(result_id=result_id)
+
 
 @router.post("/{result_id}/confirm", response_model=ConfirmResultResponse)
 async def confirm_result(
