@@ -14,6 +14,7 @@ from src.urolens.domains.intake.specimens_router import router as src_specimens_
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
 from src.urolens.domains.intake.labeling_router import router as labeling_router
 from src.urolens.api import patients, queue, patient_portal
+from src.urolens.api.result_releasing import router as result_releasing_router
 from app.api import auth
 
 # Mobile developer routers
@@ -78,6 +79,7 @@ app.include_router(labeling_router)
 app.include_router(patients.router)
 app.include_router(queue.router)
 app.include_router(patient_portal.router)
+app.include_router(result_releasing_router)
 app.include_router(auth.router)
 app.include_router(src_specimens_router)
 
