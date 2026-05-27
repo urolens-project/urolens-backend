@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.analysis_result import AnalysisResult
 from ..models.smart_diagnosis_output import SmartDiagnosisOutput
@@ -92,7 +93,17 @@ class SmartDiagnosisService:
     async def _load_result(
         self, result_id: uuid.UUID, db: AsyncSession
     ) -> AnalysisResult:
-        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
+        # Eagerly load smart_diagnosis_output so the relationship is in a
+        # "loaded" state (None for fresh results) before db.add(SmartDiagnosisOutput).
+        # Without this, the autoflush that INSERTs the new SmartDiagnosisOutput
+        # triggers a back-reference update on AnalysisResult.smart_diagnosis_output.
+        # In async SQLAlchemy, accessing an unloaded relationship during flush
+        # raises MissingGreenlet, which is caught as engine failure.
+        stmt = (
+            select(AnalysisResult)
+            .options(selectinload(AnalysisResult.smart_diagnosis_output))
+            .where(AnalysisResult.result_id == result_id)
+        )
         row = await db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
