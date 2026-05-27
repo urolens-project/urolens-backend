@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,6 +19,15 @@ from ..core.exceptions import (
 )
 from .smart_diagnosis_service import SmartDiagnosisService
 from .notification_service import NotificationService
+
+# All statuses that mean the result has already passed the medtech confirmation step
+_ALREADY_CONFIRMED_STATUSES = {
+    ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+    ResultStatus.APPROVED,
+    ResultStatus.RELEASED,
+    ResultStatus.RETURNED_FOR_CORRECTION,
+    ResultStatus.CRITICAL_ESCALATED,
+}
 
 
 class ResultConfirmationService:
@@ -58,8 +68,8 @@ class ResultConfirmationService:
         """
         result = await self._get_result(result_id)
 
-        # Guard: cannot confirm an already-confirmed result
-        if result.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL:
+        # Guard: cannot re-confirm a result that has already passed medtech confirmation
+        if result.status in _ALREADY_CONFIRMED_STATUSES:
             raise ConflictException(
                 code="RESULT_ALREADY_CONFIRMED",
                 message="This result has already been confirmed.",
@@ -76,6 +86,18 @@ class ResultConfirmationService:
             confirmed_at=now,
         )
         self.db.add(confirmation)
+
+        # Flush immediately so a concurrent double-submit surfaces the unique
+        # constraint violation here — before we enter SmartDiagnosis.
+        # If we let begin_nested() trigger the flush later, an IntegrityError
+        # poisons the session and makes SmartDiagnosis + audit logging blow up.
+        try:
+            await self.db.flush([confirmation])
+        except IntegrityError:
+            raise ConflictException(
+                code="RESULT_ALREADY_CONFIRMED",
+                message="This result has already been confirmed.",
+            )
 
         # Settle particle_classes = ai_findings merged with any MedTech overrides.
         # If no overrides exist this is a straight copy of ai_findings.
