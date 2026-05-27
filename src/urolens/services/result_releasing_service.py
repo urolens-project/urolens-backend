@@ -167,9 +167,11 @@ class ResultReleasingService:
         release_id = release_row["release_id"]
 
         try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+
             update_res = await self.db.table("analysis_results").update({
                 "status": "RELEASED",
-                "released_at": datetime.now(timezone.utc).isoformat(),
+                "released_at": now_iso,
             }).eq("result_id", str(result_id)).execute()
 
             if not update_res.data:
@@ -186,6 +188,13 @@ class ResultReleasingService:
                         }
                     },
                 )
+
+            # Mark the specimen COMPLETED so it drops off the medtech's active queue
+            await self.db.table("specimens").update({
+                "status": "COMPLETED",
+                "completed_at": now_iso,
+            }).eq("specimen_id", str(row["specimen_id"])).execute()
+
         except HTTPException:
             raise
         except Exception:
