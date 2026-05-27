@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
@@ -16,10 +17,12 @@ class QueueService:
         db: AsyncClient,
         audit_logger: AuditLogger,
         notification_service: NotificationService,
+        sqlalchemy_db: AsyncSession,
     ):
         self.db = db
         self.audit_logger = audit_logger
         self.notification_service = notification_service
+        self.sqlalchemy_db = sqlalchemy_db
 
     async def get_workloads(self) -> list[MedTechWorkload]:
         users_result = await self.db.table("users").select(
@@ -175,6 +178,7 @@ class QueueService:
             entity_type="queue_assignment",
             entity_id=assignment_id,
             user_id=assigned_by,
+            db=self.sqlalchemy_db,
             detail_json={
                 "specimen_id": str(data.specimen_id),
                 "medtech_id": str(data.medtech_id),
