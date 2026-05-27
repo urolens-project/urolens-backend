@@ -8,7 +8,7 @@ from app.db.supabase import get_supabase
 from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
 from src.urolens.core.enums import UserRole
-from src.urolens.schemas.patient_portal import PatientResultDetail, PatientResultSummary
+from src.urolens.schemas.patient_portal import PatientResultDetailResponse, PatientResultItem
 from src.urolens.services.patient_result_service import PatientResultService
 from src.urolens.services.patient_service import PatientService
 from src.urolens.services.pdf_service import generate_result_pdf
@@ -30,7 +30,7 @@ async def get_patient_service(
     return PatientService(db=db, audit_logger=audit_logger)
 
 
-@router.get("/api/v1/patient/results", response_model=list[PatientResultSummary])
+@router.get("/api/v1/patient/results", response_model=list[PatientResultItem])
 async def get_my_results(
     current_user: dict = Depends(RequireRole([UserRole.PATIENT])),
     service: PatientResultService = Depends(get_patient_result_service),
@@ -38,7 +38,7 @@ async def get_my_results(
     return await service.get_patient_results(current_user["user_id"])
 
 
-@router.get("/api/v1/patient/results/{result_id}", response_model=PatientResultDetail)
+@router.get("/api/v1/patient/results/{result_id}", response_model=PatientResultDetailResponse)
 async def get_result_detail(
     result_id: UUID,
     request: Request,
