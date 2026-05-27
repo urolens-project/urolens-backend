@@ -6,9 +6,10 @@ from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.schemas.patient_portal import (
-    CellCounts,
-    PatientResultDetail,
-    PatientResultSummary,
+    PARTICLE_LABELS,
+    ParticleCount,
+    PatientResultDetailResponse,
+    PatientResultItem,
 )
 
 
@@ -18,7 +19,13 @@ class PatientResultService:
         self.audit_logger = audit_logger
 
     async def _resolve_patient_id(self, user_id: UUID) -> UUID:
-        result = await self.db.table("patients").select("patient_id").eq("user_id", str(user_id)).maybe_single().execute()
+        result = (
+            await self.db.table("patients")
+            .select("patient_id")
+            .eq("user_id", str(user_id))
+            .maybe_single()
+            .execute()
+        )
         row = result.data
         if not row:
             exc = HTTPException(
@@ -29,34 +36,31 @@ class PatientResultService:
             raise exc
         return UUID(row["patient_id"])
 
-    async def get_patient_results(
-        self, user_id: UUID
-    ) -> list[PatientResultSummary]:
+    async def get_patient_results(self, user_id: UUID) -> list[PatientResultItem]:
         patient_id = await self._resolve_patient_id(user_id)
 
         result = await (
             self.db.table("analysis_results")
-            .select("*")
+            .select("result_id, status, released_at")
             .eq("patient_id", str(patient_id))
-            .order("created_at", desc=True)
+            .order("released_at", desc=True)
             .execute()
         )
         rows = result.data or []
 
         return [
-            PatientResultSummary(
+            PatientResultItem(
                 result_id=UUID(row["result_id"]),
-                specimen_id=UUID(row["specimen_id"]),
+                test_type="Urinalysis",
                 status=row["status"],
                 released_at=_parse_datetime(row.get("released_at")),
-                created_at=_parse_datetime(row["created_at"]),
             )
             for row in rows
         ]
 
     async def get_result_detail(
         self, result_id: UUID, user_id: UUID, request: Request
-    ) -> PatientResultDetail:
+    ) -> PatientResultDetailResponse:
         patient_id = await self._resolve_patient_id(user_id)
 
         result = await (
@@ -98,23 +102,32 @@ class PatientResultService:
             request=request,
         )
 
-        cell_counts = None
-        if row.get("cell_counts"):
-            cell_counts = CellCounts(**row["cell_counts"])
+        # Normalise ai_findings → exactly 10 ParticleCount rows
+        raw_findings: dict = row.get("ai_findings") or {}
+        particle_counts = [
+            ParticleCount(label=label, count=int(raw_findings.get(label, 0)))
+            for label in PARTICLE_LABELS
+        ]
 
-        return PatientResultDetail(
-            result_id=UUID(row["result_id"]),
-            specimen_id=UUID(row["specimen_id"]),
-            patient_id=UUID(row["patient_id"]) if row.get("patient_id") else None,
+        # Extract particle_classes — stored as JSONB (dict or list)
+        raw_classes = row.get("particle_classes") or {}
+        if isinstance(raw_classes, list):
+            particle_classes = [str(c) for c in raw_classes]
+        elif isinstance(raw_classes, dict):
+            particle_classes = list(raw_classes.keys())
+        else:
+            particle_classes = []
+
+        return PatientResultDetailResponse(
             status=row["status"],
-            cell_counts=cell_counts,
-            interpretation=row.get("interpretation"),
-            medtech_name=row.get("medtech_name"),
-            pathologist_name=row.get("pathologist_name"),
-            pathologist_license=row.get("pathologist_license"),
             confirmed_at=_parse_datetime(row.get("confirmed_at")),
+            confirmation_notes=row.get("interpretation"),
+            analyzed_by=row.get("medtech_name"),
+            particle_counts=particle_counts,
+            particle_classes=particle_classes,
+            smart_diagnosis_unavailable=bool(row.get("smart_diagnosis_unavailable", False)),
+            test_type="Urinalysis",
             released_at=_parse_datetime(row.get("released_at")),
-            created_at=_parse_datetime(row["created_at"]),
         )
 
 
