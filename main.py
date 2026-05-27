@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import src.urolens.models  # noqa: F401 — registers all SQLAlchemy models before first query
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +20,7 @@ from src.urolens.api.result_releasing import router as result_releasing_router
 from app.api import auth
 
 # Mobile developer routers
-from app.api.results import router as results_router
+from src.urolens.api.results import router as results_router  # Epic 7: SQLAlchemy-based, replaces app.api.results
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
 from src.urolens.api.image import router as images_router

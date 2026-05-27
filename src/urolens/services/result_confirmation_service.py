@@ -1,6 +1,6 @@
 # Path: urolens-backend/src/urolens/services/result_confirmation_service.py
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request
@@ -68,17 +68,23 @@ class ResultConfirmationService:
         await self._validate_no_pending_retake(result)
 
         # Create confirmation record
+        now = datetime.now(timezone.utc)
         confirmation = ResultConfirmation(
             result_id=result_id,
-            confirmed_by=medtech_id,
-            confirmed_at=datetime.utcnow(),
+            medtech_id=medtech_id,
+            confirmed_at=now,
         )
         self.db.add(confirmation)
 
         # Transition result status
         result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
         result.confirmed_by = medtech_id
-        result.confirmed_at = datetime.utcnow()
+        result.confirmed_at = now
+
+        # Cache before SmartDiagnosis: savepoint rollbacks expire ORM object
+        # attributes, and async SQLAlchemy cannot lazy-reload them outside a
+        # greenlet context (raises MissingGreenlet).
+        specimen_id = result.specimen_id
 
         # Trigger Smart Diagnosis — failure MUST NOT break confirmation (ISP)
         # smart_diagnosis_service.run() catches all exceptions internally
@@ -87,7 +93,7 @@ class ResultConfirmationService:
         # Notify the Supervisor
         await self.notif_service.notify_supervisor_result_ready(
             result_id=result_id,
-            specimen_id=result.specimen_id,
+            specimen_id=specimen_id,
         )
 
         # Audit — always the final write, same transaction (LSP: same pattern everywhere)
@@ -96,7 +102,7 @@ class ResultConfirmationService:
             entity_type="analysis_result",
             entity_id=result_id,
             user_id=medtech_id,
-            detail_json={"specimen_id": str(result.specimen_id)},
+            detail_json={"specimen_id": str(specimen_id)},
             db=self.db,
             request=request,
         )
@@ -110,7 +116,7 @@ class ResultConfirmationService:
     # ------------------------------------------------------------------
 
     async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
-        stmt = select(AnalysisResult).where(AnalysisResult.id == result_id)
+        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:

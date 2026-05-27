@@ -49,3 +49,7 @@ class ResultConfirmation(Base):
     @property
     def id(self) -> uuid.UUID:
         return self.confirmation_id
+
+    @property
+    def confirmed_by(self) -> uuid.UUID:
+        return self.medtech_id
