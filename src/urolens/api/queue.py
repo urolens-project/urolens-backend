@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from app.db.supabase import get_supabase
 from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger
+from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
 from src.urolens.schemas.queue import MedTechWorkload, QueueAssignRequest, QueueAssignResponse
 from src.urolens.services.notification_service import NotificationService
@@ -13,13 +15,15 @@ router = APIRouter()
 
 
 async def get_queue_service(
-    db: AsyncClient = Depends(get_supabase),
+    supabase_client: AsyncClient = Depends(get_supabase),
+    sqlalchemy_db: AsyncSession = Depends(get_db),
 ) -> QueueService:
-    notification_service = NotificationService(db=db)
+    notification_service = NotificationService(db=sqlalchemy_db)
     return QueueService(
-        db=db,
-        audit_logger=AuditLogger(db=db),
+        db=supabase_client,
+        audit_logger=AuditLogger(),
         notification_service=notification_service,
+        sqlalchemy_db=sqlalchemy_db,
     )
 
 
