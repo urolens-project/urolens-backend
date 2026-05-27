@@ -49,7 +49,7 @@ class ConfirmResultResponse(BaseModel):
 class OverrideRequest(BaseModel):
     parameter: str = Field(..., min_length=1, max_length=100)
     corrected_value: float = Field(..., ge=0)
-    rationale: str = Field(..., min_length=1, max_length=2000)
+    rationale: Optional[str] = Field("No rationale provided", max_length=2000)
 
     @field_validator("parameter")
     @classmethod
