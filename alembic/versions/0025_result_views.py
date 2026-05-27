@@ -11,24 +11,20 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "0025"
-down_revision = "0016"
+down_revision = "0028"
 branch_labels = None
 depends_on = None
 
 
 def upgrade():
-    op.create_table("result_views",
-        sa.Column("view_id", postgresql.UUID(as_uuid=True), primary_key=True,
-                  server_default=sa.text("gen_random_uuid()")),
-        sa.Column("result_id", postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("analysis_results.result_id", ondelete="CASCADE"),
-                  nullable=False),
-        sa.Column("patient_id", postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("patients.patient_id", ondelete="CASCADE"),
-                  nullable=False),
-        sa.Column("viewed_at", sa.TIMESTAMP(timezone=True), nullable=False,
-                  server_default=sa.text("now()")),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS result_views (
+            view_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            result_id  UUID        NOT NULL REFERENCES analysis_results(result_id) ON DELETE CASCADE,
+            patient_id UUID        NOT NULL REFERENCES patients(patient_id) ON DELETE CASCADE,
+            viewed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    """)
     op.execute("ALTER TABLE result_views DISABLE ROW LEVEL SECURITY;")
 
 

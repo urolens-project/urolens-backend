@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 from app.config import SUPABASE_URL, SUPABASE_IMAGE_BUCKET
 from app.db.supabase import supabase
+from src.urolens.core.encryption import decrypt_pii
 
 _PHT = timezone(timedelta(hours=8))
 
@@ -48,6 +49,213 @@ async def _require_pending(result_id: str) -> dict:
             detail=f"Action not allowed in status '{ar['status']}'.",
         )
     return ar
+
+
+# ── Supervisor dashboard stats ────────────────────────────────────────────────
+
+async def get_supervisor_stats() -> dict:
+    today_pht = datetime.now(_PHT).date().isoformat()
+    tomorrow_pht = (datetime.now(_PHT).date() + timedelta(days=1)).isoformat()
+
+    pending_res, approved_res, escalated_res = await asyncio.gather(
+        supabase.table("analysis_results")
+            .select("result_id", count="exact")
+            .eq("status", "PENDING_SUPERVISOR_APPROVAL")
+            .execute(),
+        supabase.table("result_approvals")
+            .select("result_id", count="exact")
+            .gte("approved_at", today_pht)
+            .lt("approved_at", tomorrow_pht)
+            .execute(),
+        supabase.table("analysis_results")
+            .select("result_id", count="exact")
+            .eq("status", "CRITICAL_ESCALATED")
+            .execute(),
+    )
+
+    return {
+        "pendingCount": pending_res.count or 0,
+        "approvedToday": approved_res.count or 0,
+        "escalatedCount": escalated_res.count or 0,
+    }
+
+
+# ── Approved today list ───────────────────────────────────────────────────────
+
+async def get_approved_today(page: int, page_size: int) -> dict:
+    offset = (page - 1) * page_size
+    today_pht = datetime.now(_PHT).date().isoformat()
+    tomorrow_pht = (datetime.now(_PHT).date() + timedelta(days=1)).isoformat()
+
+    count_res = await (
+        supabase.table("result_approvals")
+        .select("result_id", count="exact")
+        .gte("approved_at", today_pht)
+        .lt("approved_at", tomorrow_pht)
+        .execute()
+    )
+    total = count_res.count or 0
+
+    page_res = await (
+        supabase.table("result_approvals")
+        .select("result_id, approved_at")
+        .gte("approved_at", today_pht)
+        .lt("approved_at", tomorrow_pht)
+        .order("approved_at", desc=True)
+        .range(offset, offset + page_size - 1)
+        .execute()
+    )
+    approval_rows = page_res.data or []
+    if not approval_rows:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    result_ids = [r["result_id"] for r in approval_rows]
+    approved_at_map = {r["result_id"]: r["approved_at"] for r in approval_rows}
+
+    ar_res = await (
+        supabase.table("analysis_results")
+        .select("result_id, specimen_id, status")
+        .in_("result_id", result_ids)
+        .execute()
+    )
+    ar_map = {r["result_id"]: r for r in (ar_res.data or [])}
+    specimen_ids = list({r["specimen_id"] for r in ar_map.values()})
+
+    spec_res = await (
+        supabase.table("specimens")
+        .select("specimen_id, patient_name, patient_uid, medtech_id")
+        .in_("specimen_id", specimen_ids)
+        .execute()
+    )
+    spec_map = {r["specimen_id"]: r for r in (spec_res.data or [])}
+
+    patient_uids = list({s["patient_uid"] for s in spec_map.values() if s.get("patient_uid")})
+    medtech_ids = list({s["medtech_id"] for s in spec_map.values() if s.get("medtech_id")})
+
+    pat_map: dict[str, dict] = {}
+    user_map: dict[str, str] = {}
+
+    tasks = []
+    if patient_uids:
+        tasks.append(
+            supabase.table("patients").select("patient_uid, date_of_birth, sex").in_("patient_uid", patient_uids).execute()
+        )
+    if medtech_ids:
+        tasks.append(
+            supabase.table("users").select("user_id, username").in_("user_id", medtech_ids).execute()
+        )
+
+    results = await asyncio.gather(*tasks)
+    idx = 0
+    if patient_uids:
+        pat_map = {r["patient_uid"]: r for r in (results[idx].data or [])}
+        idx += 1
+    if medtech_ids:
+        user_map = {r["user_id"]: r.get("username", "") for r in (results[idx].data or [])}
+
+    items = []
+    for result_id in result_ids:
+        ar = ar_map.get(result_id, {})
+        spec = spec_map.get(ar.get("specimen_id", ""), {})
+        pat = pat_map.get(spec.get("patient_uid", ""), {})
+        items.append({
+            "result_id": result_id,
+            "specimen_id": ar.get("specimen_id", ""),
+            "patient_name": spec.get("patient_name", ""),
+            "patient_age": _compute_age(pat.get("date_of_birth")),
+            "patient_sex": pat.get("sex"),
+            "medtech_name": user_map.get(spec.get("medtech_id", ""), ""),
+            "approved_at": approved_at_map[result_id],
+            "status": ar.get("status", "APPROVED"),
+        })
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+# ── Escalated list ─────────────────────────────────────────────────────────────
+
+async def get_escalated(page: int, page_size: int) -> dict:
+    offset = (page - 1) * page_size
+
+    count_res = await (
+        supabase.table("analysis_results")
+        .select("result_id", count="exact")
+        .eq("status", "CRITICAL_ESCALATED")
+        .execute()
+    )
+    total = count_res.count or 0
+
+    page_res = await (
+        supabase.table("analysis_results")
+        .select("result_id, specimen_id, status")
+        .eq("status", "CRITICAL_ESCALATED")
+        .order("updated_at", desc=True)
+        .range(offset, offset + page_size - 1)
+        .execute()
+    )
+    ar_rows = page_res.data or []
+    if not ar_rows:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    result_ids = [r["result_id"] for r in ar_rows]
+    ar_map = {r["result_id"]: r for r in ar_rows}
+    specimen_ids = [r["specimen_id"] for r in ar_rows]
+
+    esc_res, spec_res = await asyncio.gather(
+        supabase.table("escalations")
+            .select("result_id, escalation_path, escalated_at")
+            .in_("result_id", result_ids)
+            .execute(),
+        supabase.table("specimens")
+            .select("specimen_id, patient_name, patient_uid, medtech_id")
+            .in_("specimen_id", specimen_ids)
+            .execute(),
+    )
+    esc_map = {r["result_id"]: r for r in (esc_res.data or [])}
+    spec_map = {r["specimen_id"]: r for r in (spec_res.data or [])}
+
+    patient_uids = list({s["patient_uid"] for s in spec_map.values() if s.get("patient_uid")})
+    medtech_ids = list({s["medtech_id"] for s in spec_map.values() if s.get("medtech_id")})
+
+    pat_map: dict[str, dict] = {}
+    user_map: dict[str, str] = {}
+
+    tasks = []
+    if patient_uids:
+        tasks.append(
+            supabase.table("patients").select("patient_uid, date_of_birth, sex").in_("patient_uid", patient_uids).execute()
+        )
+    if medtech_ids:
+        tasks.append(
+            supabase.table("users").select("user_id, username").in_("user_id", medtech_ids).execute()
+        )
+
+    results = await asyncio.gather(*tasks)
+    idx = 0
+    if patient_uids:
+        pat_map = {r["patient_uid"]: r for r in (results[idx].data or [])}
+        idx += 1
+    if medtech_ids:
+        user_map = {r["user_id"]: r.get("username", "") for r in (results[idx].data or [])}
+
+    items = []
+    for ar in ar_rows:
+        spec = spec_map.get(ar["specimen_id"], {})
+        pat = pat_map.get(spec.get("patient_uid", ""), {})
+        esc = esc_map.get(ar["result_id"], {})
+        items.append({
+            "result_id": ar["result_id"],
+            "specimen_id": ar["specimen_id"],
+            "patient_name": spec.get("patient_name", ""),
+            "patient_age": _compute_age(pat.get("date_of_birth")),
+            "patient_sex": pat.get("sex"),
+            "medtech_name": user_map.get(spec.get("medtech_id", ""), ""),
+            "escalated_at": esc.get("escalated_at", ""),
+            "escalation_path": esc.get("escalation_path", ""),
+            "status": ar["status"],
+        })
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 # ── Pending queue ─────────────────────────────────────────────────────────────
@@ -158,10 +366,16 @@ async def get_full_result(result_id: str) -> dict:
     ).eq("result_id", result_id).execute()
 
     review_task = supabase.table("result_reviews").select(
-        "annotation_notes"
+        "annotation_notes, spatial_annotations"
     ).eq("result_id", result_id).limit(1).execute()
 
-    spec_res, overrides_res, review_res = await asyncio.gather(spec_task, overrides_task, review_task)
+    sdo_task = supabase.table("smart_diagnosis_outputs").select(
+        "gout_score, gn_score, nephro_score, no_significant_indicators, evidence_map, engine_version, status"
+    ).eq("result_id", result_id).limit(1).execute()
+
+    spec_res, overrides_res, review_res, sdo_res = await asyncio.gather(
+        spec_task, overrides_task, review_task, sdo_task
+    )
 
     spec = (spec_res.data or [{}])[0]
 
@@ -215,17 +429,40 @@ async def get_full_result(result_id: str) -> dict:
     ]
 
     latest_annotation = None
+    latest_spatial = None
     if review_res.data:
         latest_annotation = review_res.data[0].get("annotation_notes")
+        latest_spatial = review_res.data[0].get("spatial_annotations")
 
-    patient_name = f"{pat.get('first_name', '')} {pat.get('last_name', '')}".strip() or spec.get("patient_name", "")
+    # Smart diagnosis — only populated when status is ATTACHED
+    smart_diagnosis = None
+    sdo_row = (sdo_res.data or [{}])[0] if sdo_res.data else {}
+    if sdo_row and sdo_row.get("status") == "ATTACHED":
+        smart_diagnosis = {
+            "gout_score": sdo_row.get("gout_score", "LOW"),
+            "gn_score": sdo_row.get("gn_score", "LOW"),
+            "nephro_score": sdo_row.get("nephro_score", "LOW"),
+            "no_significant_indicators": sdo_row.get("no_significant_indicators", False),
+            "evidence_map": sdo_row.get("evidence_map") or {},
+            "engine_version": sdo_row.get("engine_version", "mvp-v1.0"),
+        }
+
+    try:
+        first = decrypt_pii(pat["first_name"]) if pat.get("first_name") else ""
+        last = decrypt_pii(pat["last_name"]) if pat.get("last_name") else ""
+        dob = decrypt_pii(pat["date_of_birth"]) if pat.get("date_of_birth") else None
+        sex = pat.get("sex")
+    except Exception:
+        first = last = ""
+        dob = sex = None
+    patient_name = f"{first} {last}".strip() or spec.get("patient_name", "")
 
     return {
         "result_id": ar["result_id"],
         "specimen_id": ar["specimen_id"],
         "patient_name": patient_name,
-        "patient_age": _compute_age(pat.get("date_of_birth")),
-        "patient_sex": pat.get("sex"),
+        "patient_age": _compute_age(dob),
+        "patient_sex": sex,
         "medtech_name": medtech_name,
         "confirmed_at": ar.get("confirmed_at"),
         "confirmation_notes": ar.get("confirmation_notes"),
@@ -235,15 +472,22 @@ async def get_full_result(result_id: str) -> dict:
         "model_version": ar.get("model_version", ""),
         "manual_overrides": overrides,
         "image_url": image_url,
-        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True),
+        "smart_diagnosis": smart_diagnosis,
+        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True) or smart_diagnosis is None,
         "status": ar["status"],
         "annotation_notes": latest_annotation,
+        "spatial_annotations": latest_spatial,
     }
 
 
 # ── Annotation ────────────────────────────────────────────────────────────────
 
-async def save_annotation(result_id: str, user_id: str, annotation_notes: str) -> dict:
+async def save_annotation(
+    result_id: str,
+    user_id: str,
+    annotation_notes: str,
+    spatial_annotations: Optional[list] = None,
+) -> dict:
     # Verify result exists
     check = await (
         supabase.table("analysis_results")
@@ -265,27 +509,38 @@ async def save_annotation(result_id: str, user_id: str, annotation_notes: str) -
         .execute()
     )
 
+    update_payload: dict = {"annotation_notes": annotation_notes, "updated_at": now}
+    if spatial_annotations is not None:
+        update_payload["spatial_annotations"] = spatial_annotations
+
     if existing.data:
         await (
             supabase.table("result_reviews")
-            .update({"annotation_notes": annotation_notes, "updated_at": now})
+            .update(update_payload)
             .eq("review_id", existing.data[0]["review_id"])
             .execute()
         )
     else:
+        insert_payload = {
+            "result_id": result_id,
+            "reviewed_by": user_id,
+            "annotation_notes": annotation_notes,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if spatial_annotations is not None:
+            insert_payload["spatial_annotations"] = spatial_annotations
         await (
             supabase.table("result_reviews")
-            .insert({
-                "result_id": result_id,
-                "reviewed_by": user_id,
-                "annotation_notes": annotation_notes,
-                "created_at": now,
-                "updated_at": now,
-            })
+            .insert(insert_payload)
             .execute()
         )
 
-    return {"result_id": result_id, "annotation_notes": annotation_notes}
+    return {
+        "result_id": result_id,
+        "annotation_notes": annotation_notes,
+        "spatial_annotations": spatial_annotations,
+    }
 
 
 # ── Approve ───────────────────────────────────────────────────────────────────
