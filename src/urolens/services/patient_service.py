@@ -49,7 +49,8 @@ class PatientService:
 
         # Create a portal user account for the patient.
         # Username: patient_uid  |  Initial password: date of birth (YYYY-MM-DD)
-        portal_password = str(data.date_of_birth)
+        dob = data.date_of_birth
+        portal_password = f"{data.last_name.upper()}{dob.day:02d}{dob.month:02d}{dob.year:04d}"
         hashed_pw = await asyncio.to_thread(hash_password, portal_password)
         user_result = await self.db.table("users").insert({
             "username": patient_uid,
