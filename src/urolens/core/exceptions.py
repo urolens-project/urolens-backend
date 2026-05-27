@@ -53,3 +53,23 @@ class SpecimenNotFoundError(NotFoundError):
         msg = f"Specimen {specimen_id} not found." if specimen_id else "Specimen not found."
         super().__init__(message=msg)
         self.error_code = "SPECIMEN_NOT_FOUND"
+
+
+# ── Service-layer exceptions (used by service classes, not raised as HTTP directly) ──
+
+class NotFoundException(HTTPException):
+    def __init__(self, code: str = "NOT_FOUND", message: str = "Resource not found."):
+        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+        self.error_code = code
+
+
+class ConflictException(HTTPException):
+    def __init__(self, code: str = "CONFLICT", message: str = "Resource state conflict."):
+        super().__init__(status_code=status.HTTP_409_CONFLICT, detail=message)
+        self.error_code = code
+
+
+class UnprocessableException(HTTPException):
+    def __init__(self, code: str = "UNPROCESSABLE", message: str = "Request cannot be processed."):
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
+        self.error_code = code

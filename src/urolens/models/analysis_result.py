@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .result_confirmation import ResultConfirmation
     from .manual_override import ManualOverride
     from .smart_diagnosis_output import SmartDiagnosisOutput
+    from .engine_error_log import EngineErrorLog
 
 
 class ResultStatus(str, enum.Enum):
@@ -27,6 +28,7 @@ class ResultStatus(str, enum.Enum):
     RELEASED = "RELEASED"
     RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     CRITICAL_ESCALATED = "CRITICAL_ESCALATED"
+    IMAGE_RETAKE_REQUESTED = "IMAGE_RETAKE_REQUESTED"
     FAILED = "FAILED"
 
 
@@ -72,6 +74,9 @@ class AnalysisResult(Base):
     model_version: Mapped[str] = mapped_column(
         String(30), nullable=False, default="mvp-v1.0"
     )
+    smart_diagnosis: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     smart_diagnosis_unavailable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -111,6 +116,9 @@ class AnalysisResult(Base):
     )
     smart_diagnosis_output: Mapped["SmartDiagnosisOutput | None"] = relationship(
         back_populates="analysis_result", uselist=False
+    )
+    engine_error_logs: Mapped[list["EngineErrorLog"]] = relationship(
+        back_populates="analysis_result"
     )
 
     # ── Helpers ──────────────────────────────────────────────────────────────

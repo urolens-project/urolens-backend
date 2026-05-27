@@ -1,6 +1,5 @@
 # Path: urolens-backend/src/urolens/services/manual_override_service.py
 import uuid
-from datetime import datetime
 
 from fastapi import Request
 from sqlalchemy import select
@@ -53,7 +52,7 @@ class ManualOverrideService:
         result = await self._get_result(result_id)
 
         # Guard: overrides only allowed before Supervisor approval
-        if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED):
+        if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED_FOR_CORRECTION):
             raise UnprocessableException(
                 code="RESULT_ALREADY_FINALISED",
                 message="Cannot override a parameter after the result has been finalised.",
@@ -64,12 +63,11 @@ class ManualOverrideService:
 
         override = ManualOverride(
             result_id=result_id,
-            parameter=parameter,
-            original_ai_value=original_ai_value,   # preserved — never mutated
-            corrected_value=corrected_value,
+            parameter_name=parameter,
+            original_ai_value=str(original_ai_value),
+            corrected_value=str(corrected_value),
             rationale=rationale,
-            overridden_by=medtech_id,
-            overridden_at=datetime.utcnow(),
+            medtech_id=medtech_id,
         )
         self.db.add(override)
 
@@ -98,7 +96,7 @@ class ManualOverrideService:
     # ------------------------------------------------------------------
 
     async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
-        stmt = select(AnalysisResult).where(AnalysisResult.id == result_id)
+        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
