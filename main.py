@@ -17,10 +17,11 @@ from src.urolens.domains.request.lab_requests_router import router as lab_reques
 from src.urolens.domains.intake.labeling_router import router as labeling_router
 from src.urolens.api import patients, queue, patient_portal
 from src.urolens.api.result_releasing import router as result_releasing_router
-from app.api import auth
+from app.api import auth, physician
 
 # Mobile developer routers
-from src.urolens.api.results import router as results_router  # Epic 7: SQLAlchemy-based, replaces app.api.results
+# from src.urolens.api.results import router as results_router  # Epic 7: SQLAlchemy-based, replaces app.api.results
+from app.api.results import router as results_router
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
 from src.urolens.api.image import router as images_router
@@ -32,7 +33,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
@@ -84,6 +85,7 @@ app.include_router(queue.router)
 app.include_router(patient_portal.router)
 app.include_router(result_releasing_router)
 app.include_router(auth.router)
+app.include_router(physician.router)
 app.include_router(src_specimens_router)
 
 # ── Mobile developer routers ──────────────────────────────────────────────────
