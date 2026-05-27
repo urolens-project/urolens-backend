@@ -148,8 +148,12 @@ class QueueService:
 
         try:
             update_result = await self.db.table("specimens").update(
-                {"status": "ASSIGNED"}
-            ).eq("specimen_id", str(data.specimen_id)).execute()
+            {
+                "status": "ASSIGNED",
+                "medtech_id": str(data.medtech_id),  # ← add this
+                "assigned_at": datetime.now(timezone.utc).isoformat(),  # ← good to track too
+            }
+             ).eq("specimen_id", str(data.specimen_id)).execute()
 
             if not update_result.data:
                 await self.db.table("queue_assignments").delete().eq(
