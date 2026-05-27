@@ -1,15 +1,15 @@
 """create result_retrievals table
 
-Revision ID: 0026
-Revises: 0025
+Revision ID: 0030
+Revises: 0029
 Create Date: 2026-05-27
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "0026"
-down_revision = "0025"
+revision = "0030"
+down_revision = "0029"
 branch_labels = None
 depends_on = None
 

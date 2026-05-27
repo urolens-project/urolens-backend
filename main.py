@@ -25,6 +25,7 @@ from app.api.results import router as results_router
 from app.api.specimens import router as mobile_specimens_router
 from app.api.sync import router as sync_router
 from src.urolens.api.image import router as images_router
+from src.urolens.api.notifications import router as notifications_router  # Epic 8
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -93,6 +94,7 @@ app.include_router(sync_router)
 app.include_router(mobile_specimens_router)
 app.include_router(results_router)
 app.include_router(images_router)
+app.include_router(notifications_router)
 
 
 @app.get("/")
