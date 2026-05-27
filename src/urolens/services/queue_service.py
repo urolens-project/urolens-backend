@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
+from src.urolens.core.enums import UserRole
 from src.urolens.schemas.queue import MedTechWorkload, QueueAssignRequest, QueueAssignResponse
 from src.urolens.services.notification_service import NotificationService
 
@@ -26,7 +27,7 @@ class QueueService:
     async def get_workloads(self) -> list[MedTechWorkload]:
         users_result = await self.db.table("users").select(
             "user_id", "username"
-        ).eq("role", "MEDTECH").eq("is_active", True).execute()
+        ).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
 
         medtechs = users_result.data or []
         workloads: list[MedTechWorkload] = []
@@ -84,7 +85,7 @@ class QueueService:
 
         medtech_result = await self.db.table("users").select(
             "user_id"
-        ).eq("user_id", str(data.medtech_id)).eq("role", "MEDTECH").eq("is_active", True).execute()
+        ).eq("user_id", str(data.medtech_id)).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
 
         if not medtech_result.data:
             raise HTTPException(

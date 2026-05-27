@@ -25,6 +25,7 @@ from src.urolens.models.specimen import Specimen  # noqa: F401
 from src.urolens.models.image import Image  # noqa: F401
 from src.urolens.models.result_confirmation import ResultConfirmation  # noqa: F401
 from src.urolens.models.manual_override import ManualOverride  # noqa: F401
+from src.urolens.models.result_view import ResultView  # noqa: F401
 from src.urolens.models.analysis_result import AnalysisResult, ResultStatus
 from src.urolens.models.smart_diagnosis_output import SmartDiagnosisOutput
 from src.urolens.models.engine_error_log import EngineErrorLog
@@ -92,6 +93,14 @@ def _make_db_mock(result: AnalysisResult) -> AsyncMock:
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
+
+    # begin_nested() must be a sync call returning an async context manager.
+    # AsyncMock() supports `async with` natively via __aenter__/__aexit__.
+    nested_ctx = AsyncMock()
+    nested_ctx.__aenter__ = AsyncMock(return_value=nested_ctx)
+    nested_ctx.__aexit__ = AsyncMock(return_value=False)
+    db.begin_nested = MagicMock(return_value=nested_ctx)
+
     return db
 
 
