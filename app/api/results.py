@@ -22,7 +22,7 @@ from app.services import result_service, result_review_service
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
-_supervisor = RequireRole(["supervisor"])
+_supervisor = RequireRole(["SUPERVISOR"])
 
 
 # ── MedTech endpoints ─────────────────────────────────────────────────────────

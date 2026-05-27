@@ -12,3 +12,4 @@ from .audit_log import AuditLog  # noqa: F401
 from .notification import Notification  # noqa: F401
 from .queue_assignment import QueueAssignment  # noqa: F401
 from .consent import Consent  # noqa: F401
+from .result_view import ResultView  # noqa: F401
