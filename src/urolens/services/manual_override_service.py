@@ -1,7 +1,4 @@
-# Path: urolens-backend/src/urolens/services/manual_override_service.py
 import uuid
-from datetime import datetime
-
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +14,7 @@ class ManualOverrideService:
     Owns the manual parameter override transaction (T2.6).
 
     SRP  — one responsibility: record a MedTech's correction alongside the
-           original AI value. It does not re-run inference or alter the
-           result status.
+            original AI value.
     DIP  — depends on injected AuditLogger.
     """
 
@@ -36,44 +32,37 @@ class ManualOverrideService:
         parameter: str,
         corrected_value: float,
         rationale: str,
+        original_ai_value: float,  # Accepted here to match your router argument contract
         medtech_id: uuid.UUID,
         request: Request,
     ) -> ManualOverride:
         """
         Records a MedTech correction for a single AI-generated parameter.
-
-        The original AI value is read from the current ai_findings and stored
-        permanently in original_ai_value. It is NEVER overwritten.
-
-        Raises:
-            NotFoundException: result_id does not exist.
-            UnprocessableException: parameter not present in ai_findings,
-                                   or result already confirmed/approved.
+        The system uses the db-extracted original value as a secure source of truth.
         """
         result = await self._get_result(result_id)
 
         # Guard: overrides only allowed before Supervisor approval
-        if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED):
+        if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED_FOR_CORRECTION):
             raise UnprocessableException(
                 code="RESULT_ALREADY_FINALISED",
                 message="Cannot override a parameter after the result has been finalised.",
             )
 
-        # Read original AI value before any write — preserved permanently
-        original_ai_value = await self._extract_original_value(result, parameter)
+        # Read original AI value safely from the db findings (Source of Truth)
+        db_original_value = await self._extract_original_value(result, parameter)
 
         override = ManualOverride(
             result_id=result_id,
-            parameter=parameter,
-            original_ai_value=original_ai_value,   # preserved — never mutated
-            corrected_value=corrected_value,
+            parameter_name=parameter,
+            original_ai_value=str(db_original_value),
+            corrected_value=str(corrected_value),
             rationale=rationale,
-            overridden_by=medtech_id,
-            overridden_at=datetime.utcnow(),
+            medtech_id=medtech_id,
         )
         self.db.add(override)
 
-        # Audit — same transaction (LSP: same call shape as every other service)
+        # Audit logging entry block
         await self.audit_logger.record(
             event_type="RESULT_OVERRIDDEN",
             entity_type="analysis_result",
@@ -81,7 +70,7 @@ class ManualOverrideService:
             user_id=medtech_id,
             detail_json={
                 "parameter":         parameter,
-                "original_ai_value": original_ai_value,
+                "original_ai_value": db_original_value,
                 "corrected_value":   corrected_value,
                 "specimen_id":       str(result.specimen_id),
             },
@@ -98,7 +87,7 @@ class ManualOverrideService:
     # ------------------------------------------------------------------
 
     async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
-        stmt = select(AnalysisResult).where(AnalysisResult.id == result_id)
+        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:

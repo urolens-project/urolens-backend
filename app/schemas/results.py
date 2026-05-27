@@ -1,5 +1,4 @@
 from typing import Any, Dict, List, Literal, Optional, Union
-
 from pydantic import BaseModel
 
 ProbabilityLevel = Literal["LOW", "MODERATE", "HIGH"]
@@ -112,16 +111,19 @@ class FullResultDetail(BaseModel):
     status: str
     # supervisor review
     annotation_notes: Optional[str]
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 # ── Supervisor: annotation ─────────────────────────────────────────────────
 class AnnotationRequest(BaseModel):
     annotation_notes: str
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 class AnnotationResponse(BaseModel):
     result_id: str
     annotation_notes: str
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 # ── Supervisor: approve ────────────────────────────────────────────────────
@@ -160,3 +162,47 @@ class EscalateResponse(BaseModel):
     status: str
     escalation_path: str
     escalated_at: str
+
+class SupervisorStatsResponse(BaseModel):
+    pendingCount: int
+    approvedToday: int
+    escalatedCount: int
+
+
+# ── Supervisor: approved today list ───────────────────────────────────────────
+class ApprovedResultItem(BaseModel):
+    result_id: str
+    specimen_id: str
+    patient_name: str
+    patient_age: Optional[int]
+    patient_sex: Optional[str]
+    medtech_name: str
+    approved_at: str
+    status: str
+
+
+class ApprovedTodayListResponse(BaseModel):
+    items: list[ApprovedResultItem]
+    total: int
+    page: int
+    page_size: int
+
+
+# ── Supervisor: escalated list ─────────────────────────────────────────────────
+class EscalatedResultItem(BaseModel):
+    result_id: str
+    specimen_id: str
+    patient_name: str
+    patient_age: Optional[int]
+    patient_sex: Optional[str]
+    medtech_name: str
+    escalated_at: str
+    escalation_path: str
+    status: str
+
+
+class EscalatedListResponse(BaseModel):
+    items: list[EscalatedResultItem]
+    total: int
+    page: int
+    page_size: int
