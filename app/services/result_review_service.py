@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 from app.config import SUPABASE_URL, SUPABASE_IMAGE_BUCKET
 from app.db.supabase import supabase
+from src.urolens.core.encryption import decrypt_pii
 
 _PHT = timezone(timedelta(hours=8))
 
@@ -158,7 +159,7 @@ async def get_full_result(result_id: str) -> dict:
     ).eq("result_id", result_id).execute()
 
     review_task = supabase.table("result_reviews").select(
-        "annotation_notes"
+        "annotation_notes, spatial_annotations"
     ).eq("result_id", result_id).limit(1).execute()
 
     spec_res, overrides_res, review_res = await asyncio.gather(spec_task, overrides_task, review_task)
@@ -215,17 +216,27 @@ async def get_full_result(result_id: str) -> dict:
     ]
 
     latest_annotation = None
+    latest_spatial = None
     if review_res.data:
         latest_annotation = review_res.data[0].get("annotation_notes")
+        latest_spatial = review_res.data[0].get("spatial_annotations")
 
-    patient_name = f"{pat.get('first_name', '')} {pat.get('last_name', '')}".strip() or spec.get("patient_name", "")
+    try:
+        first = decrypt_pii(pat["first_name"]) if pat.get("first_name") else ""
+        last = decrypt_pii(pat["last_name"]) if pat.get("last_name") else ""
+        dob = decrypt_pii(pat["date_of_birth"]) if pat.get("date_of_birth") else None
+        sex = pat.get("sex")
+    except Exception:
+        first = last = ""
+        dob = sex = None
+    patient_name = f"{first} {last}".strip() or spec.get("patient_name", "")
 
     return {
         "result_id": ar["result_id"],
         "specimen_id": ar["specimen_id"],
         "patient_name": patient_name,
-        "patient_age": _compute_age(pat.get("date_of_birth")),
-        "patient_sex": pat.get("sex"),
+        "patient_age": _compute_age(dob),
+        "patient_sex": sex,
         "medtech_name": medtech_name,
         "confirmed_at": ar.get("confirmed_at"),
         "confirmation_notes": ar.get("confirmation_notes"),
@@ -238,12 +249,18 @@ async def get_full_result(result_id: str) -> dict:
         "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True),
         "status": ar["status"],
         "annotation_notes": latest_annotation,
+        "spatial_annotations": latest_spatial,
     }
 
 
 # ── Annotation ────────────────────────────────────────────────────────────────
 
-async def save_annotation(result_id: str, user_id: str, annotation_notes: str) -> dict:
+async def save_annotation(
+    result_id: str,
+    user_id: str,
+    annotation_notes: str,
+    spatial_annotations: Optional[list] = None,
+) -> dict:
     # Verify result exists
     check = await (
         supabase.table("analysis_results")
@@ -265,27 +282,38 @@ async def save_annotation(result_id: str, user_id: str, annotation_notes: str) -
         .execute()
     )
 
+    update_payload: dict = {"annotation_notes": annotation_notes, "updated_at": now}
+    if spatial_annotations is not None:
+        update_payload["spatial_annotations"] = spatial_annotations
+
     if existing.data:
         await (
             supabase.table("result_reviews")
-            .update({"annotation_notes": annotation_notes, "updated_at": now})
+            .update(update_payload)
             .eq("review_id", existing.data[0]["review_id"])
             .execute()
         )
     else:
+        insert_payload = {
+            "result_id": result_id,
+            "reviewed_by": user_id,
+            "annotation_notes": annotation_notes,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if spatial_annotations is not None:
+            insert_payload["spatial_annotations"] = spatial_annotations
         await (
             supabase.table("result_reviews")
-            .insert({
-                "result_id": result_id,
-                "reviewed_by": user_id,
-                "annotation_notes": annotation_notes,
-                "created_at": now,
-                "updated_at": now,
-            })
+            .insert(insert_payload)
             .execute()
         )
 
-    return {"result_id": result_id, "annotation_notes": annotation_notes}
+    return {
+        "result_id": result_id,
+        "annotation_notes": annotation_notes,
+        "spatial_annotations": spatial_annotations,
+    }
 
 
 # ── Approve ───────────────────────────────────────────────────────────────────

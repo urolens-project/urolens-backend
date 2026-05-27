@@ -27,6 +27,7 @@ from ..middleware.rbac import RequireRole
 from ..models.user import UserRole
 from ..services.image_retake_service import ImageRetakeService
 from app.db.supabase import supabase as sb
+from app.config import SUPABASE_IMAGE_BUCKET
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +38,8 @@ MIN_WIDTH = 640
 MIN_HEIGHT = 480
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
 MIME_TO_FORMAT = {"image/jpeg": "JPEG", "image/png": "PNG"}
+MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 AI_MODEL_VERSION = "mvp-v1.0"
-STORAGE_BUCKET = "images"
 
 
 # ── AI inference hook ────────────────────────────────────────────────────────
@@ -168,11 +169,18 @@ async def upload_image(
         except Exception as exc:
             log.warning("Could not mark previous image as REPLACED: %s", exc)
 
-    # ── 4. Storage path (upload deferred until AI integration) ───────────────
-    # The storage_key is saved to DB now so it can be used later.
-    # Actual file upload is skipped here: the 20 s Supabase Storage timeout
-    # blocks the response when the bucket is not yet configured.
-    storage_key = f"specimens/{specimen_id}/images/{image_id}.jpg"
+    # ── 4. Upload file to Supabase Storage ────────────────────────────────────
+    ext = MIME_TO_EXT[content_type]
+    storage_key = f"specimens/{specimen_id}/images/{image_id}.{ext}"
+    try:
+        await sb.storage.from_(SUPABASE_IMAGE_BUCKET).upload(
+            path=storage_key,
+            file=raw_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+        log.info("Uploaded image to storage: %s/%s", SUPABASE_IMAGE_BUCKET, storage_key)
+    except Exception as exc:
+        log.warning("Supabase Storage upload failed (bucket '%s'): %s", SUPABASE_IMAGE_BUCKET, exc)
 
     # ── 5. Insert images row ──────────────────────────────────────────────────
     image_payload: dict = {
