@@ -43,3 +43,6 @@ class PatientResponse(BaseModel):
     is_walkin: bool
     record_flag: str | None = None
     created_at: datetime
+    user_id: UUID | None = None
+    portal_username: str | None = None
+    portal_password: str | None = None

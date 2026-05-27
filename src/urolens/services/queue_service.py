@@ -6,8 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
+from src.urolens.core.encryption import decrypt_pii
 from src.urolens.core.enums import UserRole
-from src.urolens.schemas.queue import MedTechWorkload, QueueAssignRequest, QueueAssignResponse
+from src.urolens.schemas.queue import (
+    MedTechWorkload,
+    MedTechWorkloadItem,
+    PendingSpecimenItem,
+    QueueAssignRequest,
+    QueueAssignResponse,
+)
 from src.urolens.services.notification_service import NotificationService
 
 
@@ -141,8 +148,12 @@ class QueueService:
 
         try:
             update_result = await self.db.table("specimens").update(
-                {"status": "ASSIGNED"}
-            ).eq("specimen_id", str(data.specimen_id)).execute()
+            {
+                "status": "ASSIGNED",
+                "medtech_id": str(data.medtech_id),  # ← add this
+                "assigned_at": datetime.now(timezone.utc).isoformat(),  # ← good to track too
+            }
+             ).eq("specimen_id", str(data.specimen_id)).execute()
 
             if not update_result.data:
                 await self.db.table("queue_assignments").delete().eq(
@@ -194,3 +205,103 @@ class QueueService:
             assigned_at=assignment_row.get("assigned_at", datetime.now(timezone.utc)),
             status="ACTIVE",
         )
+
+    # ── Receptionist-facing methods (STORY-WEB-08) ────────────────────────────
+
+    async def get_pending_specimens(self) -> list[PendingSpecimenItem]:
+        """Return all LABELED specimens with decrypted patient PII and test type.
+        Ordered by received_at ascending (FIFO).
+        """
+        spec_res = await self.db.table("specimens").select(
+            "specimen_id, sample_uid, status, received_at, lab_request_id"
+        ).eq("status", "LABELED").order("received_at", desc=False).execute()
+
+        specimens = spec_res.data or []
+        if not specimens:
+            return []
+
+        lab_request_ids = list({str(s["lab_request_id"]) for s in specimens if s.get("lab_request_id")})
+        lr_res = await self.db.table("lab_requests").select(
+            "lab_request_id, test_type, patient_id"
+        ).in_("lab_request_id", lab_request_ids).execute()
+
+        lr_map = {str(lr["lab_request_id"]): lr for lr in (lr_res.data or [])}
+
+        patient_ids = list({str(lr["patient_id"]) for lr in (lr_res.data or []) if lr.get("patient_id")})
+        pat_map: dict[str, dict] = {}
+        if patient_ids:
+            pat_res = await self.db.table("patients").select(
+                "patient_id, first_name, last_name"
+            ).in_("patient_id", patient_ids).execute()
+            pat_map = {str(p["patient_id"]): p for p in (pat_res.data or [])}
+
+        items: list[PendingSpecimenItem] = []
+        for spec in specimens:
+            lr = lr_map.get(str(spec.get("lab_request_id", "")), {})
+            pat = pat_map.get(str(lr.get("patient_id", "")), {})
+
+            try:
+                first = decrypt_pii(pat["first_name"]) if pat.get("first_name") else ""
+                last = decrypt_pii(pat["last_name"]) if pat.get("last_name") else ""
+            except Exception:
+                first = last = ""
+            patient_name = f"{first} {last}".strip() or "Unknown Patient"
+
+            items.append(PendingSpecimenItem(
+                specimen_id=UUID(spec["specimen_id"]),
+                sample_uid=spec.get("sample_uid") or spec["specimen_id"][:8].upper(),
+                patient_name=patient_name,
+                test_type=lr.get("test_type") or "—",
+                received_at=spec["received_at"],
+                status=spec["status"],
+            ))
+
+        return items
+
+    async def get_receptionist_workloads(self) -> list[MedTechWorkloadItem]:
+        """Return all active MedTechs with their active specimen queue depth.
+        Active = specimens.status IN (ASSIGNED, IN_QUEUE, PROCESSING).
+        Sorted ascending by active_count (least-loaded first).
+        """
+        users_res = await self.db.table("users").select(
+            "user_id, username"
+        ).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
+
+        medtechs = users_res.data or []
+        if not medtechs:
+            return []
+
+        medtech_ids = [str(m["user_id"]) for m in medtechs]
+
+        qa_res = await self.db.table("queue_assignments").select(
+            "medtech_id, specimen_id"
+        ).in_("medtech_id", medtech_ids).execute()
+
+        qa_rows = qa_res.data or []
+        active_spec_ids: set[str] = set()
+
+        if qa_rows:
+            spec_ids = list({str(qa["specimen_id"]) for qa in qa_rows})
+            spec_res = await self.db.table("specimens").select(
+                "specimen_id"
+            ).in_("specimen_id", spec_ids).in_(
+                "status", ["ASSIGNED", "IN_QUEUE", "PROCESSING"]
+            ).execute()
+            active_spec_ids = {str(s["specimen_id"]) for s in (spec_res.data or [])}
+
+        medtech_counts: dict[str, int] = {m["user_id"]: 0 for m in medtechs}
+        for qa in qa_rows:
+            if str(qa["specimen_id"]) in active_spec_ids:
+                mid = str(qa["medtech_id"])
+                medtech_counts[mid] = medtech_counts.get(mid, 0) + 1
+
+        items = [
+            MedTechWorkloadItem(
+                user_id=UUID(m["user_id"]),
+                full_name=m["username"],
+                active_count=medtech_counts.get(m["user_id"], 0),
+            )
+            for m in medtechs
+        ]
+        items.sort(key=lambda x: x.active_count)
+        return items
