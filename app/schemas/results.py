@@ -112,16 +112,19 @@ class FullResultDetail(BaseModel):
     status: str
     # supervisor review
     annotation_notes: Optional[str]
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 # ── Supervisor: annotation ─────────────────────────────────────────────────
 class AnnotationRequest(BaseModel):
     annotation_notes: str
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 class AnnotationResponse(BaseModel):
     result_id: str
     annotation_notes: str
+    spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 # ── Supervisor: approve ────────────────────────────────────────────────────
