@@ -207,13 +207,28 @@ class AIIntegrationService:
             await self.db.flush()
 
     async def _get_or_create_result(
-        self, specimen_id: uuid.UUID, image_id: uuid.UUID
+    self, specimen_id: uuid.UUID, image_id: uuid.UUID
     ) -> AnalysisResult:
-        """Return the existing AnalysisResult for the specimen or create one."""
         from sqlalchemy import select
-        stmt = select(AnalysisResult).where(
-            AnalysisResult.specimen_id == specimen_id
-        )
+        from app.db.supabase import supabase
+
+        # Look up patient_id via specimen → lab_request (Supabase)
+        spec_stmt = select(Specimen).where(Specimen.specimen_id == specimen_id)
+        spec_row = await self.db.execute(spec_stmt)
+        specimen = spec_row.scalar_one_or_none()
+
+        patient_id = None
+        if specimen and specimen.lab_request_id:
+            try:
+                lr_res = await supabase.table("lab_requests").select("patient_id").eq(
+                    "lab_request_id", str(specimen.lab_request_id)
+                ).limit(1).execute()
+                if lr_res.data:
+                    patient_id = lr_res.data[0].get("patient_id")
+            except Exception:
+                pass  # best-effort — don't break upload if lookup fails
+
+        stmt = select(AnalysisResult).where(AnalysisResult.specimen_id == specimen_id)
         db_result = await self.db.execute(stmt)
         result = db_result.scalar_one_or_none()
 
@@ -223,11 +238,14 @@ class AIIntegrationService:
             result.ai_findings = {}
             result.flagged_anomalies = {}
             result.particle_classes = {}
+            if patient_id and not result.patient_id:
+                result.patient_id = patient_id
             await self.db.flush()
         else:
             result = AnalysisResult(
                 specimen_id=specimen_id,
                 image_id=image_id,
+                patient_id=patient_id,
                 status=ResultStatus.PENDING_CONFIRM,
                 model_version=AI_MODEL_VERSION,
             )
