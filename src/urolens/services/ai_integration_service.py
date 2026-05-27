@@ -29,6 +29,7 @@ from ..core.config import AI_MODEL_VERSION, S3_BUCKET
 from ..core.exceptions import ImageFormatError, ImageResolutionError, StorageError
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
+from ..models.specimen import Specimen
 
 log = logging.getLogger(__name__)
 
