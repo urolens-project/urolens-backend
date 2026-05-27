@@ -6,10 +6,12 @@ from app.schemas.results import (
     AnnotationResponse,
     ApproveRequest,
     ApproveResponse,
+    ApprovedTodayListResponse,
     ConfirmResultRequest,
     ConfirmResultResponse,
     EscalateRequest,
     EscalateResponse,
+    EscalatedListResponse,
     FullResultDetail,
     OverrideParameterRequest,
     OverrideParameterResponse,
@@ -17,6 +19,7 @@ from app.schemas.results import (
     ReturnRequest,
     ReturnResponse,
     SmartDiagnosisResponse,
+    SupervisorStatsResponse,
 )
 from app.services import result_service, result_review_service
 
@@ -61,6 +64,7 @@ async def override_parameter(
     return await result_service.override_parameter(
         result_id=result_id,
         user_id=claims["user_id"],
+        role=claims["role"],
         parameter_name=body.parameter_name,
         original_ai_value=body.original_ai_value,
         corrected_value=body.corrected_value,
@@ -69,6 +73,39 @@ async def override_parameter(
 
 
 # ── Supervisor endpoints ───────────────────────────────────────────────────────
+
+@router.get(
+    "/supervisor/stats", 
+    response_model=SupervisorStatsResponse,
+    summary="Get real-time dynamic stats for supervisor dashboard"
+)
+async def get_supervisor_stats(
+    claims: dict = Depends(_supervisor),
+):
+    """
+    Fetches real-time counters for pending approvals, successfully processed 
+    results today, and critical escalated test metrics.
+    """
+    return await result_review_service.get_supervisor_stats()
+
+
+@router.get("/approved-today", response_model=ApprovedTodayListResponse, summary="List results approved today")
+async def list_approved_today(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    claims: dict = Depends(_supervisor),
+):
+    return await result_review_service.get_approved_today(page=page, page_size=page_size)
+
+
+@router.get("/escalated", response_model=EscalatedListResponse, summary="List currently escalated results")
+async def list_escalated(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    claims: dict = Depends(_supervisor),
+):
+    return await result_review_service.get_escalated(page=page, page_size=page_size)
+
 
 @router.get("/pending", response_model=PendingResultListResponse)
 async def list_pending_results(
@@ -97,6 +134,7 @@ async def annotate_result(
         result_id=result_id,
         user_id=claims["user_id"],
         annotation_notes=body.annotation_notes,
+        spatial_annotations=body.spatial_annotations
     )
 
 

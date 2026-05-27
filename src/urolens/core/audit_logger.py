@@ -3,12 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import cast, insert
-from sqlalchemy.dialects.postgresql import INET
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from ..models.audit_log import AuditLog
-from .database import get_db
+from app.db.supabase import supabase
 
 
 class AuditLogger:
@@ -18,7 +13,7 @@ class AuditLogger:
         entity_type: str,
         entity_id: uuid.UUID | str,
         user_id: uuid.UUID | str | None,
-        db: AsyncSession,
+        db: Any = None,          # kept for backward compatibility, ignored
         detail_json: dict[str, Any] | None = None,
         request: Any = None,
     ) -> None:
@@ -26,25 +21,19 @@ class AuditLogger:
         if request and hasattr(request, "client") and request.client:
             ip_address = request.client.host
 
-        _entity_id = uuid.UUID(str(entity_id)) if not isinstance(entity_id, uuid.UUID) else entity_id
-        _user_id = uuid.UUID(str(user_id)) if user_id and not isinstance(user_id, uuid.UUID) else user_id
-
-        # Build values dict; exclude ip_address when None so PostgreSQL
-        # uses its own NULL default — passing None through SQLAlchemy's Text
-        # column type emits $n::VARCHAR which the inet column rejects.
-        values: dict[str, Any] = {
-            "log_id": uuid.uuid4(),
-            "event_type": event_type,
-            "entity_type": entity_type,
-            "entity_id": _entity_id,
-            "user_id": _user_id,
-            "detail_json": detail_json or {},
-        }
-        if ip_address:
-            values["ip_address"] = cast(ip_address, INET)
-
-        stmt = insert(AuditLog).values(**values)
-        await db.execute(stmt)
+        try:
+            await supabase.table("audit_logs").insert({
+                "log_id": str(uuid.uuid4()),
+                "event_type": event_type,
+                "entity_type": entity_type,
+                "entity_id": str(entity_id),
+                "user_id": str(user_id) if user_id else None,
+                "detail_json": detail_json or {},
+                "ip_address": ip_address,
+            }).execute()
+        except Exception:
+            # Audit must never break the main transaction
+            pass
 
 
 def get_audit_logger() -> AuditLogger:

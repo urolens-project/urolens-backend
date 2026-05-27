@@ -51,6 +51,213 @@ async def _require_pending(result_id: str) -> dict:
     return ar
 
 
+# ── Supervisor dashboard stats ────────────────────────────────────────────────
+
+async def get_supervisor_stats() -> dict:
+    today_pht = datetime.now(_PHT).date().isoformat()
+    tomorrow_pht = (datetime.now(_PHT).date() + timedelta(days=1)).isoformat()
+
+    pending_res, approved_res, escalated_res = await asyncio.gather(
+        supabase.table("analysis_results")
+            .select("result_id", count="exact")
+            .eq("status", "PENDING_SUPERVISOR_APPROVAL")
+            .execute(),
+        supabase.table("result_approvals")
+            .select("result_id", count="exact")
+            .gte("approved_at", today_pht)
+            .lt("approved_at", tomorrow_pht)
+            .execute(),
+        supabase.table("analysis_results")
+            .select("result_id", count="exact")
+            .eq("status", "CRITICAL_ESCALATED")
+            .execute(),
+    )
+
+    return {
+        "pendingCount": pending_res.count or 0,
+        "approvedToday": approved_res.count or 0,
+        "escalatedCount": escalated_res.count or 0,
+    }
+
+
+# ── Approved today list ───────────────────────────────────────────────────────
+
+async def get_approved_today(page: int, page_size: int) -> dict:
+    offset = (page - 1) * page_size
+    today_pht = datetime.now(_PHT).date().isoformat()
+    tomorrow_pht = (datetime.now(_PHT).date() + timedelta(days=1)).isoformat()
+
+    count_res = await (
+        supabase.table("result_approvals")
+        .select("result_id", count="exact")
+        .gte("approved_at", today_pht)
+        .lt("approved_at", tomorrow_pht)
+        .execute()
+    )
+    total = count_res.count or 0
+
+    page_res = await (
+        supabase.table("result_approvals")
+        .select("result_id, approved_at")
+        .gte("approved_at", today_pht)
+        .lt("approved_at", tomorrow_pht)
+        .order("approved_at", desc=True)
+        .range(offset, offset + page_size - 1)
+        .execute()
+    )
+    approval_rows = page_res.data or []
+    if not approval_rows:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    result_ids = [r["result_id"] for r in approval_rows]
+    approved_at_map = {r["result_id"]: r["approved_at"] for r in approval_rows}
+
+    ar_res = await (
+        supabase.table("analysis_results")
+        .select("result_id, specimen_id, status")
+        .in_("result_id", result_ids)
+        .execute()
+    )
+    ar_map = {r["result_id"]: r for r in (ar_res.data or [])}
+    specimen_ids = list({r["specimen_id"] for r in ar_map.values()})
+
+    spec_res = await (
+        supabase.table("specimens")
+        .select("specimen_id, patient_name, patient_uid, medtech_id")
+        .in_("specimen_id", specimen_ids)
+        .execute()
+    )
+    spec_map = {r["specimen_id"]: r for r in (spec_res.data or [])}
+
+    patient_uids = list({s["patient_uid"] for s in spec_map.values() if s.get("patient_uid")})
+    medtech_ids = list({s["medtech_id"] for s in spec_map.values() if s.get("medtech_id")})
+
+    pat_map: dict[str, dict] = {}
+    user_map: dict[str, str] = {}
+
+    tasks = []
+    if patient_uids:
+        tasks.append(
+            supabase.table("patients").select("patient_uid, date_of_birth, sex").in_("patient_uid", patient_uids).execute()
+        )
+    if medtech_ids:
+        tasks.append(
+            supabase.table("users").select("user_id, username").in_("user_id", medtech_ids).execute()
+        )
+
+    results = await asyncio.gather(*tasks)
+    idx = 0
+    if patient_uids:
+        pat_map = {r["patient_uid"]: r for r in (results[idx].data or [])}
+        idx += 1
+    if medtech_ids:
+        user_map = {r["user_id"]: r.get("username", "") for r in (results[idx].data or [])}
+
+    items = []
+    for result_id in result_ids:
+        ar = ar_map.get(result_id, {})
+        spec = spec_map.get(ar.get("specimen_id", ""), {})
+        pat = pat_map.get(spec.get("patient_uid", ""), {})
+        items.append({
+            "result_id": result_id,
+            "specimen_id": ar.get("specimen_id", ""),
+            "patient_name": spec.get("patient_name", ""),
+            "patient_age": _compute_age(pat.get("date_of_birth")),
+            "patient_sex": pat.get("sex"),
+            "medtech_name": user_map.get(spec.get("medtech_id", ""), ""),
+            "approved_at": approved_at_map[result_id],
+            "status": ar.get("status", "APPROVED"),
+        })
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+# ── Escalated list ─────────────────────────────────────────────────────────────
+
+async def get_escalated(page: int, page_size: int) -> dict:
+    offset = (page - 1) * page_size
+
+    count_res = await (
+        supabase.table("analysis_results")
+        .select("result_id", count="exact")
+        .eq("status", "CRITICAL_ESCALATED")
+        .execute()
+    )
+    total = count_res.count or 0
+
+    page_res = await (
+        supabase.table("analysis_results")
+        .select("result_id, specimen_id, status")
+        .eq("status", "CRITICAL_ESCALATED")
+        .order("updated_at", desc=True)
+        .range(offset, offset + page_size - 1)
+        .execute()
+    )
+    ar_rows = page_res.data or []
+    if not ar_rows:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    result_ids = [r["result_id"] for r in ar_rows]
+    ar_map = {r["result_id"]: r for r in ar_rows}
+    specimen_ids = [r["specimen_id"] for r in ar_rows]
+
+    esc_res, spec_res = await asyncio.gather(
+        supabase.table("escalations")
+            .select("result_id, escalation_path, escalated_at")
+            .in_("result_id", result_ids)
+            .execute(),
+        supabase.table("specimens")
+            .select("specimen_id, patient_name, patient_uid, medtech_id")
+            .in_("specimen_id", specimen_ids)
+            .execute(),
+    )
+    esc_map = {r["result_id"]: r for r in (esc_res.data or [])}
+    spec_map = {r["specimen_id"]: r for r in (spec_res.data or [])}
+
+    patient_uids = list({s["patient_uid"] for s in spec_map.values() if s.get("patient_uid")})
+    medtech_ids = list({s["medtech_id"] for s in spec_map.values() if s.get("medtech_id")})
+
+    pat_map: dict[str, dict] = {}
+    user_map: dict[str, str] = {}
+
+    tasks = []
+    if patient_uids:
+        tasks.append(
+            supabase.table("patients").select("patient_uid, date_of_birth, sex").in_("patient_uid", patient_uids).execute()
+        )
+    if medtech_ids:
+        tasks.append(
+            supabase.table("users").select("user_id, username").in_("user_id", medtech_ids).execute()
+        )
+
+    results = await asyncio.gather(*tasks)
+    idx = 0
+    if patient_uids:
+        pat_map = {r["patient_uid"]: r for r in (results[idx].data or [])}
+        idx += 1
+    if medtech_ids:
+        user_map = {r["user_id"]: r.get("username", "") for r in (results[idx].data or [])}
+
+    items = []
+    for ar in ar_rows:
+        spec = spec_map.get(ar["specimen_id"], {})
+        pat = pat_map.get(spec.get("patient_uid", ""), {})
+        esc = esc_map.get(ar["result_id"], {})
+        items.append({
+            "result_id": ar["result_id"],
+            "specimen_id": ar["specimen_id"],
+            "patient_name": spec.get("patient_name", ""),
+            "patient_age": _compute_age(pat.get("date_of_birth")),
+            "patient_sex": pat.get("sex"),
+            "medtech_name": user_map.get(spec.get("medtech_id", ""), ""),
+            "escalated_at": esc.get("escalated_at", ""),
+            "escalation_path": esc.get("escalation_path", ""),
+            "status": ar["status"],
+        })
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 # ── Pending queue ─────────────────────────────────────────────────────────────
 
 async def get_pending(page: int, page_size: int) -> dict:
