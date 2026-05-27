@@ -546,7 +546,7 @@ async def save_annotation(
 # ── Approve ───────────────────────────────────────────────────────────────────
 
 async def approve_result(result_id: str, user_id: str, notes: Optional[str]) -> dict:
-    await _require_pending(result_id)
+    ar = await _require_pending(result_id)
 
     now = datetime.now(_PHT).isoformat()
     row: dict = {"result_id": result_id, "approved_by": user_id, "approved_at": now}
@@ -557,6 +557,14 @@ async def approve_result(result_id: str, user_id: str, notes: Optional[str]) -> 
         supabase.table("analysis_results")
         .update({"status": "APPROVED", "updated_at": now})
         .eq("result_id", result_id)
+        .execute()
+    )
+
+    # Mark the specimen COMPLETED so it leaves the medtech's active queue
+    await (
+        supabase.table("specimens")
+        .update({"status": "COMPLETED", "completed_at": now})
+        .eq("specimen_id", ar["specimen_id"])
         .execute()
     )
 

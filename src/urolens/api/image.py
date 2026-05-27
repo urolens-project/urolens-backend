@@ -84,6 +84,43 @@ async def _try_run_inference(
     return findings
 
 
+async def _try_run_smart_diagnosis(
+    findings: dict,
+    result_id: uuid.UUID,
+) -> dict | None:
+    """
+    Run Smart Diagnosis on ai_findings immediately after upload so the MedTech
+    sees both panels on the first load — before they click Confirm.
+
+    Writes only to analysis_results.smart_diagnosis (the JSONB column the mobile
+    reads via sync). Does NOT insert into smart_diagnosis_outputs — that formal
+    audit record is created by SmartDiagnosisService at confirmation time.
+
+    Best-effort: failure never blocks the upload response.
+    """
+    try:
+        from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
+        from ..services.smart_diagnosis_service import _build_evidence_map
+
+        engine_output = generate_smart_diagnosis(findings)
+        evidence_map = _build_evidence_map(engine_output)
+        smart_diagnosis = {
+            **evidence_map,
+            "no_significant_indicators": engine_output.no_significant_indicators,
+        }
+
+        await (
+            sb.table("analysis_results")
+            .update({"smart_diagnosis": smart_diagnosis})
+            .eq("result_id", str(result_id))
+            .execute()
+        )
+        return smart_diagnosis
+    except Exception as exc:
+        log.warning("Smart Diagnosis failed at upload for result %s: %s", result_id, exc)
+        return None
+
+
 # ── Response schemas ──────────────────────────────────────────────────────────
 
 class AnalysisResultResponse(BaseModel):
@@ -94,6 +131,7 @@ class AnalysisResultResponse(BaseModel):
     status: str
     ai_findings: dict | None
     flagged_anomalies: dict | None
+    smart_diagnosis: dict | None = None
 
 
 class ImageDiscardResponse(BaseModel):
@@ -251,6 +289,13 @@ async def upload_image(
     # ── 7. Attempt AI inference (no-op until urolens_ai is installed) ──────────
     ai_findings = await _try_run_inference(raw_bytes, result_id, now_iso)
 
+    # ── 8. Pre-compute Smart Diagnosis so it shows alongside AI Findings ───────
+    # Writes to analysis_results.smart_diagnosis only — smart_diagnosis_outputs
+    # is populated later by SmartDiagnosisService at confirmation time.
+    smart_diagnosis: dict | None = None
+    if ai_findings:
+        smart_diagnosis = await _try_run_smart_diagnosis(ai_findings, result_id)
+
     return AnalysisResultResponse(
         id=result_id,
         result_id=result_id,
@@ -259,6 +304,7 @@ async def upload_image(
         status="PENDING_CONFIRM",
         ai_findings=ai_findings,
         flagged_anomalies=None,
+        smart_diagnosis=smart_diagnosis,
     )
 
 
