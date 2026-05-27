@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -39,9 +39,9 @@ class ManualOverride(Base):
         nullable=False,
     )
     parameter_name: Mapped[str] = mapped_column(String(60), nullable=False)
-    original_ai_value: Mapped[int] = mapped_column(Integer, nullable=False)
-    corrected_value: Mapped[int] = mapped_column(Integer, nullable=False)
-    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_ai_value: Mapped[str] = mapped_column(Text, nullable=False)
+    corrected_value: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
     overridden_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -54,3 +54,11 @@ class ManualOverride(Base):
     @property
     def id(self) -> uuid.UUID:
         return self.override_id
+
+    @property
+    def parameter(self) -> str:
+        return self.parameter_name
+
+    @property
+    def overridden_by(self) -> uuid.UUID:
+        return self.medtech_id

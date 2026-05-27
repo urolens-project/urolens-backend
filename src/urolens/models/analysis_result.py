@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -18,6 +18,10 @@ if TYPE_CHECKING:
     from .result_confirmation import ResultConfirmation
     from .manual_override import ManualOverride
     from .smart_diagnosis_output import SmartDiagnosisOutput
+    from .engine_error_log import EngineErrorLog
+    from .result_view import ResultView
+    from .patient import Patient
+    from .user import User
 
 
 class ResultStatus(str, enum.Enum):
@@ -27,6 +31,7 @@ class ResultStatus(str, enum.Enum):
     RELEASED = "RELEASED"
     RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     CRITICAL_ESCALATED = "CRITICAL_ESCALATED"
+    IMAGE_RETAKE_REQUESTED = "IMAGE_RETAKE_REQUESTED"
     FAILED = "FAILED"
 
 
@@ -72,6 +77,9 @@ class AnalysisResult(Base):
     model_version: Mapped[str] = mapped_column(
         String(30), nullable=False, default="mvp-v1.0"
     )
+    smart_diagnosis: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     smart_diagnosis_unavailable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -86,6 +94,36 @@ class AnalysisResult(Base):
         nullable=True,
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # ── Patient Portal ───────────────────────────────────────────────────────
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("patients.patient_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    cell_counts: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    interpretation: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    medtech_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    medtech_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    pathologist_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    pathologist_license: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -111,6 +149,18 @@ class AnalysisResult(Base):
     )
     smart_diagnosis_output: Mapped["SmartDiagnosisOutput | None"] = relationship(
         back_populates="analysis_result", uselist=False
+    )
+    engine_error_logs: Mapped[list["EngineErrorLog"]] = relationship(
+        back_populates="analysis_result"
+    )
+    result_views: Mapped[list["ResultView"]] = relationship(
+        back_populates="analysis_result"
+    )
+    patient: Mapped["Patient | None"] = relationship(
+        back_populates="analysis_results"
+    )
+    medtech: Mapped["User | None"] = relationship(
+        foreign_keys=[medtech_id]
     )
 
     # ── Helpers ──────────────────────────────────────────────────────────────

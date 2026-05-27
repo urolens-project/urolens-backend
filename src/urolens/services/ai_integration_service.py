@@ -247,7 +247,7 @@ class AIIntegrationService:
             from urolens_ai import infer  # type: ignore[import]
 
             inference_result = infer(raw_bytes)
-            findings: dict = inference_result.to_dict()  # type: ignore[attr-defined]
+            findings: dict = inference_result.particles
 
             result.ai_findings = findings
             result.flagged_anomalies = {
