@@ -1,19 +1,17 @@
-from datetime import datetime, timezone
+from __future__ import annotations  # 🧠 Fixed: Must always be the absolute first import!
 
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
 from fastapi import HTTPException, Request, status
 from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.encryption import encrypt_pii, decrypt_pii
+from src.urolens.core.encryption import decrypt_pii, encrypt_pii
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
 
-from __future__ import annotations
- 
-import logging
-from typing import Any
- 
-import httpx
- 
 logger = logging.getLogger(__name__)
  
 EXPO_PUSH_URL = "https://exp.host/--/push/v2/send"
@@ -198,24 +196,8 @@ class PatientService:
         return f"PAT-{max_num + 1:06d}"
 
 class NotificationService:
-    """
-    Thin wrapper around the Expo push notification HTTP API.
- 
-    Usage:
-        service = NotificationService()
-        await service.send_sample_assigned(token, sample_id="abc-123")
-        await service.send_result_returned(token, sample_id="abc-123",
-                                           specimen_id="sp-456",
-                                           return_reason="Recheck RBC count")
-    """
- 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        # Allow injection for unit testing; otherwise create a default client.
         self._client = client or httpx.AsyncClient(timeout=10.0)
- 
-    # ------------------------------------------------------------------
-    # Public notification methods
-    # ------------------------------------------------------------------
  
     async def send_sample_assigned(
         self,
@@ -223,10 +205,6 @@ class NotificationService:
         *,
         sample_id: str,
     ) -> None:
-        """
-        Notify a MedTech that a new sample has been assigned to them.
-        Tapping navigates to the queue screen (handled on mobile).
-        """
         await self._send(
             token=expo_push_token,
             title="New Sample Assigned",
@@ -245,10 +223,6 @@ class NotificationService:
         specimen_id: str,
         return_reason: str,
     ) -> None:
-        """
-        Notify a MedTech that a Supervisor has returned a result for correction.
-        Tapping navigates directly to the sample detail screen (handled on mobile).
-        """
         await self._send(
             token=expo_push_token,
             title="Result Returned for Correction",
@@ -261,10 +235,6 @@ class NotificationService:
             },
         )
  
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
- 
     async def _send(
         self,
         token: str,
@@ -272,11 +242,6 @@ class NotificationService:
         body: str,
         data: dict[str, Any],
     ) -> None:
-        """
-        POST a single push message to the Expo push API.
-        Failures are logged but never re-raised — push notifications must
-        never break the business flow that triggered them.
-        """
         message = {
             "to": token,
             "title": title,
@@ -305,4 +270,3 @@ class NotificationService:
                 token[:20],
                 exc,
             )
- 
