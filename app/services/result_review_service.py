@@ -369,7 +369,13 @@ async def get_full_result(result_id: str) -> dict:
         "annotation_notes, spatial_annotations"
     ).eq("result_id", result_id).limit(1).execute()
 
-    spec_res, overrides_res, review_res = await asyncio.gather(spec_task, overrides_task, review_task)
+    sdo_task = supabase.table("smart_diagnosis_outputs").select(
+        "gout_score, gn_score, nephro_score, no_significant_indicators, evidence_map, engine_version, status"
+    ).eq("result_id", result_id).limit(1).execute()
+
+    spec_res, overrides_res, review_res, sdo_res = await asyncio.gather(
+        spec_task, overrides_task, review_task, sdo_task
+    )
 
     spec = (spec_res.data or [{}])[0]
 
@@ -428,6 +434,19 @@ async def get_full_result(result_id: str) -> dict:
         latest_annotation = review_res.data[0].get("annotation_notes")
         latest_spatial = review_res.data[0].get("spatial_annotations")
 
+    # Smart diagnosis — only populated when status is ATTACHED
+    smart_diagnosis = None
+    sdo_row = (sdo_res.data or [{}])[0] if sdo_res.data else {}
+    if sdo_row and sdo_row.get("status") == "ATTACHED":
+        smart_diagnosis = {
+            "gout_score": sdo_row.get("gout_score", "LOW"),
+            "gn_score": sdo_row.get("gn_score", "LOW"),
+            "nephro_score": sdo_row.get("nephro_score", "LOW"),
+            "no_significant_indicators": sdo_row.get("no_significant_indicators", False),
+            "evidence_map": sdo_row.get("evidence_map") or {},
+            "engine_version": sdo_row.get("engine_version", "mvp-v1.0"),
+        }
+
     try:
         first = decrypt_pii(pat["first_name"]) if pat.get("first_name") else ""
         last = decrypt_pii(pat["last_name"]) if pat.get("last_name") else ""
@@ -453,7 +472,8 @@ async def get_full_result(result_id: str) -> dict:
         "model_version": ar.get("model_version", ""),
         "manual_overrides": overrides,
         "image_url": image_url,
-        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True),
+        "smart_diagnosis": smart_diagnosis,
+        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True) or smart_diagnosis is None,
         "status": ar["status"],
         "annotation_notes": latest_annotation,
         "spatial_annotations": latest_spatial,
