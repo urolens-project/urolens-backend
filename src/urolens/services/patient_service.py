@@ -149,6 +149,31 @@ class PatientService:
 
         return responses
 
+    async def get_patient_by_user_id(self, user_id: str) -> PatientResponse:
+        result = await self.db.table("patients").select("*").eq("user_id", user_id).maybe_single().execute()
+        row = result.data
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient record not found for this account.",
+            )
+
+        return PatientResponse(
+            patient_id=row["patient_id"],
+            patient_uid=row["patient_uid"],
+            first_name=decrypt_pii(row["first_name"]),
+            middle_name=decrypt_pii(row["middle_name"]) if row.get("middle_name") else None,
+            last_name=decrypt_pii(row["last_name"]),
+            date_of_birth=decrypt_pii(row["date_of_birth"]),
+            sex=row.get("sex", "OTHER"),
+            contact_no=decrypt_pii(row["contact_no"]) if row.get("contact_no") else None,
+            address=decrypt_pii(row["address"]) if row.get("address") else None,
+            clinical_history=row.get("clinical_history"),
+            is_walkin=row.get("is_walkin", False),
+            record_flag=row.get("record_flag"),
+            created_at=row.get("created_at", datetime.now(timezone.utc)),
+        )
+
     async def _generate_patient_uid(self) -> str:
         result = await self.db.table("patients").select("patient_uid").execute()
         max_num = 0
