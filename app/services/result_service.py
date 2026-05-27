@@ -117,6 +117,7 @@ async def get_smart_diagnosis(result_id: str) -> dict:
 async def override_parameter(
     result_id: str,
     user_id: str,
+    role: str,
     parameter_name: str,
     original_ai_value: str,
     corrected_value: str,
@@ -132,18 +133,20 @@ async def override_parameter(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis result not found.")
 
-    spec_result = await (
-        supabase.table("specimens")
-        .select("medtech_id")
-        .eq("specimen_id", rows[0]["specimen_id"])
-        .execute()
-    )
-    spec_rows = spec_result.data or []
-    if not spec_rows or spec_rows[0]["medtech_id"] != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Result does not belong to your specimens.",
+    # Only enforce ownership check for medtechs, not supervisors
+    if role.upper() != "SUPERVISOR":
+        spec_result = await (
+            supabase.table("specimens")
+            .select("medtech_id")
+            .eq("specimen_id", rows[0]["specimen_id"])
+            .execute()
         )
+        spec_rows = spec_result.data or []
+        if not spec_rows or spec_rows[0]["medtech_id"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Result does not belong to your specimens.",
+            )
 
     now = datetime.now(_PHT).isoformat()
     insert_result = await (
@@ -154,7 +157,7 @@ async def override_parameter(
             "original_ai_value": original_ai_value,
             "corrected_value": corrected_value,
             "rationale": rationale,
-            "overridden_by": user_id,
+            "medtech_id": user_id,        # ← was overridden_by, now correct column name
             "overridden_at": now,
         })
         .execute()
