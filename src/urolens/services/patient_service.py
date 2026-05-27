@@ -1,8 +1,10 @@
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request, status
 from supabase import AsyncClient
 
+from app.services.auth_service import hash_password
 from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.core.encryption import encrypt_pii, decrypt_pii
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
@@ -45,6 +47,24 @@ class PatientService:
 
         patient_uid = await self._generate_patient_uid()
 
+        # Create a portal user account for the patient.
+        # Username: patient_uid  |  Initial password: date of birth (YYYY-MM-DD)
+        portal_password = str(data.date_of_birth)
+        hashed_pw = await asyncio.to_thread(hash_password, portal_password)
+        user_result = await self.db.table("users").insert({
+            "username": patient_uid,
+            "hashed_password": hashed_pw,
+            "role": "PATIENT",
+            "is_active": True,
+            "failed_attempts": 0,
+        }).execute()
+        if not user_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create patient portal account.",
+            )
+        portal_user_id = user_result.data[0]["user_id"]
+
         patient_payload = {
             "patient_uid": patient_uid,
             "first_name": encrypted_first,
@@ -58,12 +78,14 @@ class PatientService:
             "is_walkin": False,
             "record_flag": "COMPLETE",
             "registered_by": str(created_by),
+            "user_id": portal_user_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
         patient_result = await self.db.table("patients").insert(patient_payload).execute()
         if not patient_result.data:
+            await self.db.table("users").delete().eq("user_id", portal_user_id).execute()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create patient record.",
@@ -84,12 +106,14 @@ class PatientService:
             consent_result = await self.db.table("consents").insert(consent_payload).execute()
             if not consent_result.data:
                 await self.db.table("patients").delete().eq("patient_id", patient_id).execute()
+                await self.db.table("users").delete().eq("user_id", portal_user_id).execute()
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to create consent record.",
                 )
         except Exception:
             await self.db.table("patients").delete().eq("patient_id", patient_id).execute()
+            await self.db.table("users").delete().eq("user_id", portal_user_id).execute()
             raise
 
         await self.audit_logger.record(
@@ -115,6 +139,9 @@ class PatientService:
             is_walkin=False,
             record_flag="COMPLETE",
             created_at=patient_row.get("created_at", datetime.now(timezone.utc)),
+            user_id=portal_user_id,
+            portal_username=patient_uid,
+            portal_password=portal_password,
         )
 
     async def search_patients(self, q: str) -> list[PatientResponse]:
