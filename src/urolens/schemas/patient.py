@@ -26,6 +26,7 @@ class PatientCreateRequest(BaseModel):
     contact_no: str | None = None
     address: str | None = None
     clinical_history: str | None = None
+    is_walkin: bool = False
     consent: ConsentData
 
 
