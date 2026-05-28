@@ -76,7 +76,7 @@ class PatientService:
             "contact_no": encrypt_pii(data.contact_no) if data.contact_no else None,
             "address": encrypt_pii(data.address) if data.address else None,
             "clinical_history": data.clinical_history,
-            "is_walkin": False,
+            "is_walkin": data.is_walkin,
             "record_flag": "COMPLETE",
             "registered_by": str(created_by),
             "user_id": portal_user_id,
@@ -137,7 +137,7 @@ class PatientService:
             contact_no=data.contact_no,
             address=data.address,
             clinical_history=data.clinical_history,
-            is_walkin=False,
+            is_walkin=data.is_walkin,
             record_flag="COMPLETE",
             created_at=patient_row.get("created_at", datetime.now(timezone.utc)),
             user_id=portal_user_id,
@@ -179,7 +179,7 @@ class PatientService:
 
     async def get_patient_by_user_id(self, user_id: str) -> PatientResponse:
         result = await self.db.table("patients").select("*").eq("user_id", user_id).maybe_single().execute()
-        row = result.data
+        row = result.data if result is not None else None
         if not row:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
