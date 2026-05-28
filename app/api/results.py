@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+import uuid
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.middleware.rbac import RequireRole, get_current_user
 from app.schemas.results import (
@@ -22,8 +25,34 @@ from app.schemas.results import (
     SupervisorStatsResponse,
 )
 from app.services import result_service, result_review_service
+from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
+from src.urolens.core.database import get_db
+from src.urolens.services.notification_service import NotificationService
+from src.urolens.services.result_confirmation_service import ResultConfirmationService
+from src.urolens.services.smart_diagnosis_service import SmartDiagnosisService
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
+
+
+async def _get_notif_service(db: AsyncSession = Depends(get_db)) -> NotificationService:
+    return NotificationService(db=db)
+
+
+async def _get_confirmation_service(
+    db: AsyncSession = Depends(get_db),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    notif_service: NotificationService = Depends(_get_notif_service),
+) -> ResultConfirmationService:
+    smart_diag = SmartDiagnosisService(
+        audit_logger=audit_logger,
+        notif_service=notif_service,
+    )
+    return ResultConfirmationService(
+        db=db,
+        audit_logger=audit_logger,
+        smart_diagnosis_service=smart_diag,
+        notif_service=notif_service,
+    )
 
 _supervisor = RequireRole(["SUPERVISOR"])
 
@@ -45,13 +74,20 @@ async def get_smart_diagnosis(
 @router.post("/{result_id}/confirm", response_model=ConfirmResultResponse)
 async def confirm_result(
     result_id: str,
+    request: Request,
     body: ConfirmResultRequest,
     claims: dict = Depends(get_current_user),
+    service: ResultConfirmationService = Depends(_get_confirmation_service),
 ):
-    return await result_service.confirm_result(
+    confirmation = await service.confirm_result(
+        result_id=uuid.UUID(result_id),
+        medtech_id=uuid.UUID(claims["user_id"]),
+        request=request,
+    )
+    return ConfirmResultResponse(
         result_id=result_id,
-        user_id=claims["user_id"],
-        notes=body.notes,
+        status="PENDING_SUPERVISOR_APPROVAL",
+        confirmed_at=confirmation.confirmed_at.isoformat(),
     )
 
 
