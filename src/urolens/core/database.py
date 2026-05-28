@@ -4,10 +4,6 @@ from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-# Re-export Base so legacy web-dev domain modules that import
-# `from src.urolens.core.database import Base` continue to work.
-from ..models.base import Base  # noqa: F401
-
 from .config import DATABASE_URL
 
 # Re-export Supabase client used by legacy web-dev domain routers.

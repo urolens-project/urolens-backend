@@ -5,7 +5,7 @@ from sqlalchemy import Boolean, Column, ForeignKey, Text, VARCHAR, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from src.urolens.core.database import Base
+from .base import Base
 
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
