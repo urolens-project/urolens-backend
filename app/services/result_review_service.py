@@ -358,7 +358,7 @@ async def get_full_result(result_id: str) -> dict:
 
     # Load related data in parallel
     spec_task = supabase.table("specimens").select(
-        "specimen_id, patient_name, patient_uid, medtech_id"
+        "specimen_id, patient_name, patient_uid, lab_request_id, medtech_id"
     ).eq("specimen_id", ar["specimen_id"]).execute()
 
     overrides_task = supabase.table("manual_overrides").select(
@@ -379,7 +379,7 @@ async def get_full_result(result_id: str) -> dict:
 
     spec = (spec_res.data or [{}])[0]
 
-    # Patient info
+    # Patient info — try patient_uid on specimen first, fall back via lab_request → patient
     patient_uid = spec.get("patient_uid", "")
     pat: dict = {}
     if patient_uid:
@@ -391,6 +391,25 @@ async def get_full_result(result_id: str) -> dict:
             .execute()
         )
         pat = (pat_res.data or [{}])[0] if pat_res else {}
+    elif spec.get("lab_request_id"):
+        lr_res = await (
+            supabase.table("lab_requests")
+            .select("patient_id")
+            .eq("lab_request_id", spec["lab_request_id"])
+            .limit(1)
+            .execute()
+        )
+        lr_patient_id = ((lr_res.data or [{}])[0]).get("patient_id") if lr_res else None
+        if lr_patient_id:
+            pat_res = await (
+                supabase.table("patients")
+                .select("patient_uid, first_name, last_name, date_of_birth, sex")
+                .eq("patient_id", str(lr_patient_id))
+                .limit(1)
+                .execute()
+            )
+            pat = (pat_res.data or [{}])[0] if pat_res else {}
+            patient_uid = pat.get("patient_uid", "")
 
     # Medtech name
     medtech_name = ""
