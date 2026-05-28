@@ -133,8 +133,8 @@ async def override_parameter(
     user_id: str,
     role: str,
     parameter_name: str,
-    original_ai_value: str,
-    corrected_value: str,
+    original_ai_value,
+    corrected_value,
     rationale: str,
 ) -> dict:
     result = await (
@@ -168,8 +168,8 @@ async def override_parameter(
         .insert({
             "result_id": result_id,
             "parameter_name": parameter_name,
-            "original_ai_value": original_ai_value,
-            "corrected_value": corrected_value,
+            "original_ai_value": str(original_ai_value),
+            "corrected_value": str(corrected_value),
             "rationale": rationale,
             "medtech_id": user_id,        # ← was overridden_by, now correct column name
             "overridden_at": now,
