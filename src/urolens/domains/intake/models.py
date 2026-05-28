@@ -1,7 +1,7 @@
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-from src.urolens.core.database import Base
+from src.urolens.models.base import Base
 
 class Patient:
     """Utility schema definition mapping directly to the Supabase columns"""

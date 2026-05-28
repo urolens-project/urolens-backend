@@ -1,7 +1,7 @@
 from sqlalchemy import Boolean, Column, ForeignKey, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-from src.urolens.core.database import Base
+from .base import Base
 
 
 class Consent(Base):
