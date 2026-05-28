@@ -476,6 +476,7 @@ async def get_full_result(result_id: str) -> dict:
     return {
         "result_id": ar["result_id"],
         "specimen_id": ar["specimen_id"],
+        "patient_uid": spec.get("patient_uid"),
         "patient_name": patient_name,
         "patient_age": _compute_age(dob),
         "patient_sex": sex,

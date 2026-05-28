@@ -89,6 +89,7 @@ class FullResultDetail(BaseModel):
     result_id: str
     specimen_id: str
     # patient
+    patient_uid: Optional[str]
     patient_name: str
     patient_age: Optional[int]
     patient_sex: Optional[str]
