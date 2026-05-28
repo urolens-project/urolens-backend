@@ -50,6 +50,8 @@ class OverrideRequest(BaseModel):
     parameter: str = Field(..., min_length=1, max_length=100)
     corrected_value: float = Field(..., ge=0)
     rationale: Optional[str] = Field("No rationale provided", max_length=2000)
+    # Add this line to accept the original count sent by the frontend:
+    original_ai_value: float = Field(..., ge=0) 
 
     @field_validator("parameter")
     @classmethod
@@ -157,12 +159,13 @@ async def override_parameter(
     current_user: dict = Depends(RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])),
     service: ManualOverrideService = Depends(get_override_service),
 ) -> OverrideResponse:
-    """Override a single AI-generated parameter value. Requires MEDTECH or SUPERVISOR role."""
+    """Override a single AI-generated parameter value."""
     override = await service.override_parameter(
         result_id=id,
         parameter=body.parameter,
         corrected_value=body.corrected_value,
         rationale=body.rationale,
+        original_ai_value=body.original_ai_value, # ◄── ADD THIS EXACT LINE
         medtech_id=uuid.UUID(current_user["user_id"]),
         request=request,
     )

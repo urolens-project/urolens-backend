@@ -63,3 +63,35 @@ async def log_access_denied(ip_address: str, user_id=None) -> None:
         ip_address,
         user_id=user_id,
     )
+
+
+async def log_patient_login_success(
+    user_id, patient_id, session_id, ip_address: str
+) -> None:
+    await _create_audit_entry(
+        "PATIENT_LOGIN",
+        ip_address,
+        user_id=user_id,
+        session_id=session_id,
+        detail={"role": "PATIENT", "patient_id": str(patient_id)},
+    )
+
+
+async def log_patient_login_failed(ip_address: str, patient_id=None) -> None:
+    detail: dict = {}
+    if patient_id:
+        detail["patient_id"] = str(patient_id)
+    await _create_audit_entry(
+        "PATIENT_LOGIN_FAILED",
+        ip_address,
+        detail=detail if detail else None,
+    )
+
+
+async def log_patient_logout(user_id, session_id, ip_address: str) -> None:
+    await _create_audit_entry(
+        "PATIENT_LOGOUT",
+        ip_address,
+        user_id=user_id,
+        session_id=session_id,
+    )

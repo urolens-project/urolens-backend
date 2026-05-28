@@ -23,7 +23,7 @@ async def get_result_releasing_service(
 ) -> ResultReleasingService:
     return ResultReleasingService(
         db=db,
-        audit_logger=AuditLogger(db=db),
+        audit_logger=AuditLogger(),
         notification_service=NotificationService(db=db),
     )
 
