@@ -52,8 +52,6 @@ class SmartDiagnosisDetail(BaseModel):
     gout_score: str
     gn_score: str
     nephro_score: str
-    uti_score: str
-    tricho_score: str
     evidence_map: dict[str, Any]
     no_significant_indicators: bool
     engine_version: str

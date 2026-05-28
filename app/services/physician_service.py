@@ -64,7 +64,7 @@ async def create_lab_request(
     pat_res = await supabase.table("patients").select("patient_id").eq(
         "patient_id", str(data.patient_id)
     ).maybe_single().execute()
-    if not pat_res.data:
+    if pat_res is None or not pat_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
 
     request_uid = await _generate_request_uid()

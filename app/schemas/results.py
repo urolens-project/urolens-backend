@@ -105,8 +105,9 @@ class FullResultDetail(BaseModel):
     manual_overrides: list[ManualOverrideItem]
     # image
     image_url: Optional[str]
-    # smart diagnosis (may be None if WEB-09 not yet migrated)
+    # smart diagnosis
     smart_diagnosis_unavailable: bool
+    smart_diagnosis: Optional[Dict[str, Any]] = None
     # workflow
     status: str
     # supervisor review
