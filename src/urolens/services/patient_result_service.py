@@ -18,15 +18,16 @@ class PatientResultService:
         self.db = db
         self.audit_logger = audit_logger
 
-    async def _resolve_patient_id(self, user_id: UUID) -> UUID:
-        result = (
-            await self.db.table("patients")
-            .select("patient_id")
+    async def _resolve_patient(self, user_id: UUID) -> dict:
+        """Returns the patients row (patient_id, patient_uid) for the logged-in user."""
+        result = await (
+            self.db.table("patients")
+            .select("patient_id, patient_uid")
             .eq("user_id", str(user_id))
             .maybe_single()
             .execute()
         )
-        row = result.data
+        row = result.data if result is not None else None
         if not row:
             exc = HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -34,16 +35,33 @@ class PatientResultService:
             )
             exc.error_code = "PATIENT_NOT_FOUND"
             raise exc
-        return UUID(row["patient_id"])
+        return row
+
+    async def _get_patient_specimen_ids(self, patient_uid: str) -> list[str]:
+        """
+        analysis_results has no patient_id column; the link is
+        specimens.patient_uid → analysis_results.specimen_id.
+        """
+        spec_res = await (
+            self.db.table("specimens")
+            .select("specimen_id")
+            .eq("patient_uid", patient_uid)
+            .execute()
+        )
+        return [row["specimen_id"] for row in (spec_res.data or [])]
 
     async def get_patient_results(self, user_id: UUID) -> list[PatientResultItem]:
-        patient_id = await self._resolve_patient_id(user_id)
+        patient = await self._resolve_patient(user_id)
+        specimen_ids = await self._get_patient_specimen_ids(patient["patient_uid"])
+        if not specimen_ids:
+            return []
 
         result = await (
             self.db.table("analysis_results")
-            .select("result_id, status, released_at")
-            .eq("patient_id", str(patient_id))
-            .order("released_at", desc=True)
+            .select("result_id, status, confirmed_at, released_at")
+            .in_("specimen_id", specimen_ids)
+            .eq("status", "APPROVED")
+            .order("confirmed_at", desc=True)
             .execute()
         )
         rows = result.data or []
@@ -53,7 +71,7 @@ class PatientResultService:
                 result_id=UUID(row["result_id"]),
                 test_type="Urinalysis",
                 status=row["status"],
-                released_at=_parse_datetime(row.get("released_at")),
+                released_at=_parse_datetime(row.get("released_at") or row.get("confirmed_at")),
             )
             for row in rows
         ]
@@ -61,7 +79,8 @@ class PatientResultService:
     async def get_result_detail(
         self, result_id: UUID, user_id: UUID, request: Request
     ) -> PatientResultDetailResponse:
-        patient_id = await self._resolve_patient_id(user_id)
+        patient = await self._resolve_patient(user_id)
+        specimen_ids = await self._get_patient_specimen_ids(patient["patient_uid"])
 
         result = await (
             self.db.table("analysis_results")
@@ -70,7 +89,7 @@ class PatientResultService:
             .maybe_single()
             .execute()
         )
-        row = result.data
+        row = result.data if result is not None else None
 
         if not row:
             exc = HTTPException(
@@ -80,8 +99,7 @@ class PatientResultService:
             exc.error_code = "RESULT_NOT_FOUND"
             raise exc
 
-        row_patient_id = row.get("patient_id")
-        if not row_patient_id or str(patient_id) != str(row_patient_id):
+        if row.get("specimen_id") not in specimen_ids:
             exc = HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied.",
@@ -89,10 +107,13 @@ class PatientResultService:
             exc.error_code = "ACCESS_DENIED"
             raise exc
 
-        await self.db.table("result_views").insert({
-            "result_id": str(result_id),
-            "patient_id": str(patient_id),
-        }).execute()
+        try:
+            await self.db.table("result_views").insert({
+                "result_id": str(result_id),
+                "patient_id": str(patient["patient_id"]),
+            }).execute()
+        except Exception:
+            pass
 
         await self.audit_logger.record(
             event_type="RESULT_VIEWED",
@@ -127,7 +148,7 @@ class PatientResultService:
             particle_classes=particle_classes,
             smart_diagnosis_unavailable=bool(row.get("smart_diagnosis_unavailable", False)),
             test_type="Urinalysis",
-            released_at=_parse_datetime(row.get("released_at")),
+            released_at=_parse_datetime(row.get("released_at") or row.get("confirmed_at")),
         )
 
 
