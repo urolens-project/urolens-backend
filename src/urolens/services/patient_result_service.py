@@ -60,7 +60,7 @@ class PatientResultService:
             self.db.table("analysis_results")
             .select("result_id, status, confirmed_at, released_at")
             .in_("specimen_id", specimen_ids)
-            .eq("status", "APPROVED")
+            .in_("status", ["APPROVED", "RELEASED"])
             .order("confirmed_at", desc=True)
             .execute()
         )
