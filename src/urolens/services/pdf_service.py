@@ -1,31 +1,39 @@
 from datetime import datetime, timezone
 
-from src.urolens.schemas.patient_portal import PatientResultDetail
+from src.urolens.schemas.patient_portal import PatientResultDetailResponse
+
+_PARTICLE_LABELS = {
+    "bacteria":              "Bacteria",
+    "crystals":              "Crystals",
+    "epithelial-cells":      "Epithelial Cells",
+    "epithelial_cells":      "Epithelial Cells",
+    "erythrocytes":          "Red Blood Cells (RBC)",
+    "leukocytes":            "White Blood Cells (WBC)",
+    "mucus-threads":         "Mucus Threads",
+    "mucus_threads":         "Mucus Threads",
+    "sperm-cells":           "Sperm Cells",
+    "sperm_cells":           "Sperm Cells",
+    "trichomonas-vaginalis": "Trichomonas Vaginalis",
+    "trichomonas_vaginalis": "Trichomonas Vaginalis",
+    "urinary-casts":         "Urinary Casts",
+    "urinary_casts":         "Urinary Casts",
+    "yeast":                 "Yeast",
+}
 
 
-def _safe_str(value: str | None, fallback: str = "Pending") -> str:
-    return value if value else fallback
-
-
-def _safe_val(value: int | None, fallback: int = 0) -> int:
-    return value if value is not None else fallback
-
-
-def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes:
+def generate_result_pdf(
+    result: PatientResultDetailResponse,
+    patient_name: str,
+    result_id: str,
+) -> bytes:
     from io import BytesIO
 
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import mm
-    from reportlab.platypus import (
-        Paragraph,
-        SimpleDocTemplate,
-        Spacer,
-        Table,
-        TableStyle,
-    )
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -39,165 +47,114 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
-        "CustomTitle", parent=styles["Title"], fontSize=16, spaceAfter=8
+        "Title2", parent=styles["Title"], fontSize=16, spaceAfter=8
     )
     subtitle_style = ParagraphStyle(
-        "CustomSubtitle", parent=styles["Normal"], fontSize=10, textColor=colors.grey
+        "Subtitle2", parent=styles["Normal"], fontSize=10, textColor=colors.grey
     )
     heading_style = ParagraphStyle(
-        "CustomHeading",
-        parent=styles["Heading2"],
-        fontSize=12,
-        spaceBefore=16,
-        spaceAfter=6,
+        "Heading2b", parent=styles["Heading2"], fontSize=12, spaceBefore=16, spaceAfter=6
     )
     body_style = ParagraphStyle(
-        "CustomBody",
-        parent=styles["Normal"],
-        fontSize=10,
-        leading=14,
+        "Body2", parent=styles["Normal"], fontSize=10, leading=14
     )
     footer_style = ParagraphStyle(
-        "CustomFooter",
-        parent=styles["Normal"],
-        fontSize=7,
-        textColor=colors.grey,
-        alignment=TA_CENTER,
-        leading=10,
+        "Footer2", parent=styles["Normal"], fontSize=7, textColor=colors.grey,
+        alignment=TA_CENTER, leading=10,
     )
-    sig_label_style = ParagraphStyle(
-        "SigLabel",
-        parent=styles["Normal"],
-        fontSize=9,
-        alignment=TA_CENTER,
-        leading=12,
+    sig_style = ParagraphStyle(
+        "Sig2", parent=styles["Normal"], fontSize=9, alignment=TA_CENTER, leading=12
     )
 
     elements = []
 
+    # ── Header ────────────────────────────────────────────────────────────────
     elements.append(Paragraph("UroLens Laboratory", title_style))
     elements.append(Paragraph("Urine Sediment Analysis Report", subtitle_style))
     elements.append(Spacer(1, 6 * mm))
     elements.append(
-        Paragraph(f"Date Generated: {datetime.now(timezone.utc).strftime('%B %d, %Y')}", body_style)
+        Paragraph(
+            f"Date Generated: {datetime.now(timezone.utc).strftime('%B %d, %Y')}",
+            body_style,
+        )
     )
     elements.append(Spacer(1, 6 * mm))
 
-    # ── Patient Information ──────────────────────────────────────────────────
+    # ── Patient Information ───────────────────────────────────────────────────
     elements.append(Paragraph("Patient Information", heading_style))
-    test_date = result.confirmed_at or result.created_at
+    test_date = result.confirmed_at or result.released_at
     info_data = [
         ["Patient Name:", patient_name],
-        ["Result ID:", str(result.result_id)],
+        ["Result ID:", result_id],
+        ["Test Type:", result.test_type],
         ["Date of Test:", test_date.strftime("%B %d, %Y") if test_date else "N/A"],
         ["Status:", result.status],
     ]
-    info_table = Table(info_data, colWidths=[40 * mm, 100 * mm])
-    info_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#555555")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
+    info_table = Table(info_data, colWidths=[45 * mm, 100 * mm])
+    info_table.setStyle(TableStyle([
+        ("FONTNAME",    (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE",    (0, 0), (-1, -1), 10),
+        ("TEXTCOLOR",   (0, 0), (0, -1),  colors.HexColor("#555555")),
+        ("VALIGN",      (0, 0), (-1, -1), "TOP"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
     elements.append(info_table)
     elements.append(Spacer(1, 6 * mm))
 
-    # ── Cell Count Results ───────────────────────────────────────────────────
-    elements.append(Paragraph("Cell Count Results", heading_style))
-    cc = result.cell_counts
-    params = [
-        ("Red Blood Cells (RBC)", _safe_val(cc.rbc if cc else None)),
-        ("White Blood Cells (WBC)", _safe_val(cc.wbc if cc else None)),
-        ("Epithelial Cells", _safe_val(cc.epithelial_cells if cc else None)),
-        ("Casts", _safe_val(cc.casts if cc else None)),
-        ("Bacteria", _safe_val(cc.bacteria if cc else None)),
-        ("Crystals", _safe_val(cc.crystals if cc else None)),
-        ("Mucus Threads", _safe_val(cc.mucus_threads if cc else None)),
-    ]
-    cell_data = [["Parameter", "Count"]]
-    for param, count in params:
-        cell_data.append([param, str(count)])
-    cell_table = Table(cell_data, colWidths=[100 * mm, 40 * mm])
-    cell_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("ALIGN", (1, 0), (1, -1), "CENTER"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f6fa")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    elements.append(cell_table)
+    # ── Particle Counts ───────────────────────────────────────────────────────
+    elements.append(Paragraph("Particle / Cell Count Results", heading_style))
+    counts_data = [["Parameter", "Count"]]
+    for pc in result.particle_counts:
+        label = _PARTICLE_LABELS.get(pc.label, pc.label.replace("-", " ").replace("_", " ").title())
+        counts_data.append([label, str(pc.count)])
+    counts_table = Table(counts_data, colWidths=[110 * mm, 40 * mm])
+    counts_table.setStyle(TableStyle([
+        ("FONTNAME",      (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 10),
+        ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#2c3e50")),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("ALIGN",         (1, 0), (1, -1),  "CENTER"),
+        ("GRID",          (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f6fa")]),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(counts_table)
     elements.append(Spacer(1, 6 * mm))
 
-    # ── Interpretation ───────────────────────────────────────────────────────
-    elements.append(Paragraph("Interpretation", heading_style))
-    interpretation_text = result.interpretation or "Pending review"
-    elements.append(Paragraph(interpretation_text, body_style))
+    # ── Interpretation / Notes ────────────────────────────────────────────────
+    elements.append(Paragraph("Interpretation / Notes", heading_style))
+    interp = result.confirmation_notes or "No additional notes."
+    elements.append(Paragraph(interp, body_style))
     elements.append(Spacer(1, 10 * mm))
 
-    # ── Signatures ───────────────────────────────────────────────────────────
+    # ── Signature ─────────────────────────────────────────────────────────────
+    medtech = result.analyzed_by or "Medical Technologist"
     sig_table = Table(
         [
-            [
-                Paragraph("Examined by:", sig_label_style),
-                Paragraph("Reviewed by:", sig_label_style),
-            ],
-            [
-                Paragraph("______________________", sig_label_style),
-                Paragraph("______________________", sig_label_style),
-            ],
-            [
-                Paragraph(_safe_str(result.medtech_name), sig_label_style),
-                Paragraph(_safe_str(result.pathologist_name), sig_label_style),
-            ],
-            [
-                Paragraph("Medical Technologist", sig_label_style),
-                Paragraph("Pathologist", sig_label_style),
-            ],
-            [
-                Paragraph("", sig_label_style),
-                Paragraph(
-                    f"License No: {_safe_str(result.pathologist_license)}",
-                    sig_label_style,
-                ),
-            ],
+            [Paragraph("Examined by:", sig_style), Paragraph("", sig_style)],
+            [Paragraph("______________________", sig_style), Paragraph("", sig_style)],
+            [Paragraph(medtech, sig_style), Paragraph("", sig_style)],
+            [Paragraph("Medical Technologist", sig_style), Paragraph("", sig_style)],
         ],
-        colWidths=[75 * mm, 75 * mm],
+        colWidths=[85 * mm, 65 * mm],
     )
-    sig_table.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
+    sig_table.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
     elements.append(sig_table)
     elements.append(Spacer(1, 10 * mm))
 
-    # ── Footer ───────────────────────────────────────────────────────────────
+    # ── Footer ────────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 8 * mm))
-    elements.append(
-        Paragraph(
-            "This report is generated by UroLens. For clinical decisions, consult your physician.",
-            footer_style,
-        )
-    )
+    elements.append(Paragraph(
+        "This report is generated by UroLens. For clinical decisions, consult your physician.",
+        footer_style,
+    ))
     elements.append(Paragraph("CONFIDENTIAL — For patient use only", footer_style))
 
     doc.build(elements)
