@@ -15,9 +15,9 @@ class SmartDiagnosisAttached(BaseModel):
     result_id: str
     status: Literal["ATTACHED"]
     gout_score: ProbabilityLevel
-    uti_score: ProbabilityLevel
-    tricho_score: ProbabilityLevel
-    evidence_map: EvidenceMap
+    gn_score: ProbabilityLevel
+    nephro_score: ProbabilityLevel
+    evidence_map: Dict[str, Any]
     no_significant_indicators: bool
     engine_version: str
     generated_at: str
