@@ -346,7 +346,7 @@ async def get_full_result(result_id: str) -> dict:
         .select(
             "result_id, specimen_id, image_id, ai_findings, flagged_anomalies, "
             "particle_classes, model_version, status, smart_diagnosis_unavailable, "
-            "confirmed_at, confirmation_notes"
+            "confirmed_at, confirmation_notes, smart_diagnosis"
         )
         .eq("result_id", result_id)
         .execute()
@@ -434,7 +434,7 @@ async def get_full_result(result_id: str) -> dict:
         latest_annotation = review_res.data[0].get("annotation_notes")
         latest_spatial = review_res.data[0].get("spatial_annotations")
 
-    # Smart diagnosis — only populated when status is ATTACHED
+    # Smart diagnosis — prefer smart_diagnosis_outputs table, fall back to JSONB column
     smart_diagnosis = None
     sdo_row = (sdo_res.data or [{}])[0] if sdo_res.data else {}
     if sdo_row and sdo_row.get("status") == "ATTACHED":
@@ -446,6 +446,22 @@ async def get_full_result(result_id: str) -> dict:
             "evidence_map": sdo_row.get("evidence_map") or {},
             "engine_version": sdo_row.get("engine_version", "mvp-v1.0"),
         }
+
+    if smart_diagnosis is None:
+        jsonb = ar.get("smart_diagnosis")
+        if jsonb:
+            smart_diagnosis = {
+                "gout_score":   jsonb.get("gout", {}).get("level", "LOW"),
+                "gn_score":     jsonb.get("glomerulonephritis", {}).get("level", "LOW"),
+                "nephro_score": jsonb.get("nephrolithiasis", {}).get("level", "LOW"),
+                "no_significant_indicators": jsonb.get("no_significant_indicators", False),
+                "evidence_map": {
+                    "gout":               jsonb.get("gout", {}),
+                    "glomerulonephritis": jsonb.get("glomerulonephritis", {}),
+                    "nephrolithiasis":    jsonb.get("nephrolithiasis", {}),
+                },
+                "engine_version": jsonb.get("engine_version", ""),
+            }
 
     try:
         first = decrypt_pii(pat["first_name"]) if pat.get("first_name") else ""
@@ -473,7 +489,7 @@ async def get_full_result(result_id: str) -> dict:
         "manual_overrides": overrides,
         "image_url": image_url,
         "smart_diagnosis": smart_diagnosis,
-        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", True) or smart_diagnosis is None,
+        "smart_diagnosis_unavailable": ar.get("smart_diagnosis_unavailable", False) and smart_diagnosis is None,
         "status": ar["status"],
         "annotation_notes": latest_annotation,
         "spatial_annotations": latest_spatial,
