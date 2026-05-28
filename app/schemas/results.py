@@ -45,8 +45,8 @@ class ConfirmResultResponse(BaseModel):
 # ── MedTech: manual override ───────────────────────────────────────────────
 class OverrideParameterRequest(BaseModel):
     parameter_name: str
-    original_ai_value: Union[str, float, int]
-    corrected_value: Union[str, float, int]
+    original_ai_value: Union[float, int]
+    corrected_value: Union[float, int]
     rationale: str
 
 

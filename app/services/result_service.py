@@ -168,8 +168,8 @@ async def override_parameter(
         .insert({
             "result_id": result_id,
             "parameter_name": parameter_name,
-            "original_ai_value": str(original_ai_value),
-            "corrected_value": str(corrected_value),
+            "original_ai_value": int(float(original_ai_value)),
+            "corrected_value": int(float(corrected_value)),
             "rationale": rationale,
             "medtech_id": user_id,        # ← was overridden_by, now correct column name
             "overridden_at": now,
