@@ -27,14 +27,8 @@ class PatientService:
                     and decrypt_pii(row["date_of_birth"]) == str(data.date_of_birth)
                 ):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail={
-                            "error": {
-                                "code": "DUPLICATE_PATIENT",
-                                "message": "A patient with this name and date of birth already exists.",
-                                "details": {},
-                            }
-                        },
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A patient with this name and date of birth already exists.",
                     )
             except HTTPException:
                 raise
