@@ -3,35 +3,44 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+PARTICLE_LABELS: list[str] = [
+    "bacteria",
+    "crystals",
+    "epithelial-cells",
+    "erythrocytes",
+    "leukocytes",
+    "mucus-threads",
+    "sperm-cells",
+    "trichomonas-vaginalis",
+    "urinary-casts",
+    "yeast",
+]
 
-class CellCounts(BaseModel):
-    rbc: int = 0
-    wbc: int = 0
-    epithelial_cells: int = 0
-    casts: int = 0
-    bacteria: int = 0
-    crystals: int = 0
-    mucus_threads: int = 0
+
+class ParticleCount(BaseModel):
+    label: str
+    count: int
 
 
-class PatientResultSummary(BaseModel):
+class PatientResultItem(BaseModel):
     result_id: UUID
-    specimen_id: UUID
+    test_type: str
     status: str
     released_at: datetime | None
-    created_at: datetime
 
 
-class PatientResultDetail(BaseModel):
-    result_id: UUID
-    specimen_id: UUID
-    patient_id: UUID | None = None
+class PatientResultDetailResponse(BaseModel):
     status: str
-    cell_counts: CellCounts | None
-    interpretation: str | None
-    medtech_name: str | None
-    pathologist_name: str | None
-    pathologist_license: str | None
     confirmed_at: datetime | None
+    confirmation_notes: str | None
+    analyzed_by: str | None
+    particle_counts: list[ParticleCount]
+    particle_classes: list[str]
+    smart_diagnosis_unavailable: bool
+    test_type: str
     released_at: datetime | None
-    created_at: datetime
+
+
+# Legacy alias kept for the PDF service which builds its own view of the data.
+class PatientResultDetail(PatientResultDetailResponse):
+    pass

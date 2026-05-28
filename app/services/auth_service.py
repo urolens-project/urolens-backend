@@ -33,7 +33,7 @@ async def get_user_by_username(username: str) -> dict | None:
     result = await supabase.table("users").select("*").eq(
         "username", username
     ).maybe_single().execute()
-    return result.data
+    return result.data if result is not None else None
 
 
 async def increment_failed_attempts(user_id) -> None:
@@ -101,7 +101,7 @@ async def is_session_active(session_id) -> bool:
     result = await supabase.table("sessions").select("is_active").eq(
         "session_id", str(session_id)
     ).maybe_single().execute()
-    if not result.data:
+    if result is None or not result.data:
         return False
     return result.data.get("is_active", False)
 
@@ -110,4 +110,4 @@ async def _get_user_by_id(user_id) -> dict | None:
     result = await supabase.table("users").select("*").eq(
         "user_id", str(user_id)
     ).maybe_single().execute()
-    return result.data
+    return result.data if result is not None else None
