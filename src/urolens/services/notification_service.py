@@ -5,8 +5,9 @@ import httpx
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.enums import UserRole
 from ..models.notification import Notification
-from ..models.user import User, UserRole
+from ..models.user import User
 
 logger = logging.getLogger(__name__)
 
