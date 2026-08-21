@@ -1,20 +1,16 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.middleware.rbac import RequireRole, get_current_user
+from app.middleware.rbac import RequireRole
 from app.schemas.results import (
     AnnotationRequest,
     AnnotationResponse,
     ApproveRequest,
     ApproveResponse,
     ApprovedTodayListResponse,
-    ConfirmResultRequest,
-    ConfirmResultResponse,
     EscalateRequest,
     EscalateResponse,
     EscalatedListResponse,
     FullResultDetail,
-    OverrideParameterRequest,
-    OverrideParameterResponse,
     PendingResultListResponse,
     ReturnRequest,
     ReturnResponse,
@@ -40,36 +36,6 @@ async def get_smart_diagnosis(
     claims: dict = Depends(_supervisor),
 ):
     return await result_service.get_smart_diagnosis(result_id=result_id)
-
-
-@router.post("/{result_id}/confirm", response_model=ConfirmResultResponse)
-async def confirm_result(
-    result_id: str,
-    body: ConfirmResultRequest,
-    claims: dict = Depends(get_current_user),
-):
-    return await result_service.confirm_result(
-        result_id=result_id,
-        user_id=claims["user_id"],
-        notes=body.notes,
-    )
-
-
-@router.post("/{result_id}/override", response_model=OverrideParameterResponse)
-async def override_parameter(
-    result_id: str,
-    body: OverrideParameterRequest,
-    claims: dict = Depends(get_current_user),
-):
-    return await result_service.override_parameter(
-        result_id=result_id,
-        user_id=claims["user_id"],
-        role=claims["role"],
-        parameter_name=body.parameter_name,
-        original_ai_value=body.original_ai_value,
-        corrected_value=body.corrected_value,
-        rationale=body.rationale,
-    )
 
 
 # ── Supervisor endpoints ───────────────────────────────────────────────────────

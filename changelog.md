@@ -361,3 +361,87 @@ service layer survives, which RBAC import wins), and were live security gaps.
 - `requirements.txt`'s mixed UTF-16/UTF-8 encoding — touched only the minimum
   necessary to remove the three dependency lines; not normalized to a single
   encoding.
+
+## Results merge — Step 5a: confirm/override (plan doc row 6 only)
+
+Row 7 (supervisor review/approval) and row 8 (result releasing/notifications) are
+untouched — separate follow-up tasks, not started here.
+
+### Fixed
+- **Two plan-doc row 6 corrections found and fixed before acting on them, same
+  as the image/AI merge's row-4 filename swap:**
+  1. `app/services/result_service.py` could **not** be deleted "outright" as the
+     row said. It also contains `get_smart_diagnosis`, used by
+     `app/api/results.py`'s `GET /{result_id}/smart-diagnosis` route — a route
+     that belongs to neither row 6 (doesn't confirm or override anything) nor
+     row 7 (not supervisor-gated business logic, just a result-detail read) and
+     was left untouched. Deleting the whole file would have broken a live,
+     unrelated route. Only `confirm_result` and `override_parameter` were
+     removed from it (along with the `datetime`/`_PHT` imports only they used).
+  2. `src/urolens/api/results.py` needed far more than a RBAC-pair swap before
+     it could be mounted. It already contained full row-7-shaped routes
+     (`/pending`, `/{id}/full`, `/annotate`, `/approve`, `/return`, `/escalate`)
+     bridged directly to the old, unported `app.services.result_review_service`,
+     plus two generic result-viewing routes (`GET /{id}`, `GET /{id}/smart-diagnosis`)
+     backed by inline Supabase calls. Both files share the `/api/v1/results`
+     prefix; mounting `src/urolens/api/results.py` as-is alongside the
+     still-live `app/api/results.py` (deliberately untouched, row 7's job) would
+     have silently shadowed one router's routes with the other's, in
+     registration order, at every one of these paths, with FastAPI raising no
+     error: `/pending` (exact duplicate), `/{id}/full` vs `/{result_id}` (both
+     single-segment-param GETs — `/{id}` from the new file would have matched
+     first and swallowed `/{result_id}`'s traffic since it registers earlier),
+     `/{result_id}/annotate`, `/approve`, `/return`, `/escalate` (exact
+     duplicates), and `/{id}/smart-diagnosis` vs `/{result_id}/smart-diagnosis`
+     (same collision pattern as `/{id}` vs `/{result_id}`). Resolved by removing
+     all of the above from `src/urolens/api/results.py` before mounting it —
+     the file now contains only `confirm_result`/`override_parameter`, their
+     supporting schemas, and their dependency factories. The removed route
+     definitions are recoverable from git history; they were already bridged
+     to the *old* service, so nothing of row 7's actual porting work was lost.
+  Both corrections added to `docs/backend-consolidation-plan.md` row 6.
+- **`src/urolens/api/results.py` mounted** in `main.py` as
+  `results_confirm_override_router`, alongside `app/api/results.py`'s
+  `results_router` (kept, distinct variable name — both are needed
+  simultaneously; row 7's routes aren't ported yet). Confirmed zero path
+  collision by listing every route on both routers post-change, not just by
+  inspecting the two files' path strings separately.
+- **RBAC/`UserRole` swapped to the canonical pair** — `src/urolens/api/results.py`
+  now imports `RequireRole` from `app.middleware.rbac` and `UserRole` from
+  `src.urolens.core.enums`, not `src.urolens.middleware.rbac`/`models.user`.
+  `MEDTECH` (confirm) and `MEDTECH`/`SUPERVISOR` (override) role gates
+  unchanged — already correct for what these routes do.
+- **`ManualOverrideService`'s re-derivation traced end-to-end, not just
+  confirmed present in source**: `override_parameter` accepts
+  `original_ai_value` as a parameter (kept for API-contract compatibility —
+  the request body still requires it) but never uses it; `_extract_original_value`
+  reads the AI-generated value for that parameter from the stored
+  `AnalysisResult.ai_findings` instead, and that's the value actually persisted
+  to `ManualOverride.original_ai_value`. Confirmed by reading the full call
+  path, not by re-stating the plan doc's claim.
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- **`confirm_result`/`override_parameter` removed from `app/services/result_service.py`
+  and `app/api/results.py`** — the weaker, client-trusting versions. Left
+  `app/schemas/results.py` untouched even though `ConfirmResultRequest`,
+  `OverrideParameterRequest`, and `OverrideParameterResponse` are now unused
+  there — that file is shared with row 7/8's schemas and wasn't in this task's
+  scope; noted here rather than reached into.
+
+### Test suite
+- No change from the image/AI merge's baseline: 20 failed / 28 passed, identical
+  in count and in which specific tests fail. Confirm/override has no existing
+  test coverage to begin with (no `test_results.py` or similar in `tests/`) —
+  nothing to break, nothing fixed.
+
+### Verified
+- `app/api/results.py`'s remaining routes (`get_smart_diagnosis`, `get_supervisor_stats`,
+  `list_approved_today`, `list_escalated`, `list_pending_results`, `get_full_result`,
+  `annotate_result`, `approve_result`, `return_result`, `escalate_result`) diffed
+  against the pre-change file — confirmed the only removals are the two
+  confirm/override routes and their now-unused imports; nothing in the
+  review/approval logic touched.
+- App boots clean: 50 routes before and after (2 removed from `app/api/results.py`,
+  2 added via `src/urolens/api/results.py` — net zero, confirmed by listing
+  every `/results` route post-change). OpenAPI generates cleanly (45 paths,
+  unchanged).
