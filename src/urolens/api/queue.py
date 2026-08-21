@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from app.db.supabase import get_supabase
-from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
+from src.urolens.core.supabase import get_supabase
 from src.urolens.schemas.queue import (
     MedTechWorkloadItem,
     PendingSpecimenItem,

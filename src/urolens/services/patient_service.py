@@ -7,8 +7,8 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.auth_service import hash_password
 from src.urolens.core.audit_logger import AuditLogger
+from src.urolens.core.auth_service import hash_password
 from src.urolens.core.encryption import decrypt_pii, encrypt_pii
 from src.urolens.models.consent import Consent
 from src.urolens.models.patient import Patient

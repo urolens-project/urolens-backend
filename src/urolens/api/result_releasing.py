@@ -3,10 +3,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from supabase import AsyncClient
 
-from app.db.supabase import get_supabase
-from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
+from src.urolens.core.supabase import get_supabase
 from src.urolens.schemas.result_releasing import (
     ApprovedResultsResponse,
     ReleaseResultRequest,

@@ -7,10 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from .config import settings
 
 # Re-export Supabase client used by legacy web-dev domain routers.
-try:
-    from app.db.supabase import supabase  # noqa: F401
-except Exception:
-    supabase = None  # type: ignore[assignment]
+from .supabase import supabase  # noqa: F401
 
 engine = create_async_engine(
     settings.async_database_url,

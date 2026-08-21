@@ -4,9 +4,9 @@ from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole
 from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
 from src.urolens.schemas.lab_request import (
     LabRequestCreateRequest,
     LabRequestCreateResponse,

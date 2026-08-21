@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..core.exceptions import ConflictError, NotFoundError
-from app.db.supabase import supabase as sb
+from ..core.supabase import supabase as sb
 
 log = logging.getLogger(__name__)
 

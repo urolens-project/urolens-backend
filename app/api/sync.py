@@ -3,9 +3,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.middleware.rbac import get_current_user
 from app.schemas.sync import SyncPullResponse
 from app.services import sync_service
+from src.urolens.core.rbac import get_current_user
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 

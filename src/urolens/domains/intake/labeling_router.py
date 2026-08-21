@@ -5,9 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole
 from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
 from src.urolens.schemas.labeling import (
     LabelConfirmRequest,
     LabelConfirmResponse,

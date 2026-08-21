@@ -1,6 +1,6 @@
 from fastapi import HTTPException, status
 
-from app.db.supabase import supabase
+from src.urolens.core.supabase import supabase
 
 
 async def get_smart_diagnosis(result_id: str) -> dict:

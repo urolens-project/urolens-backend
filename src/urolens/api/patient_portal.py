@@ -5,11 +5,11 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from app.db.supabase import get_supabase
-from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
 from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
+from src.urolens.core.supabase import get_supabase
 from src.urolens.schemas.patient_portal import PatientResultDetailResponse, PatientResultItem
 from src.urolens.services.patient_result_service import PatientResultService
 from src.urolens.services.patient_service import PatientService

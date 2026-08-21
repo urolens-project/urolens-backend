@@ -44,10 +44,9 @@ from PIL import Image as PILImage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.supabase import supabase as sb
-
 from ..core.audit_logger import AuditLogger
 from ..core.config import settings
+from ..core.supabase import supabase as sb
 from ..core.exceptions import ImageFormatError, ImageResolutionError
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus

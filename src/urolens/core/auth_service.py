@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 
-from app.db.supabase import supabase
-from src.urolens.core.config import settings
+from .config import settings
+from .supabase import supabase
 
 
 async def verify_password(plain_password: str, hashed_password: str) -> bool:

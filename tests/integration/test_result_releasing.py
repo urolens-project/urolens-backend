@@ -298,7 +298,7 @@ class TestRBAC:
     async def test_supervisor_cannot_access_approved_queue(self, async_client):
         token = _mint_token(SUPERVISOR_ID, "SUPERVISOR")
         with patch(
-            "app.middleware.rbac.is_session_active", AsyncMock(return_value=True)
+            "src.urolens.core.rbac.is_session_active", AsyncMock(return_value=True)
         ):
             response = await async_client.get(
                 "/api/v1/results/approved",

@@ -2,10 +2,10 @@ import asyncio
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 
-from app.middleware.rbac import get_current_user
 from app.schemas.auth import LoginRequest, LoginResponse
-from app.services import audit_logger
-from app.services.auth_service import (
+from src.urolens.core import audit_logger
+from src.urolens.core.rbac import get_current_user
+from src.urolens.core.auth_service import (
     close_session,
     create_session,
     get_user_by_username,

@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, Query, Request
 
-from app.middleware.rbac import RequireRole
 from app.schemas.physician import (
     LabRequestCreateRequest,
     LabRequestCreateResponse,
@@ -9,6 +8,7 @@ from app.schemas.physician import (
     PhysicianResultListResponse,
 )
 from app.services import physician_service, physician_result_service
+from src.urolens.core.rbac import RequireRole
 
 router = APIRouter(prefix="/api/v1/physician", tags=["physician"])
 

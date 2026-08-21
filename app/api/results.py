@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 
-from app.middleware.rbac import RequireRole
 from app.schemas.results import SmartDiagnosisResponse
 from app.services import result_service
+from src.urolens.core.rbac import RequireRole
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
