@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -16,15 +17,19 @@ class ResultReview(Base):
     Supervisor annotation on an analysis result, prior to approve/return/
     escalate. Source: migration 0019 — T3.2 Result Review.
 
-    `spatial_annotations` (a JSON-ish column on the live table per
-    app/services/result_review_service.py's usage) is deliberately not
-    modeled here — it has no Alembic history anywhere in this repo (grepped
-    every migration file; only this table's other four columns are covered,
-    by 0019). Per this consolidation's schema-drift rule, no migration was
-    added to cover it. `save_annotation` in the ported service persists
-    `annotation_notes` only; a caller-supplied `spatial_annotations` value is
-    accepted (for request-shape compatibility) but not persisted, and this is
-    reported as a known gap rather than guessed at.
+    `spatial_annotations` was originally left unmapped (schema-drift finding
+    from the row-7 port: no Alembic history anywhere in this repo for this
+    column), which silently dropped every caller-supplied value —
+    `save_annotation` accepted the field but never persisted it. Fixed via
+    migration 0034: mapped as JSONB, matching the `Optional[List[Dict[str,
+    Any]]]` shape confirmed from the pre-port
+    `app/schemas/results.py`/`app/services/result_review_service.py` (git
+    history, commit 35ab942^) and this codebase's existing convention for
+    equivalently-shaped fields (`AnalysisResult.ai_findings`,
+    `.flagged_anomalies`, `.particle_classes`, `SmartDiagnosisOutput.evidence_map`
+    are all JSONB). The column type itself is still an inference from that
+    pre-port code, not a live-database confirmation — see migration 0034's
+    docstring.
     """
 
     __tablename__ = "result_reviews"
@@ -44,6 +49,9 @@ class ResultReview(Base):
         nullable=False,
     )
     annotation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    spatial_annotations: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
