@@ -18,10 +18,17 @@ class Patient(Base):
     patient_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     patient_uid = Column(VARCHAR(20), unique=True, nullable=False)
     first_name = Column(Text, nullable=False)
+    middle_name = Column(Text, nullable=True)
+    """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
     last_name = Column(Text, nullable=False)
     date_of_birth = Column(Text, nullable=False)
     contact_no = Column(Text)
     address = Column(Text)
+    clinical_history = Column(Text, nullable=True)
+    """Plaintext, unlike the PII fields above — matches PatientCreateRequest, which
+    never encrypts this field either. Added via migration 0033; confirmed live and
+    in active use by PatientService before this column was modeled (same
+    out-of-band-schema pattern found and documented in migration 0032)."""
     is_walkin = Column(Boolean, nullable=False, server_default="false")
     record_flag = Column(VARCHAR(50))
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)

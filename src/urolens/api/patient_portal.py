@@ -2,11 +2,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
+from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from app.db.supabase import get_supabase
 from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
+from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
 from src.urolens.schemas.patient_portal import PatientResultDetailResponse, PatientResultItem
 from src.urolens.services.patient_result_service import PatientResultService
@@ -24,7 +26,7 @@ async def get_patient_result_service(
 
 
 async def get_patient_service(
-    db: AsyncClient = Depends(get_supabase),
+    db: AsyncSession = Depends(get_db),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> PatientService:
     return PatientService(db=db, audit_logger=audit_logger)

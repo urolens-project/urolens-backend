@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Query, Request
-from supabase import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.supabase import get_supabase
 from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
+from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
 from src.urolens.services.patient_service import PatientService
@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 async def get_patient_service(
-    db: AsyncClient = Depends(get_supabase),
+    db: AsyncSession = Depends(get_db),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> PatientService:
     return PatientService(db=db, audit_logger=audit_logger)
