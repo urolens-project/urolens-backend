@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 
-from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SIGNING_KEY, MAX_FAILED_ATTEMPTS
 from app.db.supabase import supabase
+from src.urolens.core.config import settings
 
 
 async def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -42,7 +42,7 @@ async def increment_failed_attempts(user_id) -> None:
         return
     new_count = user["failed_attempts"] + 1
     update_data = {"failed_attempts": new_count}
-    if new_count >= MAX_FAILED_ATTEMPTS:
+    if new_count >= settings.max_failed_attempts:
         update_data["locked_at"] = datetime.now(timezone.utc).isoformat()
     await supabase.table("users").update(update_data).eq(
         "user_id", str(user_id)
@@ -88,13 +88,13 @@ def issue_jwt(user_id, username: str, role: str, session_id) -> str:
         "role": role,
         "session_id": str(session_id),
         "iat": now,
-        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
     }
-    return jwt.encode(payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm)
 
 
 def decode_jwt(token: str) -> dict:
-    return jwt.decode(token, JWT_SIGNING_KEY, algorithms=[JWT_ALGORITHM])
+    return jwt.decode(token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm])
 
 
 async def is_session_active(session_id) -> bool:

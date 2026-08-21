@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import HTTPException, Request, status
 
-from app.config import JWT_ALGORITHM, JWT_SIGNING_KEY
 from app.db.supabase import supabase
 from app.services import audit_logger
 from app.services.auth_service import (
@@ -15,6 +14,7 @@ from app.services.auth_service import (
     reset_failed_attempts,
 )
 from app.schemas.auth import PatientLoginResponse
+from src.urolens.core.config import settings
 from src.urolens.core.encryption import decrypt_pii
 
 _PATIENT_TOKEN_EXPIRE_MINUTES = 30
@@ -51,7 +51,7 @@ def _issue_patient_jwt(user_id, patient_uid: str, session_id) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=_PATIENT_TOKEN_EXPIRE_MINUTES),
     }
-    return jwt.encode(payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm)
 
 
 async def patient_login(patient_uid: str, password: str, request: Request) -> PatientLoginResponse:
@@ -80,17 +80,13 @@ async def patient_login(patient_uid: str, password: str, request: Request) -> Pa
 
     # 3. Derive and compare password (check before lock to avoid revealing lock status)
     try:
-        from app.config import ENCRYPTION_KEY
-        print(f"[DEBUG] key_prefix={ENCRYPTION_KEY[:8]!r} key_len={len(ENCRYPTION_KEY)}")  # REMOVE
         last_name = decrypt_pii(patient["last_name"])
         date_of_birth = decrypt_pii(patient["date_of_birth"])
         expected = _derive_patient_password(last_name, date_of_birth)
-    except Exception as e:
-        print(f"[DEBUG] step=decrypt error={type(e).__name__}")  # REMOVE
+    except Exception:
         await audit_logger.log_patient_login_failed(ip_address, patient_id=patient["patient_id"])
         raise _invalid_creds()
 
-    print(f"[DEBUG] step=compare expected={expected!r} received={password!r}")  # REMOVE
     # Case-insensitive so patients who type lowercase surnames still authenticate
     if password.upper() != expected.upper():
         await asyncio.gather(

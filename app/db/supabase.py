@@ -1,8 +1,8 @@
 from supabase import AsyncClient
 
-from app.config import SUPABASE_SERVICE_KEY, SUPABASE_URL
+from src.urolens.core.config import settings
 
-supabase = AsyncClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+supabase = AsyncClient(settings.supabase_url, settings.supabase_service_key)
 
 
 async def get_supabase() -> AsyncClient:

@@ -1,8 +1,8 @@
 from cryptography.fernet import Fernet
 
-from app.config import ENCRYPTION_KEY
+from .config import settings
 
-_fernet = Fernet(ENCRYPTION_KEY.encode("utf-8")) if ENCRYPTION_KEY else None
+_fernet = Fernet(settings.encryption_key.encode("utf-8")) if settings.encryption_key else None
 
 
 def encrypt_pii(plaintext: str) -> str:

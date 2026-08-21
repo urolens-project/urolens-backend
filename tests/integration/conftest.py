@@ -21,7 +21,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from src.urolens.core.config import JWT_ALGORITHM, JWT_SIGNING_KEY
+from src.urolens.core.config import settings
 
 # Import app after env is loaded (main.py calls load_dotenv at top)
 from main import app
@@ -47,7 +47,7 @@ def medtech_token() -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
     }
-    return jwt.encode(payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm)
 
 
 @pytest.fixture

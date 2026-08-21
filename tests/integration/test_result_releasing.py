@@ -29,7 +29,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from src.urolens.core.config import JWT_ALGORITHM, JWT_SIGNING_KEY
+from src.urolens.core.config import settings
 from src.urolens.core.audit_logger import AuditLogger
 from src.urolens.schemas.result_releasing import ReleaseResultRequest
 from src.urolens.services.notification_service import NotificationService
@@ -284,7 +284,7 @@ def _mint_token(user_id: uuid.UUID, role: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
     }
-    return jwt.encode(payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm)
 
 
 @pytest_asyncio.fixture

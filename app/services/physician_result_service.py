@@ -5,8 +5,8 @@ from typing import Optional
 
 from fastapi import HTTPException, Request, status
 
-from app.config import SUPABASE_URL, SUPABASE_IMAGE_BUCKET
 from app.db.supabase import supabase
+from src.urolens.core.config import settings
 from app.schemas.physician import (
     PhysicianResultDetail,
     PhysicianResultListResponse,
@@ -30,10 +30,10 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
-    if not storage_key or not SUPABASE_URL:
+    if not storage_key or not settings.supabase_url:
         return None
-    base = SUPABASE_URL.rstrip("/")
-    return f"{base}/storage/v1/object/public/{SUPABASE_IMAGE_BUCKET}/{storage_key}"
+    base = settings.supabase_url.rstrip("/")
+    return f"{base}/storage/v1/object/public/{settings.supabase_image_bucket}/{storage_key}"
 
 
 async def _get_physician_patient_ids(physician_id: str) -> list[str]:
