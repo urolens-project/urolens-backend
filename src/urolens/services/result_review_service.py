@@ -1,0 +1,559 @@
+"""
+Supervisor review/approval service — consolidation plan row 7.
+
+SQLAlchemy port of app/services/result_review_service.py (636 lines, pure
+Supabase REST, deleted after this port — see CHANGELOG.md). Tier-1 workflow
+per the standards skill (the confirm->override->approve->release chain's
+named example).
+
+Two fields from the original service are not persisted/populated here,
+reported rather than guessed at — see the ResultReview model's docstring
+and CHANGELOG.md for the full schema-drift finding:
+  - AnalysisResult.confirmation_notes (no Alembic history, already dead
+    going forward since the canonical confirm path never wrote it)
+  - ResultReview.spatial_annotations (no Alembic history, live functionality
+    that this port cannot safely persist without knowing the real column type)
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Optional
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import SUPABASE_IMAGE_BUCKET, SUPABASE_URL
+
+from ..core.encryption import decrypt_pii
+from ..core.exceptions import ConflictException, NotFoundException, UnprocessableException
+from ..models.analysis_result import AnalysisResult, ResultStatus
+from ..models.escalation import Escalation
+from ..models.image import Image
+from ..models.manual_override import ManualOverride
+from ..models.patient import Patient
+from ..models.result_approval import ResultApproval
+from ..models.result_return import ResultReturn
+from ..models.result_review import ResultReview
+from ..models.smart_diagnosis_output import SmartDiagnosisOutput
+from ..models.specimen import Specimen
+from ..models.user import User
+
+_PHT = timezone(timedelta(hours=8))
+_ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
+VALID_ESCALATION_PATHS = {"NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"}
+
+
+def _compute_age(dob_str: Optional[str]) -> Optional[int]:
+    """Age in whole years from an ISO date string, or None if unparseable."""
+    if not dob_str:
+        return None
+    try:
+        dob = date.fromisoformat(dob_str[:10])
+        today = date.today()
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except (ValueError, TypeError):
+        return None
+
+
+def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
+    if not storage_key or not SUPABASE_URL:
+        return None
+    base = SUPABASE_URL.rstrip("/")
+    return f"{base}/storage/v1/object/public/{SUPABASE_IMAGE_BUCKET}/{storage_key}"
+
+
+def _decrypt_or_none(ciphertext: Optional[str]) -> Optional[str]:
+    if not ciphertext:
+        return None
+    try:
+        return decrypt_pii(ciphertext)
+    except Exception:
+        return None
+
+
+class ResultReviewService:
+    """Owns the supervisor review/approval workflow: pending queue, approved/
+    escalated lists, full result detail, annotation, and the
+    approve/return/escalate transitions."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    # ── Private helpers ──────────────────────────────────────────────────
+
+    async def _require_pending(self, result_id: uuid.UUID) -> AnalysisResult:
+        result = await self.db.get(AnalysisResult, result_id)
+        if result is None:
+            raise NotFoundException(
+                code="RESULT_NOT_FOUND", message="Analysis result not found."
+            )
+        if result.status not in _ALLOWED_STATUSES_FOR_ACTION:
+            raise ConflictException(
+                code="INVALID_RESULT_STATUS",
+                message=f"Action not allowed in status '{result.status}'.",
+            )
+        return result
+
+    async def _batch_patient_context(
+        self, specimen_ids: list[uuid.UUID]
+    ) -> tuple[dict[uuid.UUID, Specimen], dict[str, Patient], dict[uuid.UUID, str]]:
+        """Batch-load specimens, their patients (by patient_uid), and their
+        assigned medtechs' usernames, for a page of results."""
+        if not specimen_ids:
+            return {}, {}, {}
+
+        spec_rows = (
+            await self.db.execute(select(Specimen).where(Specimen.specimen_id.in_(specimen_ids)))
+        ).scalars().all()
+        spec_map = {s.specimen_id: s for s in spec_rows}
+
+        patient_uids = list({s.patient_uid for s in spec_rows if s.patient_uid})
+        medtech_ids = list({s.medtech_id for s in spec_rows if s.medtech_id})
+
+        pat_map: dict[str, Patient] = {}
+        if patient_uids:
+            pat_rows = (
+                await self.db.execute(select(Patient).where(Patient.patient_uid.in_(patient_uids)))
+            ).scalars().all()
+            pat_map = {p.patient_uid: p for p in pat_rows}
+
+        user_map: dict[uuid.UUID, str] = {}
+        if medtech_ids:
+            user_rows = (
+                await self.db.execute(select(User).where(User.user_id.in_(medtech_ids)))
+            ).scalars().all()
+            user_map = {u.user_id: u.username for u in user_rows}
+
+        return spec_map, pat_map, user_map
+
+    def _patient_display(self, spec: Optional[Specimen], pat_map: dict[str, Patient]) -> tuple[str, Optional[int], Optional[str]]:
+        """Returns (patient_name, patient_age, patient_sex) for a list row."""
+        if spec is None:
+            return "", None, None
+        patient_name = _decrypt_or_none(spec.patient_name) or ""
+        pat = pat_map.get(spec.patient_uid) if spec.patient_uid else None
+        age = _compute_age(_decrypt_or_none(pat.date_of_birth)) if pat else None
+        sex = pat.sex if pat else None
+        return patient_name, age, sex
+
+    # ── Supervisor dashboard stats ───────────────────────────────────────
+
+    async def get_supervisor_stats(self) -> dict[str, int]:
+        today_pht = datetime.now(_PHT).date()
+        tomorrow_pht = today_pht + timedelta(days=1)
+
+        pending_count = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+            )
+        ).scalar_one()
+
+        approved_count = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(ResultApproval)
+                .where(
+                    ResultApproval.approved_at >= today_pht,
+                    ResultApproval.approved_at < tomorrow_pht,
+                )
+            )
+        ).scalar_one()
+
+        escalated_count = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+            )
+        ).scalar_one()
+
+        return {
+            "pendingCount": pending_count,
+            "approvedToday": approved_count,
+            "escalatedCount": escalated_count,
+        }
+
+    # ── Pending queue ─────────────────────────────────────────────────────
+
+    async def get_pending(self, page: int, page_size: int) -> dict[str, Any]:
+        offset = (page - 1) * page_size
+
+        total = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+            )
+        ).scalar_one()
+
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+            .order_by(AnalysisResult.confirmed_at.asc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        ar_rows = (await self.db.execute(stmt)).scalars().all()
+        if not ar_rows:
+            return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+        spec_map, pat_map, user_map = await self._batch_patient_context(
+            [ar.specimen_id for ar in ar_rows]
+        )
+
+        items = []
+        for ar in ar_rows:
+            spec = spec_map.get(ar.specimen_id)
+            name, age, sex = self._patient_display(spec, pat_map)
+            items.append(
+                {
+                    "result_id": ar.result_id,
+                    "specimen_id": ar.specimen_id,
+                    "patient_name": name,
+                    "patient_age": age,
+                    "patient_sex": sex,
+                    "medtech_name": user_map.get(spec.medtech_id, "") if spec and spec.medtech_id else "",
+                    "confirmed_at": ar.confirmed_at,
+                    "status": ar.status,
+                }
+            )
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    # ── Approved today list ───────────────────────────────────────────────
+
+    async def get_approved_today(self, page: int, page_size: int) -> dict[str, Any]:
+        offset = (page - 1) * page_size
+        today_pht = datetime.now(_PHT).date()
+        tomorrow_pht = today_pht + timedelta(days=1)
+
+        window = (ResultApproval.approved_at >= today_pht, ResultApproval.approved_at < tomorrow_pht)
+
+        total = (
+            await self.db.execute(
+                select(func.count()).select_from(ResultApproval).where(*window)
+            )
+        ).scalar_one()
+
+        approval_rows = (
+            await self.db.execute(
+                select(ResultApproval)
+                .where(*window)
+                .order_by(ResultApproval.approved_at.desc())
+                .offset(offset)
+                .limit(page_size)
+            )
+        ).scalars().all()
+        if not approval_rows:
+            return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+        result_ids = [a.result_id for a in approval_rows]
+        approved_at_map = {a.result_id: a.approved_at for a in approval_rows}
+
+        ar_rows = (
+            await self.db.execute(select(AnalysisResult).where(AnalysisResult.result_id.in_(result_ids)))
+        ).scalars().all()
+        ar_map = {ar.result_id: ar for ar in ar_rows}
+
+        spec_map, pat_map, user_map = await self._batch_patient_context(
+            [ar.specimen_id for ar in ar_rows]
+        )
+
+        items = []
+        for result_id in result_ids:
+            ar = ar_map.get(result_id)
+            spec = spec_map.get(ar.specimen_id) if ar else None
+            name, age, sex = self._patient_display(spec, pat_map)
+            items.append(
+                {
+                    "result_id": result_id,
+                    "specimen_id": ar.specimen_id if ar else None,
+                    "patient_name": name,
+                    "patient_age": age,
+                    "patient_sex": sex,
+                    "medtech_name": user_map.get(spec.medtech_id, "") if spec and spec.medtech_id else "",
+                    "approved_at": approved_at_map[result_id],
+                    "status": ar.status if ar else "APPROVED",
+                }
+            )
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    # ── Escalated list ────────────────────────────────────────────────────
+
+    async def get_escalated(self, page: int, page_size: int) -> dict[str, Any]:
+        offset = (page - 1) * page_size
+
+        total = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+            )
+        ).scalar_one()
+
+        ar_rows = (
+            await self.db.execute(
+                select(AnalysisResult)
+                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                .order_by(AnalysisResult.updated_at.desc())
+                .offset(offset)
+                .limit(page_size)
+            )
+        ).scalars().all()
+        if not ar_rows:
+            return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+        result_ids = [ar.result_id for ar in ar_rows]
+        esc_rows = (
+            await self.db.execute(select(Escalation).where(Escalation.result_id.in_(result_ids)))
+        ).scalars().all()
+        esc_map = {e.result_id: e for e in esc_rows}
+
+        spec_map, pat_map, user_map = await self._batch_patient_context(
+            [ar.specimen_id for ar in ar_rows]
+        )
+
+        items = []
+        for ar in ar_rows:
+            spec = spec_map.get(ar.specimen_id)
+            name, age, sex = self._patient_display(spec, pat_map)
+            esc = esc_map.get(ar.result_id)
+            items.append(
+                {
+                    "result_id": ar.result_id,
+                    "specimen_id": ar.specimen_id,
+                    "patient_name": name,
+                    "patient_age": age,
+                    "patient_sex": sex,
+                    "medtech_name": user_map.get(spec.medtech_id, "") if spec and spec.medtech_id else "",
+                    "escalated_at": esc.escalated_at if esc else None,
+                    "escalation_path": esc.escalation_path if esc else "",
+                    "status": ar.status,
+                }
+            )
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    # ── Full result detail ────────────────────────────────────────────────
+
+    async def get_full_result(self, result_id: uuid.UUID) -> dict[str, Any]:
+        ar = await self.db.get(AnalysisResult, result_id)
+        if ar is None:
+            raise NotFoundException(
+                code="RESULT_NOT_FOUND", message="Analysis result not found."
+            )
+
+        spec = await self.db.get(Specimen, ar.specimen_id)
+
+        pat: Optional[Patient] = None
+        if spec and spec.patient_uid:
+            pat = (
+                await self.db.execute(select(Patient).where(Patient.patient_uid == spec.patient_uid))
+            ).scalar_one_or_none()
+
+        medtech_name = ""
+        if spec and spec.medtech_id:
+            medtech = await self.db.get(User, spec.medtech_id)
+            medtech_name = medtech.username if medtech else ""
+
+        image_url: Optional[str] = None
+        if ar.image_id:
+            image = await self.db.get(Image, ar.image_id)
+            image_url = _image_public_url(image.storage_key) if image else None
+
+        overrides_rows = (
+            await self.db.execute(
+                select(ManualOverride).where(ManualOverride.result_id == result_id)
+            )
+        ).scalars().all()
+        overrides = [
+            {
+                "override_id": o.override_id,
+                "parameter_name": o.parameter_name,
+                "original_ai_value": o.original_ai_value,
+                "corrected_value": o.corrected_value,
+                "rationale": o.rationale,
+                "overridden_at": o.overridden_at,
+            }
+            for o in overrides_rows
+        ]
+
+        review = (
+            await self.db.execute(
+                select(ResultReview)
+                .where(ResultReview.result_id == result_id)
+                .order_by(ResultReview.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        latest_annotation = review.annotation_notes if review else None
+
+        sdo = (
+            await self.db.execute(
+                select(SmartDiagnosisOutput).where(SmartDiagnosisOutput.result_id == result_id)
+            )
+        ).scalar_one_or_none()
+        smart_diagnosis = None
+        if sdo and sdo.status == "ATTACHED":
+            smart_diagnosis = {
+                "gout_score": sdo.gout_score,
+                "gn_score": sdo.gn_score,
+                "nephro_score": sdo.nephro_score,
+                "no_significant_indicators": sdo.no_significant_indicators,
+                "evidence_map": sdo.evidence_map or {},
+                "engine_version": sdo.engine_version,
+            }
+
+        first = _decrypt_or_none(pat.first_name) if pat else None
+        last = _decrypt_or_none(pat.last_name) if pat else None
+        dob = _decrypt_or_none(pat.date_of_birth) if pat else None
+        sex = pat.sex if pat else None
+        patient_name = f"{first or ''} {last or ''}".strip() or (
+            _decrypt_or_none(spec.patient_name) if spec else ""
+        ) or ""
+
+        return {
+            "result_id": ar.result_id,
+            "specimen_id": ar.specimen_id,
+            "patient_name": patient_name,
+            "patient_age": _compute_age(dob),
+            "patient_sex": sex,
+            "medtech_name": medtech_name,
+            "confirmed_at": ar.confirmed_at,
+            "confirmation_notes": None,  # schema drift — see module docstring
+            "ai_findings": ar.ai_findings or {},
+            "flagged_anomalies": ar.flagged_anomalies or {},
+            "particle_classes": ar.particle_classes or {},
+            "model_version": ar.model_version,
+            "manual_overrides": overrides,
+            "image_url": image_url,
+            "smart_diagnosis_unavailable": ar.smart_diagnosis_unavailable or smart_diagnosis is None,
+            "status": ar.status,
+            "annotation_notes": latest_annotation,
+            "spatial_annotations": None,  # schema drift — see module docstring
+        }
+
+    # ── Annotation ────────────────────────────────────────────────────────
+
+    async def save_annotation(
+        self,
+        result_id: uuid.UUID,
+        user_id: uuid.UUID,
+        annotation_notes: str,
+        spatial_annotations: Optional[list] = None,
+    ) -> dict[str, Any]:
+        """Upsert a supervisor's annotation on a result.
+
+        `spatial_annotations` is accepted (for request-shape compatibility
+        with the pre-port API) but not persisted — see the module docstring.
+        """
+        ar = await self.db.get(AnalysisResult, result_id)
+        if ar is None:
+            raise NotFoundException(
+                code="RESULT_NOT_FOUND", message="Analysis result not found."
+            )
+
+        existing = (
+            await self.db.execute(
+                select(ResultReview).where(
+                    ResultReview.result_id == result_id,
+                    ResultReview.reviewed_by == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            existing.annotation_notes = annotation_notes
+        else:
+            self.db.add(
+                ResultReview(
+                    result_id=result_id,
+                    reviewed_by=user_id,
+                    annotation_notes=annotation_notes,
+                )
+            )
+
+        await self.db.commit()
+
+        return {
+            "result_id": result_id,
+            "annotation_notes": annotation_notes,
+            "spatial_annotations": None,
+        }
+
+    # ── Approve ───────────────────────────────────────────────────────────
+
+    async def approve_result(
+        self, result_id: uuid.UUID, user_id: uuid.UUID, notes: Optional[str]
+    ) -> dict[str, Any]:
+        ar = await self._require_pending(result_id)
+
+        now = datetime.now(_PHT)
+        self.db.add(ResultApproval(result_id=result_id, approved_by=user_id, notes=notes))
+        ar.status = ResultStatus.APPROVED
+
+        specimen = await self.db.get(Specimen, ar.specimen_id)
+        if specimen is not None:
+            specimen.status = "COMPLETED"
+            specimen.completed_at = now
+
+        await self.db.commit()
+
+        return {"result_id": result_id, "status": ResultStatus.APPROVED.value, "approved_at": now}
+
+    # ── Return for correction ────────────────────────────────────────────
+
+    async def return_result(
+        self, result_id: uuid.UUID, user_id: uuid.UUID, reason: str
+    ) -> dict[str, Any]:
+        ar = await self._require_pending(result_id)
+
+        now = datetime.now(_PHT)
+        self.db.add(ResultReturn(result_id=result_id, returned_by=user_id, reason=reason))
+        ar.status = ResultStatus.RETURNED_FOR_CORRECTION
+
+        await self.db.commit()
+
+        return {
+            "result_id": result_id,
+            "status": ResultStatus.RETURNED_FOR_CORRECTION.value,
+            "returned_at": now,
+        }
+
+    # ── Escalate ──────────────────────────────────────────────────────────
+
+    async def escalate_result(
+        self,
+        result_id: uuid.UUID,
+        user_id: uuid.UUID,
+        escalation_path: str,
+        escalation_note: Optional[str],
+    ) -> dict[str, Any]:
+        if escalation_path not in VALID_ESCALATION_PATHS:
+            raise UnprocessableException(
+                code="INVALID_ESCALATION_PATH",
+                message=f"Invalid escalation_path '{escalation_path}'.",
+            )
+
+        ar = await self._require_pending(result_id)
+
+        now = datetime.now(_PHT)
+        self.db.add(
+            Escalation(
+                result_id=result_id,
+                escalated_by=user_id,
+                escalation_path=escalation_path,
+                escalation_note=escalation_note,
+            )
+        )
+        ar.status = ResultStatus.CRITICAL_ESCALATED
+
+        await self.db.commit()
+
+        return {
+            "result_id": result_id,
+            "status": ResultStatus.CRITICAL_ESCALATED.value,
+            "escalation_path": escalation_path,
+            "escalated_at": now,
+        }
