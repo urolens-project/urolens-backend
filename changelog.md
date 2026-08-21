@@ -712,3 +712,87 @@ canonical pair; this task did the full-repo sweep no single-domain merge could.
   `src/urolens/core/config.py` and zero remaining references to
   `src.urolens.middleware.rbac` or the deleted `UserRole` anywhere in the repo.
   Test suite unchanged from baseline across every task: 20 failed / 38 passed.
+
+## Directory unification — merge app/ into src/urolens/, delete app/
+
+The consolidation above eliminated every *duplicate* implementation between the two
+trees, domain by domain, but deliberately left `app/`'s non-duplicate pieces in place —
+routes, services, and infrastructure with no `src/urolens/` counterpart to merge
+against. That left the repo with two parallel top-level trees, both containing
+`api/`/`services/`/`schemas/`. This task physically moves everything still in `app/`
+into `src/urolens/` and deletes `app/` entirely, in four chunked, separately-verified
+commits.
+
+### Changed
+- **Chunk 1 — core infrastructure.** `app/middleware/rbac.py` → `src/urolens/core/rbac.py`;
+  `app/services/auth_service.py` → `src/urolens/core/auth_service.py`; `app/db/supabase.py`
+  → `src/urolens/core/supabase.py`. `app/services/audit_logger.py` — a second,
+  auth-specific audit code path writing the same `audit_logs` table as
+  `src/urolens/core/audit_logger.py`'s `AuditLogger.record()`, never sharing logic
+  despite the earlier consolidation — reconciled into one: the auth-flow helpers
+  (`log_login_success`, `log_access_denied`, etc.) are now thin wrappers around
+  `record()`, not a second path. Two deliberate behavior changes from the old version,
+  documented in the module: `detail_json` passed as a raw dict (matching every other
+  JSONB write in this codebase, not `json.dumps()`'d into a string), and a failure to
+  write the audit entry itself is swallowed rather than propagated, consistent with
+  `record()`'s own "audit must never break the main transaction" design. Every importer
+  of the four old paths updated across the whole repo — routers, services, seed
+  scripts, and test `patch()` targets (`rbac.py` physically moving this time, unlike the
+  earlier auth/RBAC consolidation, meant every `patch("app.middleware.rbac...")` target
+  had to move too).
+- **Chunk 2 — auth-adjacent routers/services/schemas.** `app/api/{auth,patient_auth,
+  physician,sync}.py`, their backing services (`patient_auth_service.py`,
+  `physician_service.py`, `physician_result_service.py`, `sync_service.py`), and schemas
+  (`auth.py`, `physician.py`, `sync.py`) moved to `src/urolens/{api,services,schemas}/`.
+  Internal imports repointed from `app.*` to `src.urolens.*` absolute paths, matching
+  the convention already used by `patients.py`/`patient_portal.py`/`queue.py`/
+  `result_releasing.py`. `main.py`'s router imports and mounts updated.
+  `app/schemas/__init__.py` deleted — it only re-exported `LoginRequest`/
+  `LoginResponse` from the now-moved `auth.py`, and nothing imported the `app.schemas`
+  package itself (grep-verified before deleting).
+- **Chunk 3 — results leftovers folded in.** `app/api/results.py` had shrunk to one
+  route (`GET /{result_id}/smart-diagnosis`) after the earlier results merges, flagged
+  at the time as belonging to neither the confirm/override nor supervisor-review plan
+  rows. `app/services/result_service.py`'s `get_smart_diagnosis()` appended to
+  `src/urolens/services/result_review_service.py` as a module-level function (not a
+  `ResultReviewService` method — it's still pure Supabase REST reading
+  `analysis_results`/`smart_diagnosis_outputs`, deliberately left alone rather than
+  ported to SQLAlchemy speculatively as part of a directory move).
+  `app/schemas/results.py`'s `SmartDiagnosisResponse` and friends appended to
+  `src/urolens/schemas/result_review.py`. The route itself added to
+  `src/urolens/api/results.py`, grouped with the other `/{result_id}/...` routes above
+  the catch-all `GET /{result_id}` (the catch-all is single-segment, so this
+  two-segment route was never actually at collision risk — corrected an inaccurate
+  claim to that effect in the file's own docstring while there). `main.py`'s
+  `results_confirm_override_router`/`results_router` split — forced apart during the
+  earlier results merge specifically to avoid colliding with the still-live
+  `app/api/results.py` at the same prefix — collapsed back into one router now that
+  nothing forces them apart.
+- **Chunk 4 — final sweep.** `app/` deleted entirely (by this point containing nothing
+  but empty `__init__.py` package markers and `__pycache__`, confirmed by direct
+  inventory and a zero-match repo-wide grep before deleting). Four leftover
+  directories removed that were never real code, just undeleted OS directories holding
+  only `__pycache__` left over from the earlier auth/RBAC consolidation's `git rm`
+  (which correctly removed the tracked files but didn't sweep the directories
+  themselves): `src/urolens/domains/{diagnostics,distribution,tracking}/`,
+  `src/urolens/middleware/`.
+
+### Verified
+- App boots clean after every chunk: 50 routes, unchanged throughout (this task moves
+  code, it doesn't add or remove routes — the one exception, chunk 3's router
+  collapse, removed one router mount and added one route to the surviving router, net
+  same count). OpenAPI generates cleanly (45 paths) after every chunk.
+- Full test suite held at the existing 20-failed/38-passed baseline after every single
+  chunk, with an identical failure list each time — no regression introduced by any of
+  the four moves.
+- **Cross-domain auth trace after chunk 1 specifically**, since `rbac.py` physically
+  moved this time (the earlier auth/RBAC consolidation deliberately left it in `app/`).
+  Via a real `httpx.AsyncClient` against the actual ASGI app, across specimens/
+  patients/results routes: unauthenticated → 401; wrong role → 403 without touching the
+  database; right role → passes auth and reaches real database-touching logic
+  (confirmed by the failure mode becoming a DNS/connection error, not an auth error);
+  and — new this time — a revoked session (`is_session_active` mocked `False`) → 401,
+  confirming session revocation is actually being enforced through the new location,
+  not silently bypassed by the move.
+- Final repo-wide grep for any remaining `app.` reference — imports, string `patch()`
+  targets, docstrings — came back empty before `app/` was deleted in chunk 4.
