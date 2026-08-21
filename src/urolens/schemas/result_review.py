@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -148,3 +148,36 @@ class EscalateResponse(BaseModel):
     status: str
     escalation_path: str
     escalated_at: datetime
+
+
+# ── Smart Diagnosis lookup (plan: neither row 6 nor row 7) ─────────────────────
+# Folded in from app/schemas/results.py, unchanged.
+
+ProbabilityLevel = Literal["LOW", "MODERATE", "HIGH"]
+
+
+class EvidenceMap(BaseModel):
+    gout: List[str] = []
+    uti: List[str] = []
+    tricho: List[str] = []
+
+
+class SmartDiagnosisAttached(BaseModel):
+    output_id: str
+    result_id: str
+    status: Literal["ATTACHED"]
+    gout_score: ProbabilityLevel
+    gn_score: ProbabilityLevel
+    nephro_score: ProbabilityLevel
+    evidence_map: Dict[str, Any]
+    no_significant_indicators: bool
+    engine_version: str
+    generated_at: str
+
+
+class SmartDiagnosisUnavailable(BaseModel):
+    result_id: str
+    status: Literal["FLAGGED_UNAVAILABLE"]
+
+
+SmartDiagnosisResponse = Union[SmartDiagnosisAttached, SmartDiagnosisUnavailable]
