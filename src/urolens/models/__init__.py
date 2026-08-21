@@ -13,3 +13,7 @@ from .notification import Notification  # noqa: F401
 from .queue_assignment import QueueAssignment  # noqa: F401
 from .consent import Consent  # noqa: F401
 from .result_view import ResultView  # noqa: F401
+from .lab_request import LabRequest  # noqa: F401
+from .sample_label import SampleLabel  # noqa: F401
+from .print_job import PrintJob  # noqa: F401
+from .specimen_rejection import SpecimenRejection  # noqa: F401

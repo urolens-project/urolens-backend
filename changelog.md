@@ -67,3 +67,97 @@ service layer survives, which RBAC import wins), and were live security gaps.
   pointed to "#7 below" for an urgency comparison that row 7 doesn't support (it's a
   sizing note, not an urgency ranking); repointed to rows 9–10, the actual other
   live-PHI/unauthenticated findings.
+
+## Specimens / labeling / lab-requests domain merge (plan doc rows 9–11)
+
+### Added
+- **New service layer**: `src/urolens/services/specimen_service.py` (receive, list,
+  reject), `src/urolens/services/labeling_service.py` (search-received, generate
+  label, confirm label affixed), `src/urolens/services/lab_request_service.py`
+  (create, physician lookup, search pending). `specimens_router.py`,
+  `labeling_router.py`, and `lab_requests_router.py` are now thin — every route is
+  `Depends(auth) -> await service.fn(db, ...)`, no inline Supabase calls or business
+  logic left in any of the three (grep-verified).
+- **New SQLAlchemy models**: `LabRequest`, `SampleLabel`, `PrintJob`,
+  `SpecimenRejection` (`src/urolens/models/`) — none existed before this merge; all
+  four tables were being read/written through raw Supabase REST calls with no ORM
+  model at all. `Specimen` gains `medtech_id`, `patient_name`, `patient_uid`,
+  `test_type`, `priority_level`, `rejection_reason`, `rejection_note`, `rejected_at` —
+  columns already in live use (confirmed via `app/services/specimen_service.py`,
+  `seed_specimens.py`, `queue_service.py`) but never modeled.
+- **New schemas**: `src/urolens/schemas/specimen.py`, `lab_request.py`,
+  `labeling.py` — the three routers previously defined their request/response
+  `BaseModel`s inline (standards rule 11 violation); those definitions now live in
+  `schemas/` and are imported, matching the pattern `patients.py`/`schemas/patient.py`
+  already use.
+- **New migration `0032`**: creates the four new tables and adds the eight new
+  `specimens` columns above. All statements use `IF NOT EXISTS`/idempotent guards
+  (same technique this repo's own pre-Alembic `migration_sql.sql` used) because
+  these tables/columns were confirmed live and in active use but had **no prior
+  Alembic migration at all** — `alembic/versions/` skips revisions 0007–0009 and
+  0012, meaning `specimens`, `lab_requests`, `sample_labels`, `print_jobs`, and
+  `specimen_rejections` were all created out-of-band before this migration existed.
+  This environment had no network access to the live database to confirm its exact
+  current schema before authoring the file, so every statement is written to be a
+  safe no-op if the table/column already exists rather than fail — flagged to the
+  user before writing it (idempotent-migration approach was the explicitly chosen
+  option), and the migration file says the same thing inline. Whoever applies this
+  against the real database should diff it against the live schema first.
+- **`src/urolens/domains/request/__init__.py`** — was missing; every other domain
+  package has one.
+
+### Fixed
+- **`specimens.patient_name` now encrypted at rest.** Previously written plaintext
+  (no `encrypt_pii` call) despite the labeling router already trying to `decrypt_pii`
+  it on read — same encrypted/plaintext hazard pattern the earlier audit found on
+  `patients`. `specimen_service.receive_specimen` now encrypts before insert; every
+  read path (`list_specimens`, `search_received_specimens`, `generate_label`,
+  `confirm_label_affixed`) decrypts. Grep-confirmed no remaining write path stores
+  it unencrypted.
+- **Decryption failures now surface instead of disappearing.** The original
+  `except: name = ""` / `except: name = row.get(...)` silent fallbacks are gone.
+  Search results (`labeling_service.search_received_specimens`,
+  `specimen_service.list_specimens`) now log a warning and drop the affected row
+  rather than return ciphertext or a blank name. Label generation/confirmation
+  (`labeling_service._decrypt_patient_name_or_raise`) raises a 422 instead — a
+  printed specimen label with the wrong patient name is a patient-safety issue, not
+  a display bug, so that path fails loudly rather than printing a guess.
+- **`sample_uid`/`request_uid` generation now checks uniqueness before insert**,
+  with retry on collision (5 attempts, then a 500) — matching
+  `app/services/physician_service.py::_generate_request_uid`, the one place in the
+  codebase that already did this correctly. That function used the real current
+  date (`REQ-{YYYYMMDD}-NNNNN`); the routers being merged here instead had the year
+  hardcoded as the literal string `"2026"` (`SMP-2026-NNNNN`/`REQ-2026-NNNNN`), a
+  latent bug that would silently mislabel every ID generated after 2026. Matching
+  "whichever pattern is already correct" fixes this as a side effect — both IDs now
+  use `{PREFIX}-{YYYYMMDD}-{5 digits}`.
+- **`reject_specimen` now has a route-level role gate.** The original
+  `app/api/specimens.py` route had none — only an ownership check inside the
+  service (standards rule 2 violation: "role check at route/dependency level, never
+  ownership-check-only inside a service"). Now gated to `UserRole.MEDTECH` at the
+  route (matching who can actually be assigned a specimen, per
+  `queue_service.py`), with the ownership check preserved in the service as a
+  second layer, not a replacement for the route gate.
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- `app/api/specimens.py`, `app/services/specimen_service.py`,
+  `app/schemas/specimens.py` — deleted. **Task 1 reconciliation decision:**
+  `specimen_service.py`'s only route (`reject_specimen`) was real, live,
+  functioning logic (mounted, medtech-ownership-checked specimen rejection) — not
+  dead code — so it was *ported*, not discarded: its logic now lives in
+  `src/urolens/services/specimen_service.reject_specimen`, converted to
+  SQLAlchemy, exposed at the same URL (`POST /api/v1/specimens/{specimen_id}/reject`,
+  now inside the consolidated `specimens_router.py` instead of a separate mounted
+  router). Confirmed zero remaining references to all three deleted files before
+  removing them (grep) and confirmed the app still boots with the same total route
+  count (52) after the merge — the one route that moved is the only one, nothing
+  was silently dropped.
+  Track A2's own PHYSICIAN_UUID_MAP removal already covered lab_requests_router.py;
+  re-confirmed zero references here — nothing further to remove.
+- `src/urolens/domains/request/models.py` — a dead, unreferenced stub (`class
+  LabRequest:` with a docstring and a `__tablename__`, no columns, doesn't even
+  inherit `Base`). Found while building the real `LabRequest` model above;
+  grep-confirmed nothing imported it. `src/urolens/domains/intake/models.py`
+  contains a similar dead stub pair (`Patient`, `LabRequest`) but was left alone —
+  it's entangled with patient creation (plan doc row 3), out of scope for this
+  merge; flagging for whoever does the patients merge to pick up.
