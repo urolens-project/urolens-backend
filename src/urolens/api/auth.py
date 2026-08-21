@@ -2,7 +2,6 @@ import asyncio
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 
-from app.schemas.auth import LoginRequest, LoginResponse
 from src.urolens.core import audit_logger
 from src.urolens.core.rbac import get_current_user
 from src.urolens.core.auth_service import (
@@ -14,6 +13,7 @@ from src.urolens.core.auth_service import (
     reset_failed_attempts,
     verify_password,
 )
+from src.urolens.schemas.auth import LoginRequest, LoginResponse
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

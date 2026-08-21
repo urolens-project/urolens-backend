@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.schemas.auth import PatientLoginRequest, PatientLoginResponse
-from app.services.patient_auth_service import patient_login, patient_logout
 from src.urolens.core.rbac import get_current_user
+from src.urolens.schemas.auth import PatientLoginRequest, PatientLoginResponse
+from src.urolens.services.patient_auth_service import patient_login, patient_logout
 
 router = APIRouter(prefix="/api/v1/auth", tags=["patient-auth"])
 

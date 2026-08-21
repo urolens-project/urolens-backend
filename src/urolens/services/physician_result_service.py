@@ -5,15 +5,15 @@ from typing import Optional
 
 from fastapi import HTTPException, Request, status
 
-from app.schemas.physician import (
+from src.urolens.core.config import settings
+from src.urolens.core.encryption import decrypt_pii
+from src.urolens.core.supabase import supabase
+from src.urolens.schemas.physician import (
     PhysicianResultDetail,
     PhysicianResultListResponse,
     PhysicianResultSummary,
     SmartDiagnosisDetail,
 )
-from src.urolens.core.config import settings
-from src.urolens.core.encryption import decrypt_pii
-from src.urolens.core.supabase import supabase
 
 _PHT = timezone(timedelta(hours=8))
 

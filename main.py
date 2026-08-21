@@ -14,9 +14,8 @@ from fastapi import FastAPI, HTTPException, Request
 from src.urolens.domains.intake.specimens_router import router as src_specimens_router
 from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
 from src.urolens.domains.intake.labeling_router import router as labeling_router
-from src.urolens.api import patients, queue, patient_portal
+from src.urolens.api import patients, queue, patient_portal, auth, patient_auth, physician
 from src.urolens.api.result_releasing import router as result_releasing_router
-from app.api import auth, patient_auth, physician
 
 # Mobile developer routers
 # Confirm/override (plan row 6, SQLAlchemy) and supervisor-review/detail (plan row
@@ -25,7 +24,7 @@ from app.api import auth, patient_auth, physician
 # docstring and CHANGELOG.md for why they were split apart.
 from src.urolens.api.results import router as results_confirm_override_router
 from app.api.results import router as results_router
-from app.api.sync import router as sync_router
+from src.urolens.api.sync import router as sync_router
 from src.urolens.api.image import router as images_router
 from src.urolens.api.notifications import router as notifications_router  # Epic 8
 
