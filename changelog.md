@@ -445,3 +445,115 @@ untouched — separate follow-up tasks, not started here.
   2 added via `src/urolens/api/results.py` — net zero, confirmed by listing
   every `/results` route post-change). OpenAPI generates cleanly (45 paths,
   unchanged).
+
+## Results merge — Step 5b: supervisor review/approval port + releasing/notifications (plan rows 7–8)
+
+### Fixed
+- **`notifications.py` swapped to the canonical RBAC/`UserRole` pair** (row 8) —
+  confirmed accurate before acting (5a found row 6 wrong twice, so this was
+  re-verified rather than trusted): it was importing
+  `RequireRole`/`get_current_user` from `src.urolens.middleware.rbac`
+  (no session-revocation check) and `UserRole` from `src.urolens.models.user`.
+  Now imports both from the canonical pair. Import-only change; role gating
+  unchanged. Verified the rest of row 8's claim too —
+  `src/urolens/api/result_releasing.py` already uses the canonical pair and
+  needed nothing further.
+- **Plan doc row 7 correction**: its method list (`get_pending`,
+  `get_approved_today`, `get_escalated`, `save_annotation`, `approve_result`,
+  `return_result`, `escalate_result`) was incomplete — the live
+  `app/services/result_review_service.py` also has `get_supervisor_stats` and
+  `get_full_result` (backing live routes `GET /supervisor/stats` and
+  `GET /{result_id}`), 9 methods total. Both ported along with the other 7.
+- **Plan doc row 7 schema-drift claim was also wrong in the opposite
+  direction from rows 6's corrections** — this time the doc's caution turned
+  out to be more pessimistic than reality. All four tables
+  `result_review_service.py` touches (`result_reviews`, `result_approvals`,
+  `result_returns`, `escalations`) already have complete Alembic history —
+  migration `0019` ("create result_reviews, result_approvals, result_returns,
+  escalations tables") — despite having no SQLAlchemy models. This is *not*
+  the migrations-`0032`/`0033` schema-drift pattern (DDL missing entirely);
+  it's just "nobody wrote the ORM mapping for an already-migrated table," which
+  is normal port work. Models added for all four, no new migration needed.
+- **Two real, narrower schema-drift findings did surface**, and — per this
+  consolidation's standing rule (introduced at the image/AI merge) — neither
+  was fixed with a migration:
+  - `analysis_results.confirmation_notes`: zero Alembic history anywhere.
+    Already effectively dead going forward (step 5a's canonical confirm path
+    never accepted or wrote a `notes` parameter), but old rows may have real
+    historical values. The ported `get_full_result` always returns `None` for
+    this field now — a real, minor information-loss regression for
+    *historical* data specifically, reported here rather than silently
+    absorbed.
+  - `result_reviews.spatial_annotations`: zero Alembic history anywhere, and
+    unlike `confirmation_notes` this is live functionality —
+    `annotate_result` writes it today. Not modeled and not persisted in the
+    port (the real column type — JSON? JSONB? array? — isn't knowable without
+    checking the live database, which this sandbox cannot reach, and guessing
+    wrong risked a subtly broken raw-SQL write). `save_annotation` still
+    accepts and returns `spatial_annotations` in its request/response shape
+    for API-contract compatibility, but a caller-supplied value is silently
+    not persisted. **This is a real functionality gap, not a cosmetic one —
+    flagging prominently for whoever verifies migrations `0032`/`0033`/this
+    finding together**, since spatial annotation coordinates are presumably
+    used for something in the supervisor review UI.
+
+### Added
+- **New SQLAlchemy models**: `ResultReview`, `ResultApproval`, `ResultReturn`,
+  `Escalation` (`src/urolens/models/`) — all four tables already had Alembic
+  history (migration `0019`) but no ORM mapping before this. `Escalation.escalation_path`
+  is modeled as a plain string even though the live column is a native
+  Postgres enum type (`CREATE TYPE escalation_path AS ENUM (...)`), matching
+  this codebase's established convention for status-like columns elsewhere
+  (`Specimen.status`, `AnalysisResult.status` — none use a SQLAlchemy `Enum`
+  type); validity is checked in the service layer, same as the pre-port code.
+- **New service**: `src/urolens/services/result_review_service.py` — a real
+  SQLAlchemy rewrite of all 9 methods from `app/services/result_review_service.py`,
+  not a wrapper around the old Supabase calls. Every read path that touches
+  `Specimen.patient_name` or `Patient.first_name`/`last_name`/`date_of_birth`
+  now decrypts it (`_decrypt_or_none`, matching the skip-on-failure pattern
+  already established in `specimen_service.py`/`labeling_service.py`) — the
+  original service predates the specimens merge's encryption fix and just
+  returned these fields raw. `approve_result` still marks the specimen
+  `COMPLETED` as a side effect (using the `status`/`completed_at` columns the
+  specimens merge already added to the `Specimen` model).
+- **New schemas**: `src/urolens/schemas/result_review.py`, mirroring the
+  response shapes already live via `app/schemas/results.py` (not reusing that
+  module directly — keeps this file's dependency on the `app/` tree limited
+  to what step 5a already established for confirm/override).
+- **9 supervisor routes added** to `src/urolens/api/results.py`:
+  `GET /supervisor/stats`, `/approved-today`, `/escalated`, `/pending`,
+  `PATCH /{result_id}/annotate`, `POST /{result_id}/approve`, `/return`,
+  `/escalate`, `GET /{result_id}`. Canonical auth pair throughout,
+  `RequireRole([UserRole.SUPERVISOR])` — confirmed against
+  `app/api/results.py`'s actual current routes (all nine were already
+  SUPERVISOR-only there), not guessed. Registration order preserved
+  deliberately: literal-path GETs before the catch-all `GET /{result_id}`,
+  matching the ordering the pre-port file already relied on to avoid the
+  catch-all shadowing them.
+- **Baseline Tier-1 test coverage** — `tests/test_manual_override_service.py`
+  (3 tests: the client-supplied-`original_ai_value`-is-ignored behavior 5a
+  only traced by hand, plus the unknown-parameter and
+  already-finalised-result rejections) and `tests/test_result_review_service.py`
+  (5 tests: one happy path each for approve/return/escalate, the shared
+  `_require_pending` guard, and `escalate_result`'s path validation). Not
+  exhaustive — `ResultReviewService`'s five read-side methods and
+  `save_annotation` remain untested, flagged as a gap rather than silently
+  left uncovered. Full suite: 20 failed / 36 passed — same 20 pre-existing
+  failures, unchanged; 8 new tests, all passing.
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- **`app/services/result_review_service.py` deleted outright** — fully ported,
+  zero remaining references confirmed by grep (excluding docstring/comment
+  mentions of its history) before deleting.
+- **7 routes removed from `app/api/results.py`** (the ones just re-added to
+  `src/urolens/api/results.py`, backed by the new service) — leaving only
+  `GET /{result_id}/smart-diagnosis`, which belongs to neither row 6 nor row 7
+  (it's not confirm/override, and it isn't supervisor-review business logic —
+  just a result-detail read gated to SUPERVISOR) and stays there, flagged
+  rather than moved or touched, per this task's explicit instruction.
+- **`app/schemas/results.py` pruned** from 208 lines to ~30 — everything except
+  `SmartDiagnosisResponse` and its two variants was only used by the routes
+  just removed. `ConfirmResultRequest`/`OverrideParameterRequest`/
+  `OverrideParameterResponse` (already unused since step 5a, left alone at the
+  time since most of the file was still in use) are gone too now that nothing
+  in the file is needed beyond the smart-diagnosis shapes.
