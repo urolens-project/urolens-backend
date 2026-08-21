@@ -627,3 +627,88 @@ this shape — **add migration `0034` to that pending batch.**
 ### Test suite
 - Full suite: 20 failed / 38 passed — same 20 pre-existing failures,
   unchanged; 2 new tests, both passing.
+
+## Auth/RBAC + config consolidation — final domain (plan doc row 1)
+
+Last domain in the merge order. Every prior domain merge swapped its own routers to the
+canonical pair; this task did the full-repo sweep no single-domain merge could.
+
+### Fixed
+- **`notification_service.py` straggler fixed**: full-repo grep (not per-domain) found one
+  remaining import of `UserRole` from `..models.user` instead of the canonical
+  `..core.enums` — every router import was already canonical, this was the only real
+  miss. Same members either way (functionally interchangeable), swapped for
+  correctness/consistency regardless.
+- **Incidental fix while touching `patient_auth_service.py` for its config import**:
+  removed three debug `print()` statements marked `# REMOVE`, one of which logged
+  partial `ENCRYPTION_KEY` material (`key_prefix=...`) — a direct standards-skill rule 3
+  violation ("never log/print... key material, even partial"). Not scope creep — the
+  rule applies by default to any file touched, and this file was already being edited
+  for its config import.
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- **`src/urolens/middleware/rbac.py` and its `__init__.py` deleted** — zero remaining
+  importers confirmed (full-repo grep) after the `notification_service.py` fix above,
+  not assumed from prior domains' individual checks.
+- **`src/urolens/models/user.py`'s duplicate `UserRole` class deleted** — zero remaining
+  importers (only self-reference was the just-deleted `rbac.py`). `User` SQLAlchemy
+  model kept in the same file, untouched.
+- **`app/config.py` deleted** — every real consumer (10 `app/`-tree and `src/urolens/`-tree
+  files, 3 test files) repointed to the new consolidated `Settings` object first; grep
+  confirmed zero remaining `from app.config import` anywhere before deleting.
+- **Three empty, unreferenced stub packages deleted**:
+  `src/urolens/domains/{diagnostics,distribution,tracking}/` — re-confirmed all 12
+  files (including each package's `__init__.py`) still 0 bytes and zero-referenced
+  before deleting, not taken on faith from the original audit.
+
+### Added
+- **One `Settings` class** (`src/urolens/core/config.py`) replacing both `app/config.py`
+  and this file's own previous flat `os.getenv` constants. Built on plain
+  `pydantic.BaseModel`, not the `pydantic-settings` package the task asked for —
+  `pydantic-settings` isn't installed in this sandbox and there's no network access to
+  add it; shipping code that imports a missing package would fail the "app boots
+  clean" verification every step of this consolidation has required. Stated plainly in
+  the module's own docstring as a deviation, with the mechanical follow-up path to real
+  `pydantic-settings` spelled out. Every secret (`JWT_SIGNING_KEY`, `ENCRYPTION_KEY`)
+  still raises `RuntimeError` at startup if unset or equal to a known placeholder —
+  carried over from the two prior modules' individual checks, not lost in the
+  consolidation. Added the same non-empty check to `DATABASE_URL` (lighter-touch than
+  the secret checks — an empty DB URL fails loudly at first connection either way, and
+  forbidding the working local-dev fallback the way the JWT/encryption placeholders are
+  forbidden would break local dev for no security benefit). The two `DATABASE_URL`
+  variants (`database_url` psycopg2/sync for Alembic, `async_database_url`
+  asyncpg/async for the runtime engine) stay separate values, per this project's
+  existing deliberate convention — not collapsed into one.
+- **`docs/backend-consolidation-summary.md`** — the final summary doc for the whole
+  consolidation, not just this task: what merged in each domain, the key
+  cross-cutting decisions and their reasoning, everything deleted, every migration
+  added (all four still pending live-schema verification), and the full outstanding-work
+  list (migrations `0032`–`0034` verification, `confirmation_notes`,
+  `ImageRetakeService`/`ResultReleasingService`/`PatientResultService` still being
+  Supabase-REST internally, the `pydantic-settings` swap, test-coverage gaps, and more).
+
+### Verified
+- **Startup validation actually tested, not just read**: the real `.env` was
+  temporarily moved aside (backed up first); confirmed the app fails to boot with
+  `JWT_SIGNING_KEY` unset, `ENCRYPTION_KEY` unset, and `JWT_SIGNING_KEY` equal to its
+  placeholder (all three raise `RuntimeError` with the expected message); confirmed it
+  boots clean with all three set correctly and no `.env` file present at all (50
+  routes); restored `.env` and diff-verified it byte-identical to the backup.
+- **Auth dependency traced through three different domains after the config
+  consolidation, not just boot-checked** — the highest-blast-radius change in this
+  consolidation, since every authenticated route in the app depends on it. Via a real
+  `httpx.AsyncClient` against the actual ASGI app: unauthenticated requests to a
+  specimens, a patients, and a results route all correctly 401; a validly-signed token
+  (signed with `issue_jwt`, which now reads `settings.jwt_signing_key` — the same
+  object `decode_jwt` verifies against) with the wrong role correctly 403s on all three
+  *without* reaching the database; a validly-signed token with the right role passes
+  auth and role-checking entirely and reaches real database-touching business logic on
+  all three (confirmed by the failure mode changing to a DNS/connection error, not an
+  auth error, once past the dependency).
+- App boots clean: 50 routes, unchanged across every task in this final domain
+  (import-path and dead-code cleanup + config consolidation only — no route or
+  auth-behavior change). OpenAPI generates cleanly (45 paths, unchanged). grep
+  confirms zero remaining `os.getenv`/`os.environ` calls outside
+  `src/urolens/core/config.py` and zero remaining references to
+  `src.urolens.middleware.rbac` or the deleted `UserRole` anywhere in the repo.
+  Test suite unchanged from baseline across every task: 20 failed / 38 passed.
