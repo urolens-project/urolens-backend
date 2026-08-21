@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from .config import DATABASE_URL
+from .config import settings
 
 # Re-export Supabase client used by legacy web-dev domain routers.
 try:
@@ -13,7 +13,7 @@ except Exception:
     supabase = None  # type: ignore[assignment]
 
 engine = create_async_engine(
-    DATABASE_URL,
+    settings.async_database_url,
     echo=False,
     pool_pre_ping=True,
     pool_size=10,

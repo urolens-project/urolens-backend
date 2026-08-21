@@ -44,11 +44,10 @@ from PIL import Image as PILImage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SUPABASE_IMAGE_BUCKET
 from app.db.supabase import supabase as sb
 
 from ..core.audit_logger import AuditLogger
-from ..core.config import AI_MODEL_VERSION
+from ..core.config import settings
 from ..core.exceptions import ImageFormatError, ImageResolutionError
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
@@ -203,15 +202,15 @@ class AIIntegrationService:
         on a storage-layer issue.
         """
         try:
-            await sb.storage.from_(SUPABASE_IMAGE_BUCKET).upload(
+            await sb.storage.from_(settings.supabase_image_bucket).upload(
                 path=storage_key,
                 file=raw_bytes,
                 file_options={"content-type": content_type, "upsert": "true"},
             )
-            log.info("Uploaded image to storage: %s/%s", SUPABASE_IMAGE_BUCKET, storage_key)
+            log.info("Uploaded image to storage: %s/%s", settings.supabase_image_bucket, storage_key)
         except Exception as exc:
             log.warning(
-                "Supabase Storage upload failed (bucket '%s'): %s", SUPABASE_IMAGE_BUCKET, exc
+                "Supabase Storage upload failed (bucket '%s'): %s", settings.supabase_image_bucket, exc
             )
 
     async def _replace_previous_image(self, specimen_id: uuid.UUID) -> None:
@@ -261,7 +260,7 @@ class AIIntegrationService:
                 image_id=image_id,
                 patient_id=patient_id,
                 status=ResultStatus.PENDING_CONFIRM,
-                model_version=AI_MODEL_VERSION,
+                model_version=settings.ai_model_version,
             )
             self.db.add(result)
             await self.db.flush([result])

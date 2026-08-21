@@ -28,8 +28,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SUPABASE_IMAGE_BUCKET, SUPABASE_URL
-
+from ..core.config import settings
 from ..core.encryption import decrypt_pii
 from ..core.exceptions import ConflictException, NotFoundException, UnprocessableException
 from ..models.analysis_result import AnalysisResult, ResultStatus
@@ -62,10 +61,10 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
-    if not storage_key or not SUPABASE_URL:
+    if not storage_key or not settings.supabase_url:
         return None
-    base = SUPABASE_URL.rstrip("/")
-    return f"{base}/storage/v1/object/public/{SUPABASE_IMAGE_BUCKET}/{storage_key}"
+    base = settings.supabase_url.rstrip("/")
+    return f"{base}/storage/v1/object/public/{settings.supabase_image_bucket}/{storage_key}"
 
 
 def _decrypt_or_none(ciphertext: Optional[str]) -> Optional[str]:

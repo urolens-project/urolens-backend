@@ -1,8 +1,8 @@
 import json
 from datetime import datetime, timezone
 
-from app.config import ZERO_UUID
 from app.db.supabase import supabase
+from src.urolens.core.config import settings
 
 
 async def _create_audit_entry(
@@ -20,7 +20,7 @@ async def _create_audit_entry(
     entry = {
         "event_type": event_type,
         "entity_type": "auth",
-        "entity_id": str(user_id) if user_id else ZERO_UUID,
+        "entity_id": str(user_id) if user_id else settings.zero_uuid,
         "user_id": str(user_id) if user_id else None,
         "ip_address": ip_address,
         "detail_json": json.dumps(detail) if detail else None,

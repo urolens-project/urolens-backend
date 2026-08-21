@@ -83,10 +83,10 @@ class TestJWT:
             "iat": now - timedelta(hours=10),
             "exp": now - timedelta(hours=2),
         }
-        from app.config import JWT_ALGORITHM, JWT_SIGNING_KEY
+        from src.urolens.core.config import settings
 
         expired_token = jwt.encode(
-            expired_payload, JWT_SIGNING_KEY, algorithm=JWT_ALGORITHM
+            expired_payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm
         )
         with pytest.raises(jwt.ExpiredSignatureError):
             decode_jwt(expired_token)
