@@ -1,23 +1,18 @@
 """
-Result confirm/override (plan row 6) and supervisor review/approval
-(plan row 7) routes.
-
-History: this file initially (step 5a) contained only confirm/override —
-the row-7-shaped routes that were here before 5a were bridged to the old,
-unported `app.services.result_review_service` and removed to avoid
-colliding with the still-live `app/api/results.py` at the same
-`/api/v1/results` prefix. Row 7 is now properly ported (step 5b) — a real
-SQLAlchemy service, not a bridge to the old one — and the equivalent
-routes are re-added here for real, with the old ones removed from
-`app/api/results.py` in the same change. `app/api/results.py` keeps only
-its `GET /{result_id}/smart-diagnosis` route, which belongs to neither
-row 6 nor row 7 (see CHANGELOG.md).
+Result confirm/override (plan row 6), supervisor review/approval (plan
+row 7), and Smart Diagnosis lookup (plan: neither row) routes — the full
+/api/v1/results surface, in one router since the app/api/results.py ->
+src/urolens/api/results.py directory unification folded the last leftover
+(GET /{result_id}/smart-diagnosis) in here too. See CHANGELOG.md for the
+route-by-route consolidation history.
 
 Route registration order matters here: `GET /pending`, `/approved-today`,
-`/escalated`, and `/supervisor/stats` are literal paths and must be
-registered before the catch-all `GET /{result_id}`, or that catch-all
-would shadow them (this is why `app/api/results.py` had a "supervisor
-endpoints" section ordered the same way before this port).
+`/escalated`, and `/supervisor/stats` are literal single-segment paths and
+must be registered before the catch-all `GET /{result_id}`, or that
+catch-all would shadow them. `GET /{result_id}/smart-diagnosis` is a
+distinct two-segment shape and isn't at risk of the same collision, but
+stays grouped with the other `/{result_id}/...` routes above the catch-all
+for readability.
 """
 import uuid
 from datetime import datetime
@@ -44,12 +39,13 @@ from ..schemas.result_review import (
     PendingResultListResponse,
     ReturnRequest,
     ReturnResponse,
+    SmartDiagnosisResponse,
     SupervisorStatsResponse,
 )
 from ..services.manual_override_service import ManualOverrideService
 from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
-from ..services.result_review_service import ResultReviewService
+from ..services.result_review_service import ResultReviewService, get_smart_diagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
@@ -278,6 +274,18 @@ async def escalate_result(
         escalation_note=body.escalation_note,
     )
     return EscalateResponse(**result)
+
+
+@router.get(
+    "/{result_id}/smart-diagnosis",
+    response_model=SmartDiagnosisResponse,
+    summary="Get Smart Diagnosis output for a result",
+)
+async def get_smart_diagnosis_route(
+    result_id: str,
+    current_user: dict = Depends(_supervisor),
+) -> dict:
+    return await get_smart_diagnosis(result_id=result_id)
 
 
 @router.get("/{result_id}", response_model=FullResultDetail)

@@ -18,12 +18,7 @@ from src.urolens.api import patients, queue, patient_portal, auth, patient_auth,
 from src.urolens.api.result_releasing import router as result_releasing_router
 
 # Mobile developer routers
-# Confirm/override (plan row 6, SQLAlchemy) and supervisor-review/detail (plan row
-# 7-8, still Supabase-REST, not yet ported) live in two separate router objects at
-# the same /api/v1/results prefix with disjoint paths - see results.py's own
-# docstring and CHANGELOG.md for why they were split apart.
-from src.urolens.api.results import router as results_confirm_override_router
-from app.api.results import router as results_router
+from src.urolens.api.results import router as results_router
 from src.urolens.api.sync import router as sync_router
 from src.urolens.api.image import router as images_router
 from src.urolens.api.notifications import router as notifications_router  # Epic 8
@@ -96,7 +91,6 @@ app.include_router(src_specimens_router)
 # ── Mobile developer routers ──────────────────────────────────────────────────
 
 app.include_router(sync_router)
-app.include_router(results_confirm_override_router)
 app.include_router(results_router)
 app.include_router(images_router)
 app.include_router(notifications_router)
