@@ -99,8 +99,9 @@ class FullResultDetail(BaseModel):
     status: str
     annotation_notes: Optional[str] = None
     spatial_annotations: Optional[List[Dict[str, Any]]] = None
-    """Always None in the ported service — result_reviews.spatial_annotations
-    has no Alembic history (schema-drift finding, not modeled/persisted)."""
+    """Persisted as of migration 0034 (JSONB) — type inferred from pre-port
+    code, not yet verified against a live database. See the ResultReview
+    model's docstring."""
 
 
 class AnnotationRequest(BaseModel):

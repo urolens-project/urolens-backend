@@ -557,3 +557,73 @@ untouched — separate follow-up tasks, not started here.
   `OverrideParameterResponse` (already unused since step 5a, left alone at the
   time since most of the file was still in use) are gone too now that nothing
   in the file is needed beyond the smart-diagnosis shapes.
+
+## Fix: spatial_annotations regression (post-5b)
+
+**The bug**: step 5b's schema-drift note for `result_reviews.spatial_annotations`
+undersold what was actually happening. Supabase REST (the pre-port code) writes
+whatever payload it's given as long as the column exists — it never needed the
+field modeled anywhere in Python. SQLAlchemy only persists mapped attributes.
+The ported `save_annotation` accepted `spatial_annotations` as a parameter but
+never assigned it onto the `ResultReview` object it saved (the model had no
+such column to assign to) — so every caller-supplied value was silently
+dropped, no error, no signal. Any supervisor annotation with spatial
+coordinates made since 5b shipped would have been lost. Treated and fixed as
+an active bug, not left as a documented gap — `confirmation_notes` (found at
+the same time, same missing-Alembic-history pattern) stays deferred, since
+that one is historical-data-loss-only, not live-functionality-breaking.
+
+**Evidence recovered** (Task 1 — `git show 35ab942^:app/schemas/results.py`
+and `git show 35ab942^:app/services/result_review_service.py`, both deleted/
+pruned in the commit that introduced the regression): the field was
+consistently typed `Optional[List[Dict[str, Any]]]` across
+`FullResultDetail`/`AnnotationRequest`/`AnnotationResponse`, and
+`save_annotation` passed it straight through as a raw Python list into the
+Supabase-REST insert/update payload, only when not `None` (never clearing an
+existing value on an update call that omits it).
+
+**Type decision**: JSONB. Reasoning — the recovered shape
+(`list[dict]`, passed as a raw Python object to a Supabase JSON column) matches
+exactly how this codebase already models every other similarly-shaped field
+(`AnalysisResult.ai_findings`/`.flagged_anomalies`/`.particle_classes`,
+`SmartDiagnosisOutput.evidence_map` — all JSONB). This is still an inference
+from pre-port code, **not a live-schema confirmation** — stated plainly in
+migration `0034`'s docstring and the `ResultReview` model's docstring. Needs
+the same verification pass as migrations `0032`/`0033` before it's safe to run
+against any environment where the column doesn't already exist in exactly
+this shape — **add migration `0034` to that pending batch.**
+
+### Fixed
+- `ResultReview.spatial_annotations` mapped as `JSONB, nullable=True`
+  (`src/urolens/models/result_review.py`).
+- `save_annotation` now actually assigns `spatial_annotations` on both the
+  insert path (new `ResultReview`) and the update path (existing row, only
+  when the caller supplies a value — preserves the pre-port "don't clear on
+  omission" behavior).
+- `get_full_result` now reads `spatial_annotations` back from the latest
+  `ResultReview` row instead of hardcoding `None` — the regression covered
+  both directions (write silently dropped, and even if it hadn't been, the
+  read path would still have shown nothing). Fixing persistence without also
+  fixing the read-back would have left the bug's user-visible symptom
+  unchanged.
+- Migration `0034`: `ALTER TABLE result_reviews ADD COLUMN IF NOT EXISTS
+  spatial_annotations JSONB` — idempotent, same guard idiom as `0032`/`0033`,
+  does not assume the column is absent (the whole premise here is that it may
+  already exist live). Single Alembic head confirmed (`0034`).
+
+### Added
+- Two tests in `tests/test_result_review_service.py`:
+  `test_annotate_result_persists_and_round_trips_spatial_annotations` (writes
+  via `save_annotation`, asserts the actual object passed to `db.add` carries
+  the value — not just that the call succeeded — then feeds that same object
+  through `get_full_result` and asserts the value comes back out) and
+  `test_annotate_result_omitting_spatial_annotations_preserves_existing_value`
+  (update path, value omitted, prior value untouched). **Verified the
+  round-trip test actually catches the regression**: temporarily reverted
+  `save_annotation` to the pre-fix code, confirmed the test fails
+  (`assert None == [...]`), restored the fix, confirmed it passes again — not
+  just asserted this reasoning, ran it both ways.
+
+### Test suite
+- Full suite: 20 failed / 38 passed — same 20 pre-existing failures,
+  unchanged; 2 new tests, both passing.

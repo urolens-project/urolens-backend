@@ -6,13 +6,18 @@ Supabase REST, deleted after this port — see CHANGELOG.md). Tier-1 workflow
 per the standards skill (the confirm->override->approve->release chain's
 named example).
 
-Two fields from the original service are not persisted/populated here,
-reported rather than guessed at — see the ResultReview model's docstring
-and CHANGELOG.md for the full schema-drift finding:
+One field from the original service is still not persisted/populated here,
+reported rather than guessed at — see CHANGELOG.md for the full
+schema-drift finding:
   - AnalysisResult.confirmation_notes (no Alembic history, already dead
     going forward since the canonical confirm path never wrote it)
-  - ResultReview.spatial_annotations (no Alembic history, live functionality
-    that this port cannot safely persist without knowing the real column type)
+
+`ResultReview.spatial_annotations` was in the same situation (no Alembic
+history, and `save_annotation` silently dropped every caller-supplied
+value — a real regression, not just a documentation gap) but has since
+been fixed: mapped as JSONB (migration 0034) and persisted. See the
+`ResultReview` model's docstring and CHANGELOG.md for the type-inference
+reasoning and the pending live-schema-verification caveat.
 """
 from __future__ import annotations
 
@@ -388,6 +393,7 @@ class ResultReviewService:
             )
         ).scalar_one_or_none()
         latest_annotation = review.annotation_notes if review else None
+        latest_spatial = review.spatial_annotations if review else None
 
         sdo = (
             await self.db.execute(
@@ -431,7 +437,7 @@ class ResultReviewService:
             "smart_diagnosis_unavailable": ar.smart_diagnosis_unavailable or smart_diagnosis is None,
             "status": ar.status,
             "annotation_notes": latest_annotation,
-            "spatial_annotations": None,  # schema drift — see module docstring
+            "spatial_annotations": latest_spatial,
         }
 
     # ── Annotation ────────────────────────────────────────────────────────
@@ -445,8 +451,9 @@ class ResultReviewService:
     ) -> dict[str, Any]:
         """Upsert a supervisor's annotation on a result.
 
-        `spatial_annotations` is accepted (for request-shape compatibility
-        with the pre-port API) but not persisted — see the module docstring.
+        `spatial_annotations` is only written when the caller supplies a
+        value (matching the pre-port behavior) — omitting it on a later call
+        leaves a previously-saved value in place rather than clearing it.
         """
         ar = await self.db.get(AnalysisResult, result_id)
         if ar is None:
@@ -465,12 +472,15 @@ class ResultReviewService:
 
         if existing:
             existing.annotation_notes = annotation_notes
+            if spatial_annotations is not None:
+                existing.spatial_annotations = spatial_annotations
         else:
             self.db.add(
                 ResultReview(
                     result_id=result_id,
                     reviewed_by=user_id,
                     annotation_notes=annotation_notes,
+                    spatial_annotations=spatial_annotations,
                 )
             )
 
@@ -479,7 +489,7 @@ class ResultReviewService:
         return {
             "result_id": result_id,
             "annotation_notes": annotation_notes,
-            "spatial_annotations": None,
+            "spatial_annotations": spatial_annotations,
         }
 
     # ── Approve ───────────────────────────────────────────────────────────
