@@ -10,10 +10,12 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5432/urolens_db",
 )
-JWT_SIGNING_KEY = os.getenv(
-    "JWT_SIGNING_KEY",
-    "change-me-in-production-use-a-long-random-string",
-)
+JWT_SIGNING_KEY = os.getenv("JWT_SIGNING_KEY")
+if not JWT_SIGNING_KEY or JWT_SIGNING_KEY == "change-me-in-production-use-a-long-random-string":
+    raise RuntimeError(
+        "JWT_SIGNING_KEY is unset or using the placeholder default. "
+        "Set a strong, random JWT_SIGNING_KEY in the environment before starting the app."
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 8
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))

@@ -16,10 +16,12 @@ if DATABASE_URL.startswith("postgresql://"):
 elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 
-JWT_SIGNING_KEY: str = os.getenv(
-    "JWT_SIGNING_KEY",
-    "change-me-in-production-use-a-long-random-string",
-)
+JWT_SIGNING_KEY: str = os.getenv("JWT_SIGNING_KEY") or ""
+if not JWT_SIGNING_KEY or JWT_SIGNING_KEY == "change-me-in-production-use-a-long-random-string":
+    raise RuntimeError(
+        "JWT_SIGNING_KEY is unset or using the placeholder default. "
+        "Set a strong, random JWT_SIGNING_KEY in the environment before starting the app."
+    )
 JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRY_HOURS: int = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
 

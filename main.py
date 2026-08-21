@@ -32,7 +32,11 @@ app = FastAPI(title="UroLens LIS Engine")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # Auth is Bearer-token-in-header (see apiClient.ts / app.middleware.rbac), never
+    # cookies — allow_credentials=True is not needed and must stay False, since
+    # combining it with allow_origins=["*"] lets any origin read authenticated
+    # responses made with the browser's ambient credentials.
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
