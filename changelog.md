@@ -161,3 +161,74 @@ service layer survives, which RBAC import wins), and were live security gaps.
   contains a similar dead stub pair (`Patient`, `LabRequest`) but was left alone —
   it's entangled with patient creation (plan doc row 3), out of scope for this
   merge; flagging for whoever does the patients merge to pick up.
+
+## Patients domain merge (plan doc row 3)
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- **`src/urolens/domains/intake/router.py` deleted in full** (both
+  `register_patient_endpoint` and `search_patients_endpoint`, and the router's
+  mount in `main.py`). This was a live PHI-exposure bug, not dead code: it wrote
+  `first_name`/`last_name`/`date_of_birth` **unencrypted**, with no auth and a
+  hardcoded `REAL_USER_ID`, into the same `patients` table
+  `src/urolens/services/patient_service.py::PatientService.create_patient`
+  writes to encrypted — reachable at a different URL prefix
+  (`/api/v1/intake/patients` vs the canonical `/api/v1/patients`), so the table
+  could already contain a mix of encrypted and plaintext PII rows. Grep-confirmed
+  zero remaining references anywhere in the repo (`domains.intake.router`,
+  `register_patient_endpoint`, `REAL_USER_ID`, `PatientRegistrationRequest`) before
+  deleting. Route count dropped from 52 to 50, matching exactly the two removed
+  endpoints — nothing else was silently dropped.
+- **`src/urolens/domains/intake/models.py` deleted** — Task 2 reconciliation: this
+  was the dead stub flagged (not yet acted on) during the specimens/labeling merge,
+  the twin of the `domains/request/models.py` stub already deleted there. Same
+  pattern confirmed here: a `Patient` class and a `LabRequest` class, neither
+  inheriting `Base`, no real columns, `__tablename__` only. Grep-confirmed zero
+  references anywhere in the repo before deleting — nothing in
+  `domains/intake/` (router, service, or elsewhere) ever imported it.
+
+### Fixed
+- **`PatientService` moved from Supabase REST to SQLAlchemy** (Task 5) —
+  `create_patient`, `search_patients`, and `get_patient_by_user_id` all now use
+  `AsyncSession` instead of the Supabase `AsyncClient`. This was not already done:
+  despite `PatientService` being the plan doc's designated "correct, keep this"
+  implementation, it was 100% Supabase-REST internally before this change. Updated
+  both call sites that construct `PatientService`
+  (`src/urolens/api/patients.py::get_patient_service`,
+  `src/urolens/api/patient_portal.py::get_patient_service`) to inject `AsyncSession`
+  via `get_db` instead of the Supabase client via `get_supabase`. Left
+  `patient_portal.py`'s *other* dependency, `get_patient_result_service`
+  (constructs `PatientResultService`, a different class, results domain, plan rows
+  6–8), untouched — out of scope for this merge.
+- **`create_patient` now runs as one real transaction.** The prior Supabase-REST
+  version had no cross-table transaction, so a failure partway through (e.g.
+  consent insert failing after the patient row succeeded) was handled with manual
+  compensating deletes of the patient and portal-user rows. With `AsyncSession`,
+  the portal user, patient row, and consent record are added and flushed together
+  and committed once at the end — an exception before that commit rolls back
+  everything via the `get_db` dependency's existing rollback-on-exception handling,
+  so the manual compensating-delete code is gone; it's structurally impossible to
+  now leave a half-created patient behind.
+- **`middle_name` and `clinical_history` added to the `Patient` SQLAlchemy model**,
+  plus migration `0033`. Same situation the specimens/labeling merge found:
+  `PatientService` was already reading/writing both columns via raw Supabase calls,
+  and the dead `domains/intake/models.py` stub even documented `clinical_history`
+  as real — but neither was ever modeled in SQLAlchemy. `0033` uses the same
+  `ADD COLUMN IF NOT EXISTS` idempotent-migration approach as `0032`, for the same
+  reason: this environment has no network access to confirm the live schema before
+  authoring the migration.
+- **`_generate_patient_uid` is now concurrency-safe** (Task 3). Previously computed
+  `max(existing) + 1` with no re-check before insert — two concurrent requests could
+  generate and insert the same `patient_uid`. Now reuses the check-then-retry-on-
+  collision idiom from the specimens/labeling merge
+  (`specimen_service._generate_sample_uid`, `lab_request_service._generate_request_uid`):
+  compute a candidate, verify via a direct existence check that it isn't already
+  taken, retry (re-scanning for the now-current max) up to 5 attempts, then fail
+  with a 500. The candidate itself is still the sequential `PAT-NNNNNN` format, not
+  switched to the specimens/lab-requests random-suffix format — the pattern being
+  reused is the safety idiom, not the ID shape, which this task didn't ask to change.
+
+### Verified (Task 4 — re-checked, not assumed)
+- `src/urolens/api/patients.py` already used the canonical
+  `app.middleware.rbac.RequireRole` paired with `src.urolens.core.enums.UserRole`
+  on both routes — confirmed by reading the file, not assumed from the plan doc.
+  No change needed here.
