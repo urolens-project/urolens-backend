@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import enum
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -14,15 +13,6 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .specimen import Specimen
-
-
-class UserRole(str, enum.Enum):
-    RECEPTIONIST = "RECEPTIONIST"
-    MEDTECH = "MEDTECH"
-    SUPERVISOR = "SUPERVISOR"
-    PHYSICIAN = "PHYSICIAN"
-    PATIENT = "PATIENT"
-    ADMINISTRATOR = "ADMINISTRATOR"
 
 
 class User(Base):
