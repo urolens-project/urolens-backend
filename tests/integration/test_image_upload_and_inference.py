@@ -66,7 +66,7 @@ async def test_upload_valid_image_returns_201(
     jpeg_bytes = _make_jpeg(800, 600)
 
     with (
-        patch("src.urolens.api.image.sb", sb_mock),
+        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
         patch("src.urolens.services.image_retake_service.sb", sb_mock),
     ):
         response = await async_client.post(
@@ -142,7 +142,7 @@ async def test_upload_triggers_ai_inference_when_package_available(
     mock_infer_fn.return_value.to_dict.return_value = FAKE_AI_FINDINGS
 
     with (
-        patch("src.urolens.api.image.sb", sb_mock),
+        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
         patch("src.urolens.services.image_retake_service.sb", sb_mock),
         # Simulate urolens_ai being installed by patching the import inside _try_run_inference
         patch("builtins.__import__", _make_import_mock("urolens_ai", "infer", mock_infer_fn)),
@@ -177,7 +177,7 @@ async def test_upload_succeeds_when_ai_inference_fails(
         raise RuntimeError("GPU out of memory")
 
     with (
-        patch("src.urolens.api.image.sb", sb_mock),
+        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
         patch("src.urolens.services.image_retake_service.sb", sb_mock),
         patch("builtins.__import__", _make_import_mock("urolens_ai", "infer", _raising_infer)),
     ):
@@ -210,10 +210,7 @@ async def test_discard_active_image_returns_200(
     }
     sb_mock = _make_sb_mock(images_rows=[active_image], analysis_rows=[])
 
-    with (
-        patch("src.urolens.api.image.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
-    ):
+    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
         response = await async_client.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtech_token}"},
@@ -239,10 +236,7 @@ async def test_discard_already_discarded_image_returns_409(
     }
     sb_mock = _make_sb_mock(images_rows=[discarded_image], analysis_rows=[])
 
-    with (
-        patch("src.urolens.api.image.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
-    ):
+    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
         response = await async_client.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtech_token}"},
@@ -260,10 +254,7 @@ async def test_discard_nonexistent_image_returns_404(
     """Discarding an image that doesn't exist must return 404."""
     sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
 
-    with (
-        patch("src.urolens.api.image.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
-    ):
+    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
         response = await async_client.post(
             f"/api/v1/images/{uuid.uuid4()}/discard",
             headers={"Authorization": f"Bearer {medtech_token}"},
@@ -285,10 +276,7 @@ async def test_discard_replaced_image_returns_409(
     }
     sb_mock = _make_sb_mock(images_rows=[replaced_image], analysis_rows=[])
 
-    with (
-        patch("src.urolens.api.image.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
-    ):
+    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
         response = await async_client.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtech_token}"},
