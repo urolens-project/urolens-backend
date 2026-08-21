@@ -3,8 +3,8 @@ from typing import List
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.services import audit_logger
-from app.services.auth_service import decode_jwt, is_session_active
+from . import audit_logger
+from .auth_service import decode_jwt, is_session_active
 
 security_scheme = HTTPBearer()
 

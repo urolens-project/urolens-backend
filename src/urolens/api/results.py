@@ -27,11 +27,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole
-
 from ..core.audit_logger import AuditLogger, get_audit_logger
 from ..core.database import get_db
 from ..core.enums import UserRole
+from ..core.rbac import RequireRole
 from ..schemas.result_review import (
     AnnotationRequest,
     AnnotationResponse,

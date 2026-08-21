@@ -5,17 +5,17 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import HTTPException, Request, status
 
-from app.db.supabase import supabase
-from app.services import audit_logger
-from app.services.auth_service import (
+from app.schemas.auth import PatientLoginResponse
+from src.urolens.core import audit_logger
+from src.urolens.core.config import settings
+from src.urolens.core.encryption import decrypt_pii
+from src.urolens.core.supabase import supabase
+from src.urolens.core.auth_service import (
     close_session,
     create_session,
     increment_failed_attempts,
     reset_failed_attempts,
 )
-from app.schemas.auth import PatientLoginResponse
-from src.urolens.core.config import settings
-from src.urolens.core.encryption import decrypt_pii
 
 _PATIENT_TOKEN_EXPIRE_MINUTES = 30
 

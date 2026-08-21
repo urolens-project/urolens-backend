@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.db.supabase import supabase
+from src.urolens.core.supabase import supabase
 
 # Columns to select per table — only what the mobile sync needs
 _SPECIMEN_COLS = (

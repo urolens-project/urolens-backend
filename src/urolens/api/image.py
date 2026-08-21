@@ -13,11 +13,10 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole
-
 from ..core.audit_logger import AuditLogger, get_audit_logger
 from ..core.database import get_db
 from ..core.enums import UserRole
+from ..core.rbac import RequireRole
 from ..schemas.image import AnalysisResultResponse, ImageDiscardResponse
 from ..services.ai_integration_service import AIIntegrationService
 from ..services.image_retake_service import ImageRetakeService

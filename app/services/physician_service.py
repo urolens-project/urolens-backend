@@ -4,12 +4,12 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException, Request, status
 
-from app.db.supabase import supabase
 from app.schemas.physician import (
     LabRequestCreateRequest,
     PhysicianPatientItem,
 )
 from src.urolens.core.encryption import decrypt_pii
+from src.urolens.core.supabase import supabase
 
 _PHT = timezone(timedelta(hours=8))
 

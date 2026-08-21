@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-from app.db.supabase import supabase
+from src.urolens.core.supabase import supabase
 
 _PHT = timezone(timedelta(hours=8))
 

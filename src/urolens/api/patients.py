@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole
 from src.urolens.core.audit_logger import AuditLogger, get_audit_logger
 from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.core.rbac import RequireRole
 from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
 from src.urolens.services.patient_service import PatientService
 

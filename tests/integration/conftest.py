@@ -58,14 +58,14 @@ def test_specimen() -> uuid.UUID:
 @pytest_asyncio.fixture(autouse=True)
 async def mock_session_active():
     """
-    The canonical auth dependency (app.middleware.rbac, adopted by image.py
+    The canonical auth dependency (src.urolens.core.rbac, adopted by image.py
     in the image/AI domain merge) checks session revocation via
     is_session_active(), which hits Supabase — unlike the old non-canonical
     dependency these tests were originally written against, which only
     decoded the JWT locally. Mocked here (autouse) so the plain signed-JWT
     fixtures above don't need a real `sessions` table.
     """
-    with patch("app.middleware.rbac.is_session_active", AsyncMock(return_value=True)):
+    with patch("src.urolens.core.rbac.is_session_active", AsyncMock(return_value=True)):
         yield
 
 

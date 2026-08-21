@@ -1,6 +1,6 @@
 from supabase import AsyncClient
 
-from src.urolens.core.config import settings
+from .config import settings
 
 supabase = AsyncClient(settings.supabase_url, settings.supabase_service_key)
 

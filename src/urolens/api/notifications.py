@@ -6,10 +6,9 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.rbac import RequireRole, get_current_user
-
 from ..core.database import get_db
 from ..core.enums import UserRole
+from ..core.rbac import RequireRole, get_current_user
 from ..models.notification import Notification
 from ..models.user import User
 
