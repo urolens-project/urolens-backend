@@ -17,3 +17,7 @@ from .lab_request import LabRequest  # noqa: F401
 from .sample_label import SampleLabel  # noqa: F401
 from .print_job import PrintJob  # noqa: F401
 from .specimen_rejection import SpecimenRejection  # noqa: F401
+from .result_review import ResultReview  # noqa: F401
+from .result_approval import ResultApproval  # noqa: F401
+from .result_return import ResultReturn  # noqa: F401
+from .escalation import Escalation  # noqa: F401
