@@ -1,34 +1,58 @@
-from __future__ import annotations
-
-# To be tested with AI Lead, Harley Reyes
 """
 AI Integration Service — T2.7
 
-Wraps urolens_ai.infer() and owns the full upload → inference → persist lifecycle.
+Wraps urolens_ai.infer() and owns the full upload -> inference -> persist
+lifecycle. Canonical implementation for the image/AI analysis domain
+(consolidation plan rows 4-5, rule 14 - one implementation per feature).
 
-Key contracts:
-  - All AI exceptions are caught and logged — they never propagate to the route layer.
-  - The analysis_result row is always created, even on AI failure (status=FAILED).
-  - Audit event IMAGE_UPLOADED is fired on successful upload acceptance.
-  - image.status: ACTIVE while in use, REPLACED on retake, DISCARDED on explicit discard.
+Two other implementations existed before this merge and are now gone:
+`ai_integration.py` (deleted - targeted a schema that no longer exists,
+`ImageStatus.UPLOADED`/`ResultStatus.PENDING_REVIEW` aren't real enum members
+here, and imported a `settings` object `core/config.py` never defined) and
+~250 lines of inline logic in the router (`src/urolens/api/image.py`) that
+this class now owns instead.
+
+Ported from the router's proven inline implementation, since that was the
+one actually exercised in production, despite living in the wrong layer:
+  - Storage is Supabase Storage, not S3/boto3 - confirmed no AWS credentials
+    exist anywhere in this project (.env.example, requirements.txt).
+  - Storage upload failure is logged and non-fatal - the image row is still
+    written even if the bucket write failed. Kept exactly as the router had
+    it; not revisited as part of this merge.
+  - AI inference failure is caught and logged; the result stays
+    PENDING_CONFIRM with empty findings so the MedTech can retake, rather
+    than a hard FAILED state.
+  - Particle class names are normalized dash -> underscore (the model emits
+    `epithelial-cells`; config.yaml and Smart Diagnosis expect
+    `epithelial_cells`).
+  - Smart Diagnosis is pre-computed at upload time (writes only
+    `analysis_results.smart_diagnosis`) so both panels are visible before
+    the MedTech clicks Confirm - the formal `smart_diagnosis_outputs` audit
+    record is still created separately by SmartDiagnosisService at
+    confirmation time.
 """
+from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import uuid
-from typing import Any
+from typing import Any, Optional
 
-import boto3
-from botocore.exceptions import BotoCoreError
 from fastapi import UploadFile
 from PIL import Image as PILImage
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SUPABASE_IMAGE_BUCKET
+from app.db.supabase import supabase as sb
+
 from ..core.audit_logger import AuditLogger
-from ..core.config import AI_MODEL_VERSION, S3_BUCKET
-from ..core.exceptions import ImageFormatError, ImageResolutionError, StorageError
+from ..core.config import AI_MODEL_VERSION
+from ..core.exceptions import ImageFormatError, ImageResolutionError
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
+from ..models.lab_request import LabRequest
 from ..models.specimen import Specimen
 
 log = logging.getLogger(__name__)
@@ -37,20 +61,21 @@ MIN_WIDTH = 640
 MIN_HEIGHT = 480
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
 MIME_TO_FORMAT = {"image/jpeg": "JPEG", "image/png": "PNG"}
+MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 
 
 class AIIntegrationService:
-    def __init__(
-        self,
-        db: AsyncSession,
-        audit_logger: AuditLogger,
-        s3_client: Any | None = None,
-    ) -> None:
+    """Owns microscopy image upload, AI inference, and Smart Diagnosis precompute.
+
+    Discard/retake is a separate class, `ImageRetakeService` — not merged
+    into this one, per the plan's row 5 decision to keep it independent.
+    """
+
+    def __init__(self, db: AsyncSession, audit_logger: AuditLogger) -> None:
         self.db = db
         self.audit_logger = audit_logger
-        self._s3 = s3_client or boto3.client("s3")
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────
 
     async def handle_upload(
         self,
@@ -59,42 +84,41 @@ class AIIntegrationService:
         file: UploadFile,
         request: Any,
     ) -> AnalysisResult:
-        """
-        Full upload → validate → store → infer pipeline.
+        """Validate, store, and run AI inference on an uploaded microscopy image.
 
-        Steps
-        -----
-        1. Read file bytes and validate format + resolution.
-        2. Replace any ACTIVE image for this specimen (mark REPLACED).
-        3. Upload to S3.
-        4. Create Image row (status=ACTIVE).
-        5. Create or update AnalysisResult row (status=PENDING_CONFIRM).
-        6. Attempt inference; on failure result.status stays PENDING_CONFIRM with
-           empty ai_findings so the MedTech can retake.
-        7. Fire IMAGE_UPLOADED audit event.
+        Args:
+            specimen_id: Specimen this image belongs to.
+            uploader_id: user_id of the authenticated MedTech uploading it.
+            file: Multipart upload — JPEG or PNG, minimum 640x480.
+            request: Inbound request, forwarded to the audit logger for IP
+                attribution.
 
-        Raises
-        ------
-        ImageFormatError      — unsupported MIME type
-        ImageResolutionError  — below 640×480
-        StorageError          — S3 upload failed
+        Returns:
+            The specimen's AnalysisResult row (created on first upload,
+            reset and reattached on retake), with `ai_findings`/
+            `smart_diagnosis` populated if inference succeeded.
+
+        Raises:
+            ImageFormatError: unsupported MIME type or unreadable file.
+            ImageResolutionError: below the 640x480 minimum.
         """
         raw_bytes = await file.read()
 
         content_type = file.content_type or ""
         self._validate_format(content_type)
-        width, height = self._validate_resolution(raw_bytes)
+        width, height = await self._validate_resolution(raw_bytes)
 
-        # Mark any previous ACTIVE image for this specimen as REPLACED
         await self._replace_previous_image(specimen_id)
 
-        s3_key = self._build_s3_key(specimen_id)
-        await self._upload_to_s3(raw_bytes, s3_key, content_type)
+        image_id = uuid.uuid4()
+        storage_key = self._build_storage_key(specimen_id, image_id, content_type)
+        await self._upload_to_storage(raw_bytes, storage_key, content_type)
 
         image = Image(
+            image_id=image_id,
             specimen_id=specimen_id,
             uploaded_by=uploader_id,
-            storage_key=s3_key,
+            storage_key=storage_key,
             file_format=MIME_TO_FORMAT[content_type],
             width_px=width,
             height_px=height,
@@ -102,11 +126,13 @@ class AIIntegrationService:
             status=ImageStatus.ACTIVE,
         )
         self.db.add(image)
-        await self.db.flush()
+        await self.db.flush([image])
 
         result = await self._get_or_create_result(specimen_id, image.image_id)
 
-        await self._run_inference(result, raw_bytes)
+        findings = await self._run_inference(result, raw_bytes)
+        if findings:
+            await self._run_smart_diagnosis(result, findings)
 
         await self.audit_logger.record(
             event_type="IMAGE_UPLOADED",
@@ -127,111 +153,98 @@ class AIIntegrationService:
         await self.db.refresh(result)
         return result
 
-    async def discard_image(
-        self,
-        image_id: uuid.UUID,
-        discarded_by: uuid.UUID,
-        request: Any,
-    ) -> Image:
-        """
-        Mark an image as DISCARDED so the MedTech can retake.
-        Called from ImageRetakeService.
-        """
-        image = await self.db.get(Image, image_id)
-        if image is None:
-            raise ValueError(f"Image {image_id} not found")
-        if image.is_discarded:
-            return image  # idempotent
-
-        from datetime import datetime, timezone
-        image.status = ImageStatus.DISCARDED
-        image.discarded_at = datetime.now(timezone.utc)
-        await self.db.flush()
-        return image
-
-    # ── Private helpers ───────────────────────────────────────────────────────
+    # ── Private helpers ──────────────────────────────────────────────────
 
     def _validate_format(self, content_type: str) -> None:
+        """Raise ImageFormatError if content_type isn't JPEG or PNG."""
         if content_type not in ALLOWED_MIME_TYPES:
             raise ImageFormatError(
                 f"Unsupported image format '{content_type}'. "
                 f"Accepted: {', '.join(ALLOWED_MIME_TYPES)}"
             )
 
-    def _validate_resolution(self, raw_bytes: bytes) -> tuple[int, int]:
-        try:
+    async def _validate_resolution(self, raw_bytes: bytes) -> tuple[int, int]:
+        """Return (width, height); raise ImageResolutionError if below minimum.
+
+        PIL.Image.open is synchronous/blocking — run in a thread so a large
+        image doesn't stall the event loop.
+        """
+
+        def _read_dimensions() -> tuple[int, int]:
             img = PILImage.open(io.BytesIO(raw_bytes))
-            width, height = img.size
+            return img.size
+
+        try:
+            width, height = await asyncio.to_thread(_read_dimensions)
         except Exception as exc:
             raise ImageFormatError(f"Cannot read image file: {exc}") from exc
 
         if width < MIN_WIDTH or height < MIN_HEIGHT:
             raise ImageResolutionError(
-                f"Image resolution {width}×{height} is below the minimum "
-                f"{MIN_WIDTH}×{MIN_HEIGHT} required for AI analysis."
+                f"Image resolution {width}x{height} is below the minimum "
+                f"{MIN_WIDTH}x{MIN_HEIGHT} required for AI analysis."
             )
         return width, height
 
-    def _build_s3_key(self, specimen_id: uuid.UUID) -> str:
-        return f"specimens/{specimen_id}/images/{uuid.uuid4()}.jpg"
+    def _build_storage_key(
+        self, specimen_id: uuid.UUID, image_id: uuid.UUID, content_type: str
+    ) -> str:
+        ext = MIME_TO_EXT[content_type]
+        return f"specimens/{specimen_id}/images/{image_id}.{ext}"
 
-    async def _upload_to_s3(
-        self, raw_bytes: bytes, s3_key: str, content_type: str
+    async def _upload_to_storage(
+        self, raw_bytes: bytes, storage_key: str, content_type: str
     ) -> None:
-        import asyncio
+        """Upload to Supabase Storage.
 
-        loop = asyncio.get_running_loop()
+        Failure is logged, not fatal — matches the router's proven
+        production behavior: the image row is still written even if the
+        bucket write failed, rather than blocking the whole upload response
+        on a storage-layer issue.
+        """
         try:
-            await loop.run_in_executor(
-                None,
-                lambda: self._s3.upload_fileobj(
-                    io.BytesIO(raw_bytes),
-                    S3_BUCKET,
-                    s3_key,
-                    ExtraArgs={"ContentType": content_type},
-                ),
+            await sb.storage.from_(SUPABASE_IMAGE_BUCKET).upload(
+                path=storage_key,
+                file=raw_bytes,
+                file_options={"content-type": content_type, "upsert": "true"},
             )
-        except BotoCoreError as exc:
-            raise StorageError(f"S3 upload failed: {exc}") from exc
+            log.info("Uploaded image to storage: %s/%s", SUPABASE_IMAGE_BUCKET, storage_key)
+        except Exception as exc:
+            log.warning(
+                "Supabase Storage upload failed (bucket '%s'): %s", SUPABASE_IMAGE_BUCKET, exc
+            )
 
     async def _replace_previous_image(self, specimen_id: uuid.UUID) -> None:
-        """Mark previous ACTIVE image for the specimen as REPLACED."""
-        from sqlalchemy import select
+        """Mark the previous ACTIVE image for this specimen, if any, REPLACED."""
         stmt = select(Image).where(
-            Image.specimen_id == specimen_id,
-            Image.status == ImageStatus.ACTIVE,
+            Image.specimen_id == specimen_id, Image.status == ImageStatus.ACTIVE
         )
-        result = await self.db.execute(stmt)
-        previous = result.scalar_one_or_none()
+        previous = (await self.db.execute(stmt)).scalar_one_or_none()
         if previous:
             previous.status = ImageStatus.REPLACED
-            await self.db.flush()
+            await self.db.flush([previous])
 
     async def _get_or_create_result(
-    self, specimen_id: uuid.UUID, image_id: uuid.UUID
+        self, specimen_id: uuid.UUID, image_id: uuid.UUID
     ) -> AnalysisResult:
-        from sqlalchemy import select
-        from app.db.supabase import supabase
+        """Attach the new image to the specimen's AnalysisResult, creating
+        one if this is the first image for the specimen.
 
-        # Look up patient_id via specimen → lab_request (Supabase)
+        Resets `ai_findings`/`flagged_anomalies`/`particle_classes` since a
+        new image means the prior findings no longer apply.
+        """
         spec_stmt = select(Specimen).where(Specimen.specimen_id == specimen_id)
-        spec_row = await self.db.execute(spec_stmt)
-        specimen = spec_row.scalar_one_or_none()
+        specimen = (await self.db.execute(spec_stmt)).scalar_one_or_none()
 
         patient_id = None
         if specimen and specimen.lab_request_id:
-            try:
-                lr_res = await supabase.table("lab_requests").select("patient_id").eq(
-                    "lab_request_id", str(specimen.lab_request_id)
-                ).limit(1).execute()
-                if lr_res.data:
-                    patient_id = lr_res.data[0].get("patient_id")
-            except Exception:
-                pass  # best-effort — don't break upload if lookup fails
+            lr_stmt = select(LabRequest.patient_id).where(
+                LabRequest.lab_request_id == specimen.lab_request_id
+            )
+            patient_id = (await self.db.execute(lr_stmt)).scalar_one_or_none()
 
         stmt = select(AnalysisResult).where(AnalysisResult.specimen_id == specimen_id)
-        db_result = await self.db.execute(stmt)
-        result = db_result.scalar_one_or_none()
+        result = (await self.db.execute(stmt)).scalar_one_or_none()
 
         if result:
             result.image_id = image_id
@@ -241,7 +254,7 @@ class AIIntegrationService:
             result.particle_classes = {}
             if patient_id and not result.patient_id:
                 result.patient_id = patient_id
-            await self.db.flush()
+            await self.db.flush([result])
         else:
             result = AnalysisResult(
                 specimen_id=specimen_id,
@@ -251,35 +264,72 @@ class AIIntegrationService:
                 model_version=AI_MODEL_VERSION,
             )
             self.db.add(result)
-            await self.db.flush()
+            await self.db.flush([result])
 
         return result
 
     async def _run_inference(
         self, result: AnalysisResult, raw_bytes: bytes
-    ) -> None:
-        """
-        Call the AI Engineer's infer() and update the result row.
-        ALL exceptions are caught — inference failure must not break the upload.
+    ) -> Optional[dict]:
+        """Run YOLOv8 inference and persist findings onto the result row.
+
+        All exceptions are caught — inference failure must never block the
+        upload response, and `result.status` stays `PENDING_CONFIRM` either
+        way so the MedTech can retake if findings come back empty.
+
+        Returns:
+            The findings dict (particle class -> count) on success, or None
+            if the `urolens_ai` package is absent or inference failed.
         """
         try:
             from urolens_ai import infer  # type: ignore[import]
+        except ImportError:
+            return None
 
-            inference_result = infer(raw_bytes)
-            findings: dict = inference_result.particles
-
-            result.ai_findings = findings
-            result.flagged_anomalies = {
-                k: v for k, v in findings.items() if v > 0
+        try:
+            inference_result = await asyncio.to_thread(infer, raw_bytes)
+            # Model emits dashes (epithelial-cells); config.yaml and Smart
+            # Diagnosis expect underscores (epithelial_cells).
+            findings: dict = {
+                k.replace("-", "_"): v for k, v in inference_result.particles.items()
             }
-
         except Exception as exc:
-            log.exception(
-                "AI inference failed for specimen %s: %s",
-                result.specimen_id,
-                exc,
-            )
-            result.ai_findings = {}
-            result.flagged_anomalies = {}
+            log.warning("AI inference failed for result %s: %s", result.result_id, exc)
+            return None
 
-        await self.db.flush()
+        result.ai_findings = findings
+        result.flagged_anomalies = {k: v for k, v in findings.items() if v > 0}
+        await self.db.flush([result])
+        return findings
+
+    async def _run_smart_diagnosis(
+        self, result: AnalysisResult, findings: dict
+    ) -> Optional[dict]:
+        """Pre-compute Smart Diagnosis at upload time so both panels are
+        visible before the MedTech clicks Confirm.
+
+        Writes only `analysis_results.smart_diagnosis` (the JSONB column the
+        mobile app reads via sync) — does NOT insert into
+        `smart_diagnosis_outputs`, which `SmartDiagnosisService` still
+        creates as the formal audit record at confirmation time. Best
+        effort: failure never blocks the upload response.
+        """
+        try:
+            from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
+
+            from .smart_diagnosis_service import _build_evidence_map
+
+            engine_output = generate_smart_diagnosis(findings)
+            evidence_map = _build_evidence_map(engine_output)
+            smart_diagnosis = {
+                **evidence_map,
+                "no_significant_indicators": engine_output.no_significant_indicators,
+            }
+            result.smart_diagnosis = smart_diagnosis
+            await self.db.flush([result])
+            return smart_diagnosis
+        except Exception as exc:
+            log.warning(
+                "Smart Diagnosis failed at upload for result %s: %s", result.result_id, exc
+            )
+            return None

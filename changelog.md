@@ -232,3 +232,132 @@ service layer survives, which RBAC import wins), and were live security gaps.
   `app.middleware.rbac.RequireRole` paired with `src.urolens.core.enums.UserRole`
   on both routes — confirmed by reading the file, not assumed from the plan doc.
   No change needed here.
+
+## Image / AI analysis domain merge (plan doc rows 4–5)
+
+### Fixed
+- **Plan doc row 4's filenames were swapped relative to their actual content —
+  found and corrected before building anything.** Direct inspection showed
+  `ai_integration.py` (not `ai_integration_service.py`, as the doc said) was the
+  one with the stale schema (`ImageStatus.UPLOADED`/`ResultStatus.PENDING_REVIEW`,
+  neither a real enum member on the current models) and the broken
+  `from ..core.config import settings` import. `ai_integration_service.py` was
+  the schema-correct one, with a working import
+  (`from ..core.config import AI_MODEL_VERSION, S3_BUCKET`, both real flat
+  constants). Built the canonical service by rewriting `ai_integration_service.py`
+  in place — the file the plan doc described as "not fixable, not worth
+  salvaging" is actually the one that survived. Added a correction note to the
+  plan doc's row 4 rather than silently deviating from it.
+- **Canonical `AIIntegrationService` built** (`src/urolens/services/ai_integration_service.py`,
+  rewritten in place). Owns the full upload → validate → store → infer →
+  Smart-Diagnosis-precompute pipeline. Ported in, unchanged in behavior, all of
+  the production-hardening that previously only existed inline in the router:
+  dash→underscore particle-class normalization, `asyncio.to_thread` wrapping
+  for both the blocking `PIL.Image.open` resolution check and the blocking
+  YOLOv8 `infer()` call, and the smart-diagnosis-at-upload precompute (writes
+  `analysis_results.smart_diagnosis` only — `smart_diagnosis_outputs` stays
+  `SmartDiagnosisService`'s job at confirmation time). Storage upload failure
+  stays non-fatal (logged, not raised) — same production behavior the router
+  already had; not revisited as part of this merge.
+- **Storage switched from S3/boto3 to Supabase Storage** — the service's
+  `_upload_to_storage` now calls `sb.storage.from_(SUPABASE_IMAGE_BUCKET).upload(...)`
+  (the same client/bucket the router was already using) instead of
+  `boto3.client("s3").upload_fileobj(...)`. Matches the plan's global
+  architecture decision: no AWS credentials exist anywhere in this project.
+- **`_get_or_create_result`'s patient lookup moved off raw Supabase onto the
+  `LabRequest` SQLAlchemy model** — that model didn't exist when this method was
+  originally written; it does now (built in the specimens/lab-requests merge).
+  The `try/except: pass` around the old Supabase call is also gone — a
+  SQLAlchemy `scalar_one_or_none()` returning `None` for "not found" doesn't
+  need one.
+- **Incidental bug fix**: the router's response always hardcoded
+  `flagged_anomalies=None` regardless of what inference actually found. Now
+  that the router builds its response from the real `AnalysisResult` object
+  the service returns, `flagged_anomalies` reflects the actual computed value.
+- **`image.py` de-inlined** (Task 2) — `upload_image` and `discard_image` are
+  now `Depends(auth) → await service.method(...)`, no inline Supabase/storage
+  calls left in the router file (grep-verified). Its two inline `BaseModel`s
+  (`AnalysisResultResponse`, `ImageDiscardResponse`) moved to
+  `src/urolens/schemas/image.py`, matching the pattern established in the
+  specimens and patients merges.
+- **RBAC/`UserRole` swapped to the canonical pair** (Task 4) — `image.py` now
+  imports `RequireRole` from `app.middleware.rbac` and `UserRole` from
+  `src.urolens.core.enums`, not `src.urolens.middleware.rbac`/`models.user`.
+  Confirmed `UserRole.MEDTECH` is still the right role for both routes — image
+  upload/analysis and discard/retake are MedTech actions, matching the role
+  gating the specimens merge used for labeling. This was a real, breaking
+  behavior change for the test suite, not a no-op: the canonical dependency
+  checks session revocation via `is_session_active()`, which hits Supabase — the
+  non-canonical one these tests were written against only decoded the JWT
+  locally. Fixed by adding an autouse `mock_session_active` fixture to
+  `tests/integration/conftest.py` (patches
+  `app.middleware.rbac.is_session_active`) rather than leaving 6 previously-passing
+  tests broken — see Test suite section below.
+
+### Removed (rule 14 — superseded implementation deleted in the same change)
+- **`ai_integration.py` deleted** (Task 1) — stale schema and a broken import
+  (see the plan-doc correction above); zero references anywhere, confirmed by
+  grep before deleting.
+- **`app/api/images.py`, `app/schemas/images.py`, `app/services/image_service.py`
+  deleted** (Task 3) — re-confirmed zero references before deleting, not taken
+  on faith from the original audit. `src/urolens/api/image.py` + `ImageRetakeService`
+  remain the sole discard/retake implementation, unchanged internally (still
+  Supabase-REST — converting it wasn't in this merge's task list, noted as a
+  residual item below).
+- **`boto3`, `botocore`, `s3transfer` removed from `requirements.txt`** (Task 5)
+  — confirmed zero code references first (the only remaining hits are a
+  docstring line in the new service explaining *why* it isn't using them).
+  Removed via a byte-safe script rather than a normal text edit:
+  `requirements.txt` has mixed encoding (UTF-16 for most of the file, plain
+  UTF-8/ASCII for the tail where these three lines lived) left over from
+  however it was last edited — not fixed as part of this change, out of scope.
+
+### Schema-drift check (new process from this merge onward)
+- **Stop-condition was checked and NOT triggered.** Compared every column the
+  upload/inference/discard code paths read or write against the current
+  `Image` and `AnalysisResult` SQLAlchemy models — all of them
+  (`storage_key`, `file_format`, `width_px`, `height_px`, `file_size_bytes`,
+  `status`, `ai_findings`, `flagged_anomalies`, `particle_classes`,
+  `model_version`, `smart_diagnosis`, `patient_id`, etc.) are already modeled.
+  No third unverified migration was needed or added.
+
+### Test suite
+- **6 previously-passing tests in `tests/integration/test_image_upload_and_inference.py`
+  broke as a direct, expected consequence of the RBAC swap above** (canonical
+  auth's session-revocation check hits Supabase; the test fixtures never
+  needed to mock that before) — fixed, not left broken:
+  `test_upload_unsupported_format_returns_422`,
+  `test_upload_below_minimum_resolution_returns_422`, and all four discard
+  tests. Fix: added the autouse `mock_session_active` fixture described above,
+  plus corrected each test's stale `patch("src.urolens.api.image.sb", ...)`
+  target — that attribute no longer exists on the now-de-inlined router. Discard
+  tests dropped the patch entirely (nothing in the discard path touches it);
+  upload tests point it at `src.urolens.services.ai_integration_service.sb`,
+  where the Supabase Storage call now actually lives.
+- **3 tests remain failing, unchanged from the pre-existing baseline**:
+  `test_upload_valid_image_returns_201`,
+  `test_upload_triggers_ai_inference_when_package_available`,
+  `test_upload_succeeds_when_ai_inference_fails`. These need a full successful
+  upload, which now runs real SQLAlchemy queries (`Specimen`/`LabRequest`
+  lookups, `Image`/`AnalysisResult` insert) that this test file's mocking
+  strategy — an `AsyncMock` standing in for the Supabase client — was never
+  built to support; a real or properly-mocked `AsyncSession` would be needed to
+  fix these, which is a materially larger, separate piece of test-infrastructure
+  work. Not attempted here since these three were already failing before this
+  merge (confirmed by running the suite pre- and post-change) — not a
+  regression this merge introduced, so leaving them failing doesn't violate
+  "same or fewer failures than baseline."
+- Net result: 20 failed / 28 passed — identical to the baseline, both in count
+  and in which specific tests fail.
+
+### Residual items not addressed in this merge (out of scope, noted for later)
+- `ImageRetakeService` (discard/retake) is still 100% Supabase REST — the plan's
+  "SQLAlchemy AsyncSession as the primary pattern" hasn't reached this class
+  yet. Not part of this merge's task list; flagging per the plan's own phased
+  rollout note ("not done in one big-bang pass").
+- The 3 upload-success-path tests above need real or mocked SQLAlchemy session
+  support to ever pass — flagging as future test-infrastructure work, not
+  attempted here.
+- `requirements.txt`'s mixed UTF-16/UTF-8 encoding — touched only the minimum
+  necessary to remove the three dependency lines; not normalized to a single
+  encoding.
