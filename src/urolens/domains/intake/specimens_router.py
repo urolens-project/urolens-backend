@@ -1,13 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
-from typing import Optional, List
 import uuid
-import random
-from datetime import datetime
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.middleware.rbac import RequireRole
-from src.urolens.core.database import supabase
+from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
+from src.urolens.schemas.specimen import (
+    LabRequestSearchItem,
+    SpecimenListItem,
+    SpecimenReceiveRequest,
+    SpecimenReceiveResponse,
+    SpecimenRejectRequest,
+    SpecimenRejectResponse,
+)
+from src.urolens.services import lab_request_service, specimen_service
 
 router = APIRouter(
     prefix="/api/v1/specimens",
@@ -15,138 +24,52 @@ router = APIRouter(
 )
 
 _receptionist = RequireRole([UserRole.RECEPTIONIST])
+_medtech = RequireRole([UserRole.MEDTECH])
 
 
-class SpecimenReceivePayload(BaseModel):
-    lab_request_id: uuid.UUID
-    visual_check_passed: bool
-    rejection_reason: Optional[str] = None
-    free_text_note: Optional[Optional[str]] = None
-
-
-@router.get("", status_code=status.HTTP_200_OK)
+@router.get("", response_model=List[SpecimenListItem])
 async def list_specimens_endpoint(
     specimen_status: Optional[str] = Query(default=None, alias="status"),
     current_user: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(get_db),
 ):
-    try:
-        query = supabase.table("specimens").select("*")
-        if specimen_status:
-            query = query.eq("status", specimen_status.upper())
-        response = await query.execute()
-        return response.data or []
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return await specimen_service.list_specimens(db, specimen_status)
 
 
-@router.get("/search-request", response_model=List[dict])
-async def search_pending_lab_requests(q: str, current_user: dict = Depends(_receptionist)):
-    try:
-        clean_q = q.strip()
-        if clean_q.lower().startswith("dr."):
-            clean_q = clean_q[3:].strip()
-
-        filter_condition = f"request_uid.ilike.%{clean_q}%,physician_name.ilike.%{clean_q}%"
-
-        response = await supabase.table("lab_requests")\
-            .select("lab_request_id, request_uid, test_type, physician_name, patient_id")\
-            .eq("status", "PENDING_SAMPLE")\
-            .or_(filter_condition)\
-            .limit(5)\
-            .execute()
-
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/receive", status_code=status.HTTP_201_CREATED)
-async def receive_specimen_endpoint(
-    payload: SpecimenReceivePayload,
+@router.get("/search-request", response_model=List[LabRequestSearchItem])
+async def search_pending_lab_requests(
+    q: str,
     current_user: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(get_db),
 ):
-    try:
-        receptionist_id = current_user["user_id"]
+    return await lab_request_service.search_pending_lab_requests(db, q)
 
-        req_query = await supabase.table("lab_requests")\
-            .select("request_uid, test_type, patient_id")\
-            .eq("lab_request_id", str(payload.lab_request_id))\
-            .single()\
-            .execute()
 
-        if not req_query.data:
-            raise HTTPException(status_code=404, detail="Parent laboratory execution tracker not found.")
+@router.post("/receive", response_model=SpecimenReceiveResponse, status_code=201)
+async def receive_specimen_endpoint(
+    payload: SpecimenReceiveRequest,
+    current_user: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(get_db),
+):
+    receptionist_id = uuid.UUID(current_user["user_id"])
+    return await specimen_service.receive_specimen(db, receptionist_id, payload)
 
-        parent_request = req_query.data
 
-        pat_query = await supabase.table("patients")\
-            .select("first_name, last_name, patient_uid")\
-            .eq("patient_id", parent_request.get("patient_id"))\
-            .single()\
-            .execute()
-
-        p_name = "Unknown"
-        p_uid = "N/A"
-        if pat_query.data:
-            p_name = f"{pat_query.data.get('first_name')} {pat_query.data.get('last_name')}"
-            p_uid = pat_query.data.get("patient_uid")
-
-        initial_status = "RECEIVED" if payload.visual_check_passed else "REJECTED"
-        parent_update_status = "SAMPLE_RECEIVED" if payload.visual_check_passed else "PENDING_SAMPLE"
-
-        generated_sample_uid = f"SMP-2026-{random.randint(10000, 99999)}"
-
-        specimen_record = {
-            "lab_request_id": str(payload.lab_request_id),
-            "sample_uid": generated_sample_uid if payload.visual_check_passed else None,
-            "status": initial_status,
-            "visual_check_passed": payload.visual_check_passed,
-            "received_by": receptionist_id,
-            "patient_name": p_name,
-            "patient_uid": p_uid,
-            "test_type": parent_request.get("test_type"),
-            "priority_level": "ROUTINE"
-        }
-
-        specimen_tx = await supabase.table("specimens").insert(specimen_record).execute()
-        if not specimen_tx.data:
-            raise Exception("Failed to write specimen record to cloud architecture storage.")
-
-        new_specimen_id = specimen_tx.data[0].get("specimen_id")
-
-        if not payload.visual_check_passed:
-            if not payload.rejection_reason:
-                raise HTTPException(status_code=400, detail="A strict rejection structural reason code is mandatory.")
-
-            ALLOWED_REJECTION_REASONS = {"INSUFFICIENT_VOLUME", "WRONG_CONTAINER", "UNLABELED", "OTHER"}
-            if payload.rejection_reason not in ALLOWED_REJECTION_REASONS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid reason code. Must match database keys: {ALLOWED_REJECTION_REASONS}"
-                )
-
-            rejection_record = {
-                "specimen_id": new_specimen_id,
-                "medtech_id": receptionist_id,
-                "reason_code": payload.rejection_reason,
-                "free_text_note": payload.free_text_note
-            }
-            await supabase.table("specimen_rejections").insert(rejection_record).execute()
-
-        await supabase.table("lab_requests")\
-            .update({"status": parent_update_status})\
-            .eq("lab_request_id", str(payload.lab_request_id))\
-            .execute()
-
-        return {
-            "success": True,
-            "specimen_id": new_specimen_id,
-            "sample_uid": generated_sample_uid if payload.visual_check_passed else None,
-            "status": initial_status,
-            "message": "Specimen workflow pipeline initialization recorded successfully."
-        }
-
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database execution anomaly: {str(e)}")
+@router.post("/{specimen_id}/reject", response_model=SpecimenRejectResponse)
+async def reject_specimen_endpoint(
+    specimen_id: UUID,
+    body: SpecimenRejectRequest,
+    current_user: dict = Depends(_medtech),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ported from app/api/specimens.py + app/services/specimen_service.py
+    (consolidation plan row 9 / Track A2 reconciliation). Originally had no
+    route-level role gate — ownership was checked inside the service only,
+    which the standards skill's rule 2 forbids. Now gated at the route (rule
+    2) in addition to the ownership check the service still performs.
+    """
+    user_id = uuid.UUID(current_user["user_id"])
+    return await specimen_service.reject_specimen(
+        db, specimen_id, user_id, body.reason_code, body.free_text_note
+    )

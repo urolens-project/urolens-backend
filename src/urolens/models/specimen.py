@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -54,6 +54,27 @@ class Specimen(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+    # ── Denormalized intake/labeling fields ─────────────────────────────────
+    # Added via migration 0032 — these columns already existed on the live table
+    # (written/read by the pre-merge Supabase-REST code) but were never modeled.
+    medtech_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    patient_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
+    patient_uid: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    test_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    priority_level: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ROUTINE"
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    rejection_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
