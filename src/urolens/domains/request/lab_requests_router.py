@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -6,7 +6,9 @@ import random
 import uuid
 import logging
 
-from src.urolens.core.database import supabase 
+from app.middleware.rbac import RequireRole
+from src.urolens.core.database import supabase
+from src.urolens.core.enums import UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +17,8 @@ router = APIRouter(
     tags=["Lab Requests"]
 )
 
-CURRENT_ENCODER_ID = "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
+_receptionist = RequireRole([UserRole.RECEPTIONIST])
 
-# 1. CORE SYSTEM PHYSICIAN KEY MAP
-# Matches names to the user_id primary keys in your Supabase 'users' table
-PHYSICIAN_UUID_MAP = {
-    "Dr. Vince Serato": "2c1c8ecb-b751-42ce-b372-a82e304b1a65", # Replace with actual user_id from your DB if different
-    "Dr. Maria Santos": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-    "Dr. Juan Dela Cruz": "f4e3d2c1-b0a9-8m7n-6p5q-4r3s2t1u0v9w"
-}
 
 class LabRequestCreatePayload(BaseModel):
     patient_id: uuid.UUID
@@ -33,7 +28,7 @@ class LabRequestCreatePayload(BaseModel):
     clinical_notes: Optional[str] = None
 
 @router.get("/physicians", status_code=status.HTTP_200_OK)
-async def get_physicians_endpoint():
+async def get_physicians_endpoint(current_user: dict = Depends(_receptionist)):
     try:
         response = await supabase.table("users")\
             .select("user_id, username")\
@@ -54,14 +49,18 @@ async def get_physicians_endpoint():
         )
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_lab_request_endpoint(payload: LabRequestCreatePayload):
+async def create_lab_request_endpoint(
+    payload: LabRequestCreatePayload,
+    current_user: dict = Depends(_receptionist),
+):
     try:
+        encoder_id = current_user["user_id"]
         generated_request_uid = f"REQ-2026-{random.randint(10000, 99999)}"
         payload_data = payload.dict()
-        
+
         computed_id = payload_data.get("physician_id")
         computed_name = payload_data.get("physician_name")
-        
+
         if computed_id and not computed_name:
             user_query = await supabase.table("users")\
                 .select("username")\
@@ -79,9 +78,9 @@ async def create_lab_request_endpoint(payload: LabRequestCreatePayload):
             "test_type": payload_data.get("test_type").upper().replace(" ", "_"),
             "clinical_notes": payload_data.get("clinical_notes"),
             "status": "PENDING_SAMPLE",
-            "encoded_by": CURRENT_ENCODER_ID
+            "encoded_by": encoder_id
         }
-        
+
         response = await supabase.table("lab_requests").insert(lab_request_record).execute()
         return {
             "success": True,

@@ -1,10 +1,13 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Header, Body
+from fastapi import APIRouter, HTTPException, status, Depends, Body
 from pydantic import BaseModel
 from typing import Optional
 import uuid
 import logging
 from datetime import datetime
+
+from app.middleware.rbac import RequireRole
 from src.urolens.core.database import supabase
+from src.urolens.core.enums import UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -13,24 +16,15 @@ router = APIRouter(
     tags=["Sample Labeling Tracking"]
 )
 
-def get_current_user_id(x_user_id: Optional[str] = Header(None)) -> uuid.UUID:
-    fallback_id = "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
-    target_id = x_user_id or fallback_id
-    try:
-        return uuid.UUID(target_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Malformed context header: User identity cannot be evaluated structurally."
-        )
+_medtech = RequireRole([UserRole.MEDTECH])
 
-# ← ADD THIS
+
 class ConfirmPayload(BaseModel):
     offline_override: bool = False
 
 
 @router.get("/search-received")
-async def search_received_specimens(q: str):
+async def search_received_specimens(q: str, current_user: dict = Depends(_medtech)):
     from src.urolens.core.encryption import decrypt_pii
     try:
         q_lower = q.strip().lower()
@@ -71,9 +65,11 @@ async def search_received_specimens(q: str):
 @router.post("/{id}/label", status_code=status.HTTP_201_CREATED)
 async def generate_specimen_label_endpoint(
     id: uuid.UUID,
-    operator_id: uuid.UUID = Depends(get_current_user_id)
+    current_user: dict = Depends(_medtech),
 ):
     try:
+        operator_id = uuid.UUID(current_user["user_id"])
+
         spec_query = await supabase.table("specimens").select("*").eq("specimen_id", str(id)).single().execute()
         if not spec_query.data:
             raise HTTPException(status_code=404, detail="Specimen record not found.")
@@ -132,9 +128,12 @@ async def generate_specimen_label_endpoint(
 @router.post("/{id}/label/confirm")
 async def confirm_label_affixed_endpoint(
     id: uuid.UUID,
-    payload: ConfirmPayload = Body(...)
+    current_user: dict = Depends(_medtech),
+    payload: ConfirmPayload = Body(...),
 ):
     try:
+        operator_id = current_user["user_id"]
+
         label_query = await supabase.table("sample_labels")\
             .select("label_id")\
             .eq("specimen_id", str(id))\
@@ -174,7 +173,7 @@ async def confirm_label_affixed_endpoint(
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "offline_override": True
                 },
-                "generated_by": "2c1c8ecb-b751-42ce-b372-a82e304b1a65"
+                "generated_by": operator_id
             }
             label_tx = await supabase.table("sample_labels").insert(offline_label).execute()
             if not label_tx.data:
