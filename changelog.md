@@ -1003,3 +1003,71 @@ individually and separately verified.
   `domains/intake/service.py`, and the deleted `ResultRelease` model.
 - `alembic heads` — single head (`0034`) — confirmed unaffected by the
   `ResultRelease` model deletion.
+
+## Barrel indexing for `src/urolens/` (standards rule 6)
+
+Rule 6 says each package's public API should go through its `__init__.py`,
+imported from that surface rather than a sibling package's internal file.
+Only `models/__init__.py` did this before now (re-exporting all 23 ORM
+models, so Alembic's `Base.metadata` sees every table); `core/`,
+`services/`, `api/`, `schemas/`, and `domains/` were all docstring-only. A
+read-only import-graph investigation confirmed this was safe to add for
+most of the tree — no cycles anywhere (`core`/`models`/`schemas` are
+leaves; `services` depends only on those three; `api`/`domains` depend on
+`services`) — with two real wrinkles that shaped scope, both resolved by
+explicit decision rather than guessed at.
+
+### Added
+- **`core/__init__.py`, `services/__init__.py`, `schemas/__init__.py`** now
+  re-export their packages' public surface, in three separately-verified
+  commits. `services/__init__.py` excludes module-scoped loggers
+  (`log`/`logger`, defined under the same name in six different modules)
+  and internal constants (`MIN_WIDTH`, `EXPO_PUSH_URL`, etc.) — neither is
+  public API, and the loggers specifically would silently collide.
+  `schemas/__init__.py` excludes two pairs of same-named-but-different
+  classes (`LabRequestCreateRequest`: `lab_request.py` vs `physician.py`;
+  `ApprovedResultItem`: `result_releasing.py` vs `result_review.py`) rather
+  than rename or arbitrarily pick one — both stay submodule-import-only, as
+  before.
+- **`api/` and `domains/` were deliberately skipped.** Every one of their
+  14 router modules exports a symbol literally named `router` — a flat
+  barrel can't disambiguate that, and `main.py` already has its own
+  working alias-on-import convention for exactly this (`from
+  ...specimens_router import router as src_specimens_router`, etc.).
+  Nothing outside `main.py` imports from either package, so a barrel there
+  has no real consumer to serve.
+- **Scope is additive only.** None of the ~220 existing cross-package
+  import statements anywhere in the codebase were touched — every one
+  still imports directly from its submodule, exactly as before. Full rule-6
+  enforcement (migrating every caller to the new barrels) is explicit,
+  deliberate future work, not started here.
+
+### Noted, accepted as a deliberate tradeoff
+- **`core/`'s barrel makes it fully eager.** `core/config.py` already
+  validates `Settings` at import time (raising on a misconfigured secret),
+  and `core/supabase.py`/`core/database.py` already construct a live
+  Supabase client/DB engine at import time — but before this change,
+  importing the two side-effect-free leaves (`core.enums`, `core.exceptions`)
+  alone triggered none of that. Since Python must run a package's
+  `__init__.py` before any submodule import completes, a bare `from
+  src.urolens.core import UserRole` now transitively constructs all of it.
+  Not a regression — every real code path in this app already has env/config
+  available whenever any `core` symbol is used — but recorded here as a
+  verified, known timing change rather than a silent one.
+
+### Verified
+- `python -c "import main"` and the full test suite (20-failed/38-passed
+  original baseline) after each of the three commits — no new failures.
+  None of the 41 existing `unittest.mock.patch(...)` targets in `tests/`
+  were at risk, since every one targets a name inside the *consuming*
+  module's namespace, never a bare package path — confirmed by the
+  investigation before starting, and by the unchanged pass/fail count
+  after.
+- A targeted smoke import per package confirmed the new barrels actually
+  resolve: `from src.urolens.core import UserRole, RequireRole, settings,
+  AuditLogger`; `from src.urolens.services import PatientService,
+  QueueService, NotificationService`; `from src.urolens.schemas import
+  PatientResponse, LoginRequest`.
+- Grep-confirmed both excluded `schemas/` collision names
+  (`LabRequestCreateRequest`, `ApprovedResultItem`) are genuinely absent
+  from `schemas/__init__.py`'s import list, not accidentally included.
