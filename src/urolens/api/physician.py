@@ -1,16 +1,20 @@
 """Physician-portal routes: patient search, lab request creation, and result
 listing/detail."""
-from fastapi import APIRouter, Depends, Query, Request
+import uuid
 
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.urolens.core.database import get_db
 from src.urolens.core.rbac import RequireRole
+from src.urolens.schemas.lab_request import LabRequestCreateResponse
 from src.urolens.schemas.physician import (
     LabRequestCreateRequest,
-    LabRequestCreateResponse,
     PhysicianPatientItem,
     PhysicianResultDetail,
     PhysicianResultListResponse,
 )
-from src.urolens.services import physician_service, physician_result_service
+from src.urolens.services import lab_request_service, physician_service, physician_result_service
 
 router = APIRouter(prefix="/api/v1/physician", tags=["physician"])
 
@@ -31,14 +35,22 @@ async def create_lab_request(
     body: LabRequestCreateRequest,
     request: Request,
     claims: dict = Depends(_physician),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a lab request on behalf of the authenticated physician; see
-    `physician_service.create_lab_request`."""
-    return await physician_service.create_lab_request(
-        data=body,
-        physician_id=claims["user_id"],
-        physician_username=claims["username"],
-        request=request,
+    `lab_request_service.create_lab_request`."""
+    physician_id = uuid.UUID(claims["user_id"])
+    ip_address = request.client.host if request.client else None
+    return await lab_request_service.create_lab_request(
+        db,
+        encoded_by=physician_id,
+        patient_id=body.patient_id,
+        test_type=body.test_type,
+        clinical_notes=body.clinical_notes,
+        physician_id=physician_id,
+        physician_name=claims["username"],
+        notify_receptionists=True,
+        ip_address=ip_address,
     )
 
 
