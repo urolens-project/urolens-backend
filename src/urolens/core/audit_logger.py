@@ -1,3 +1,6 @@
+"""Audit-log writing: the single `audit_logs`-table code path (`AuditLogger.record`)
+plus a set of auth-flow convenience wrappers around it (login/logout/access-denied
+events)."""
 from __future__ import annotations
 
 import uuid
@@ -53,6 +56,13 @@ class AuditLogger:
 
 
 def get_audit_logger() -> AuditLogger:
+    """Return a new `AuditLogger` instance.
+
+    Returns:
+        A fresh `AuditLogger`. The class holds no state, so this is
+        equivalent to constructing one directly — provided as a FastAPI
+        dependency-friendly factory.
+    """
     return AuditLogger()
 
 
@@ -80,6 +90,7 @@ _audit_logger = AuditLogger()
 
 
 async def log_login_success(user_id, session_id, ip_address: str) -> None:
+    """Record a successful staff login as a `LOGIN_SUCCESS` audit entry."""
     await _audit_logger.record(
         event_type="LOGIN_SUCCESS",
         entity_type="auth",
@@ -91,6 +102,14 @@ async def log_login_success(user_id, session_id, ip_address: str) -> None:
 
 
 async def log_login_failed(ip_address: str, user_id=None) -> None:
+    """Record a failed staff login as a `LOGIN_FAILED` audit entry.
+
+    Args:
+        user_id: the matched user, if the username resolved but the password
+            check failed; `None` means the username itself didn't match a
+            user. Either way the entry's `reason` detail reflects which case
+            occurred.
+    """
     await _audit_logger.record(
         event_type="LOGIN_FAILED",
         entity_type="auth",
@@ -102,6 +121,7 @@ async def log_login_failed(ip_address: str, user_id=None) -> None:
 
 
 async def log_logout(user_id, session_id, ip_address: str) -> None:
+    """Record a staff logout as a `LOGOUT` audit entry."""
     await _audit_logger.record(
         event_type="LOGOUT",
         entity_type="auth",
@@ -113,6 +133,13 @@ async def log_logout(user_id, session_id, ip_address: str) -> None:
 
 
 async def log_access_denied(ip_address: str, user_id=None) -> None:
+    """Record a rejected auth attempt as an `ACCESS_DENIED` audit entry.
+
+    Args:
+        user_id: the claimed user, if known (e.g. from a JWT that failed
+            session-revocation checks); `None` when the request never
+            resolved to a user at all (e.g. an invalid/expired token).
+    """
     await _audit_logger.record(
         event_type="ACCESS_DENIED",
         entity_type="auth",
@@ -123,6 +150,7 @@ async def log_access_denied(ip_address: str, user_id=None) -> None:
 
 
 async def log_patient_login_success(user_id, patient_id, session_id, ip_address: str) -> None:
+    """Record a successful patient-portal login as a `PATIENT_LOGIN` audit entry."""
     await _audit_logger.record(
         event_type="PATIENT_LOGIN",
         entity_type="auth",
@@ -138,6 +166,13 @@ async def log_patient_login_success(user_id, patient_id, session_id, ip_address:
 
 
 async def log_patient_login_failed(ip_address: str, patient_id=None) -> None:
+    """Record a failed patient-portal login as a `PATIENT_LOGIN_FAILED` audit entry.
+
+    Args:
+        patient_id: the matched patient, if identification succeeded but a
+            later check (e.g. password) failed; omitted from the detail
+            payload when unknown.
+    """
     detail: dict = {}
     if patient_id:
         detail["patient_id"] = str(patient_id)
@@ -152,6 +187,7 @@ async def log_patient_login_failed(ip_address: str, patient_id=None) -> None:
 
 
 async def log_patient_logout(user_id, session_id, ip_address: str) -> None:
+    """Record a patient-portal logout as a `PATIENT_LOGOUT` audit entry."""
     await _audit_logger.record(
         event_type="PATIENT_LOGOUT",
         entity_type="auth",
