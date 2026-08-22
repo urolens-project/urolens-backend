@@ -1,3 +1,5 @@
+"""Lab-request creation/search and physician lookup for the receptionist/
+encoder intake flow."""
 from __future__ import annotations
 
 import random
@@ -34,12 +36,27 @@ async def _generate_request_uid(db: AsyncSession) -> str:
 
 
 async def get_physicians(db: AsyncSession) -> list[PhysicianItem]:
+    """List all active physicians, for populating a lab request's physician picker.
+
+    Returns:
+        One `PhysicianItem` per active physician user.
+    """
     stmt = select(User).where(User.role == "PHYSICIAN", User.is_active.is_(True))
     rows = (await db.execute(stmt)).scalars().all()
     return [PhysicianItem(user_id=u.user_id, username=u.username) for u in rows]
 
 
 async def search_pending_lab_requests(db: AsyncSession, q: str) -> list[LabRequestSearchItem]:
+    """Search `PENDING_SAMPLE` lab requests by request UID or physician name.
+
+    Args:
+        q: search text; a leading "Dr." is stripped before matching, and the
+            remainder is matched case-insensitively as a substring against
+            both `request_uid` and `physician_name`.
+
+    Returns:
+        Up to `_MAX_SEARCH_RESULTS` matching lab requests.
+    """
     clean_q = q.strip()
     if clean_q.lower().startswith("dr."):
         clean_q = clean_q[3:].strip()
@@ -74,6 +91,22 @@ async def create_lab_request(
     encoder_id: uuid.UUID,
     payload: LabRequestCreateRequest,
 ) -> LabRequestCreateResponse:
+    """Create a new lab request in `PENDING_SAMPLE` status.
+
+    Args:
+        encoder_id: the authenticated user recorded as `encoded_by`.
+        payload: request fields. If `physician_id` is given without
+            `physician_name`, the name is looked up from that physician's
+            user row.
+
+    Returns:
+        A response confirming creation, including the generated `request_uid`.
+
+    Raises:
+        HTTPException: 500, if a unique `request_uid` couldn't be generated
+            after `_UID_GENERATION_ATTEMPTS` retries (propagated from
+            `_generate_request_uid`).
+    """
     request_uid = await _generate_request_uid(db)
 
     computed_id = payload.physician_id

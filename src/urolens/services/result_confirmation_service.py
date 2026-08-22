@@ -1,4 +1,7 @@
 # Path: urolens-backend/src/urolens/services/result_confirmation_service.py
+"""MedTech result-confirmation transaction (T2.5): confirms an analysis
+result, settles particle_classes, triggers Smart Diagnosis, and notifies the
+supervisor — all as one unit of work."""
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -61,9 +64,17 @@ class ResultConfirmationService:
         """
         Confirms an analysis result and triggers Smart Diagnosis.
 
+        Args:
+            medtech_id: the authenticated user recorded as `confirmed_by`.
+
+        Returns:
+            The persisted `ResultConfirmation` row.
+
         Raises:
             NotFoundException: result_id does not exist.
-            ConflictException: result already confirmed.
+            ConflictException: result already confirmed — either because its
+                status already reflects confirmation, or because a concurrent
+                double-submit hit the DB's unique constraint first.
             UnprocessableException: a pending image retake blocks confirmation.
         """
         result = await self._get_result(result_id)
@@ -144,6 +155,8 @@ class ResultConfirmationService:
     # ------------------------------------------------------------------
 
     async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
+        # Loads the result with manual_overrides eagerly, or raises
+        # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist.
         stmt = select(AnalysisResult).options(
             selectinload(AnalysisResult.manual_overrides)
         ).where(AnalysisResult.result_id == result_id)

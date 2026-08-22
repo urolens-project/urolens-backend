@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 
 
 class ImageRetakeService:
+    """Handles the Retake flow: discarding the current image so a new one
+    can be uploaded, per the module docstring above."""
+
     async def discard_and_retake(
         self,
         image_id: uuid.UUID,

@@ -1,3 +1,6 @@
+"""Specimen intake: receiving a specimen against a lab request, listing, and
+the two distinct rejection flows (receiving-desk vs. post-assignment MedTech
+rejection)."""
 from __future__ import annotations
 
 import logging
@@ -48,6 +51,24 @@ async def receive_specimen(
     receptionist_id: uuid.UUID,
     payload: SpecimenReceiveRequest,
 ) -> SpecimenReceiveResponse:
+    """Record a specimen against its parent lab request, either as
+    `RECEIVED` (visual check passed, gets a generated `sample_uid`) or
+    `REJECTED` at the receiving desk (logged to `specimen_rejections`).
+
+    Args:
+        receptionist_id: the authenticated user recorded as `received_by`.
+
+    Returns:
+        Confirmation including the specimen's ID, sample UID (if received),
+        and resulting status.
+
+    Raises:
+        NotFoundException: `payload.lab_request_id` doesn't exist.
+        HTTPException: 400, if the visual check failed but
+            `payload.rejection_reason` is missing or not one of
+            `_VALID_REJECTION_REASONS`. 500, if unique sample UID generation
+            fails (propagated from `_generate_sample_uid`).
+    """
     lab_request = await db.get(LabRequest, payload.lab_request_id)
     if lab_request is None:
         raise NotFoundException(
@@ -121,6 +142,16 @@ async def receive_specimen(
 
 
 async def list_specimens(db: AsyncSession, status_filter: Optional[str]) -> list[SpecimenListItem]:
+    """List specimens, optionally filtered by status, with decrypted patient names.
+
+    Args:
+        status_filter: if given, matched case-insensitively against
+            `Specimen.status`; `None` returns all specimens.
+
+    Returns:
+        Matching specimens. A row whose `patient_name` fails to decrypt is
+        excluded rather than returned with ciphertext.
+    """
     stmt = select(Specimen)
     if status_filter:
         stmt = stmt.where(Specimen.status == status_filter.upper())
@@ -170,6 +201,19 @@ async def reject_specimen(
     ownership-check-in-service, not a role gate, so nothing else carried over).
     Distinct from the receiving-desk rejection in receive_specimen() above,
     which logs to specimen_rejections instead of these columns.
+
+    Args:
+        user_id: the authenticated MedTech; must match the specimen's
+            `medtech_id` (ownership check) or the call is rejected.
+
+    Returns:
+        Confirmation of the rejection, including the `rejected_at` timestamp.
+
+    Raises:
+        HTTPException: 422, if `reason_code` isn't a valid reason. 403, if
+            the specimen isn't assigned to `user_id`.
+        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        ConflictException: the specimen is already rejected.
     """
     if reason_code not in _VALID_REJECTION_REASONS:
         raise HTTPException(

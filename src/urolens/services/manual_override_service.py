@@ -1,3 +1,6 @@
+"""Manual parameter override transaction (T2.6): lets a MedTech correct a
+single AI-generated result parameter, recording both the original and
+corrected values."""
 import uuid
 from fastapi import Request
 from sqlalchemy import select
@@ -39,6 +42,21 @@ class ManualOverrideService:
         """
         Records a MedTech correction for a single AI-generated parameter.
         The system uses the db-extracted original value as a secure source of truth.
+
+        Args:
+            original_ai_value: accepted to match the router's argument
+                contract but not trusted — the value actually stored is
+                read fresh from the DB via `_extract_original_value`.
+            medtech_id: the authenticated user recorded as the override's author.
+
+        Returns:
+            The persisted `ManualOverride` row.
+
+        Raises:
+            NotFoundException: `result_id` doesn't match any analysis result.
+            UnprocessableException: the result has already been finalised
+                (`APPROVED`/`RETURNED_FOR_CORRECTION`), or `parameter` isn't
+                present in the result's AI findings.
         """
         result = await self._get_result(result_id)
 

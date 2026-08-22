@@ -187,6 +187,7 @@ class AIIntegrationService:
     def _build_storage_key(
         self, specimen_id: uuid.UUID, image_id: uuid.UUID, content_type: str
     ) -> str:
+        # Builds the Supabase Storage object path for an uploaded image.
         ext = MIME_TO_EXT[content_type]
         return f"specimens/{specimen_id}/images/{image_id}.{ext}"
 
