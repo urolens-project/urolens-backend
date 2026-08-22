@@ -45,8 +45,8 @@ class Settings(BaseModel):
     """
 
     # ── Supabase ──────────────────────────────────────────────────────────
-    supabase_url: str | None = None
-    supabase_service_key: str | None = None
+    supabase_url: str
+    supabase_service_key: str
     supabase_image_bucket: str = "microscopy"
 
     # ── Database ──────────────────────────────────────────────────────────
@@ -112,6 +112,20 @@ def _load_settings() -> Settings:
             "Set a strong, random JWT_SIGNING_KEY in the environment before starting the app."
         )
 
+    supabase_url = os.getenv("SUPABASE_URL") or ""
+    if not supabase_url:
+        raise RuntimeError(
+            "SUPABASE_URL is unset. Set your Supabase project URL in the environment "
+            "before starting the app — several services still read/write via Supabase REST."
+        )
+
+    supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY") or ""
+    if not supabase_service_key:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_KEY is unset. Set your Supabase service-role key in the "
+            "environment before starting the app — several services still read/write via Supabase REST."
+        )
+
     encryption_key = os.getenv("ENCRYPTION_KEY", "")
     if not encryption_key:
         raise RuntimeError(
@@ -120,8 +134,8 @@ def _load_settings() -> Settings:
         )
 
     return Settings(
-        supabase_url=os.getenv("SUPABASE_URL"),
-        supabase_service_key=os.getenv("SUPABASE_SERVICE_KEY"),
+        supabase_url=supabase_url,
+        supabase_service_key=supabase_service_key,
         supabase_image_bucket=os.getenv("SUPABASE_IMAGE_BUCKET", "microscopy"),
         database_url=database_url,
         async_database_url=_to_async_database_url(database_url),

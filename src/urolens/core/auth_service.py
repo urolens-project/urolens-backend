@@ -86,7 +86,9 @@ async def reset_failed_attempts(user_id) -> None:
     ).eq("user_id", str(user_id)).execute()
 
 
-async def create_session(user_id, role: str, ip_address: str = None, user_agent: str = None) -> dict:
+async def create_session(
+    user_id, role: str, ip_address: str | None = None, user_agent: str | None = None
+) -> dict:
     """Insert a new active row into the `sessions` table for a login.
 
     Returns:
