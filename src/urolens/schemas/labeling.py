@@ -1,3 +1,4 @@
+"""Specimen labeling request/response shapes; see `services/labeling_service.py`."""
 from __future__ import annotations
 
 from typing import Optional
@@ -7,6 +8,8 @@ from pydantic import BaseModel
 
 
 class ReceivedSpecimenSearchItem(BaseModel):
+    """One `RECEIVED`-status specimen, for the label-generation search."""
+
     specimen_id: UUID
     sample_uid: Optional[str] = None
     patient_name: str
@@ -16,6 +19,8 @@ class ReceivedSpecimenSearchItem(BaseModel):
 
 
 class LabelPreviewData(BaseModel):
+    """The printable content of a generated specimen label."""
+
     patient_name: str
     patient_uid: Optional[str] = None
     sample_uid: Optional[str] = None
@@ -24,6 +29,8 @@ class LabelPreviewData(BaseModel):
 
 
 class PrintLabelResponse(BaseModel):
+    """Response body confirming a generated label and its print job."""
+
     success: bool
     label_id: UUID
     print_job_id: UUID
@@ -31,10 +38,14 @@ class PrintLabelResponse(BaseModel):
 
 
 class LabelConfirmRequest(BaseModel):
+    """Request body for confirming a label has been physically affixed."""
+
     offline_override: bool = False
 
 
 class LabelConfirmResponse(BaseModel):
+    """Response body confirming the specimen's advance to `LABELED` status."""
+
     success: bool
     message: str
     updated_status: str
