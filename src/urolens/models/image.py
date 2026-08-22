@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .specimen import Specimen
 
 
-class ImageStatus(str, enum.Enum):
+class ImageStatus(enum.StrEnum):
     """Lifecycle states for an uploaded microscopy image; see `Image.status`."""
 
     ACTIVE = "ACTIVE"

@@ -4,10 +4,13 @@ SQLAlchemy version) — consolidated away; physicians now go through
 `lab_request_service.create_lab_request` directly (see changelog.md's
 "Duplicate lab-request creation implementations" entry).
 """
+import logging
+
 from src.urolens.core.encryption import decrypt_pii
 from src.urolens.core.supabase import supabase
 from src.urolens.schemas.physician import PhysicianPatientItem
 
+logger = logging.getLogger(__name__)
 
 async def search_patients(q: str) -> list[PhysicianPatientItem]:
     """Search patients by first/last name (case-insensitive substring match).
@@ -34,6 +37,7 @@ async def search_patients(q: str) -> list[PhysicianPatientItem]:
             first = decrypt_pii(row["first_name"])
             last = decrypt_pii(row["last_name"])
         except Exception:
+            logger.exception("PII decrypt failed for patient row %s", row["patient_id"])
             continue
         if q_lower in first.lower() or q_lower in last.lower():
             try:

@@ -1,0 +1,39 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff-check
+        stages: [pre-commit]
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: local
+    hooks:
+      - id: forbid-env-files
+        name: block .env files from being committed
+        entry: .env files must never be committed
+        language: fail
+        files: '(^|/)\.env($|\.)'
+        exclude: '(^|/)\.env\.example$'
+
+      - id: capitalized-commit-subject
+        name: commit subject must start with a capital letter
+        language: pygrep
+        entry: '\A(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: [a-z]'
+        args: [--multiline]
+        stages: [commit-msg]
