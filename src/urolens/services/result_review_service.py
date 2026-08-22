@@ -45,10 +45,10 @@ from ..models.result_review import ResultReview
 from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
+from ..schemas.result_review import VALID_ESCALATION_PATHS
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
-VALID_ESCALATION_PATHS = {"NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"}
 
 
 def _compute_age(dob_str: Optional[str]) -> Optional[int]:
