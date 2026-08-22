@@ -14,17 +14,14 @@ distinct two-segment shape and isn't at risk of the same collision, but
 stays grouped with the other `/{result_id}/...` routes above the catch-all
 for readability.
 
-`ConfirmResultResponse`/`OverrideRequest`/`OverrideResponse` are defined
-inline here rather than in `schemas/`, which is a pre-existing rule-11 gap —
-not fixed as part of this documentation-only pass; see the flagged-findings
-changelog entry.
+`ConfirmResultResponse`/`OverrideRequest`/`OverrideResponse` used to be
+defined inline here rather than in `schemas/`; moved into
+`schemas/result_review.py` (see changelog.md's "Inline Pydantic schemas
+outside schemas/" entry).
 """
 import uuid
-from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger, get_audit_logger
@@ -37,10 +34,13 @@ from ..schemas.result_review import (
     ApproveRequest,
     ApproveResponse,
     ApprovedTodayListResponse,
+    ConfirmResultResponse,
     EscalateRequest,
     EscalateResponse,
     EscalatedListResponse,
     FullResultDetail,
+    OverrideRequest,
+    OverrideResponse,
     PendingResultListResponse,
     ReturnRequest,
     ReturnResponse,
@@ -56,52 +56,6 @@ from ..services.smart_diagnosis_service import SmartDiagnosisService
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
 _supervisor = RequireRole([UserRole.SUPERVISOR])
-
-
-# ── Pydantic schemas ──────────────────────────────────────────────────────────
-
-class ConfirmResultResponse(BaseModel):
-    """Response shape for a successful result confirmation."""
-
-    id: uuid.UUID
-    result_id: uuid.UUID
-    confirmed_by: uuid.UUID
-    confirmed_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class OverrideRequest(BaseModel):
-    """Request body for overriding a single AI-generated result parameter."""
-
-    parameter: str = Field(..., min_length=1, max_length=100)
-    corrected_value: float = Field(..., ge=0)
-    rationale: Optional[str] = Field("No rationale provided", max_length=2000)
-    original_ai_value: float = Field(..., ge=0)
-
-    @field_validator("parameter")
-    @classmethod
-    def parameter_no_whitespace_only(cls, v: str) -> str:
-        """Reject a `parameter` that is blank or whitespace-only; strips
-        surrounding whitespace otherwise."""
-        if not v.strip():
-            raise ValueError("parameter must not be blank")
-        return v.strip()
-
-
-class OverrideResponse(BaseModel):
-    """Response shape for a successful parameter override."""
-
-    id: uuid.UUID
-    result_id: uuid.UUID
-    parameter: str
-    original_ai_value: float
-    corrected_value: float
-    rationale: str
-    overridden_by: uuid.UUID
-    overridden_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 # ── Dependency factories (DIP) ────────────────────────────────────────────────

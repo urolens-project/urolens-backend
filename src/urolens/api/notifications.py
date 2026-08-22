@@ -1,13 +1,7 @@
-"""In-app notification routes and Expo push-token registration.
-
-`NotificationOut`/`PushTokenRequest` are defined inline here rather than in
-`schemas/`, which is a pre-existing rule-11 gap — not fixed as part of this
-documentation-only pass; see the flagged-findings changelog entry."""
+"""In-app notification routes and Expo push-token registration."""
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,27 +10,9 @@ from ..core.enums import UserRole
 from ..core.rbac import RequireRole, get_current_user
 from ..models.notification import Notification
 from ..models.user import User
+from ..schemas.notifications import NotificationOut, PushTokenRequest
 
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
-
-
-class NotificationOut(BaseModel):
-    """Response shape for a single notification row."""
-
-    notification_id: uuid.UUID
-    message: str
-    notification_type: str
-    entity_id: uuid.UUID | None
-    is_read: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class PushTokenRequest(BaseModel):
-    """Request body for registering a device's Expo push token."""
-
-    token: str
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
