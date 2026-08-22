@@ -14,20 +14,21 @@ from sqlalchemy.sql import func
 from .base import Base
 
 if TYPE_CHECKING:
-    from .specimen import Specimen
-    from .image import Image
-    from .result_confirmation import ResultConfirmation
-    from .manual_override import ManualOverride
-    from .smart_diagnosis_output import SmartDiagnosisOutput
     from .engine_error_log import EngineErrorLog
-    from .result_view import ResultView
+    from .image import Image
+    from .manual_override import ManualOverride
     from .patient import Patient
+    from .result_confirmation import ResultConfirmation
+    from .result_view import ResultView
+    from .smart_diagnosis_output import SmartDiagnosisOutput
+    from .specimen import Specimen
     from .user import User
 
 
 class ResultStatus(str, enum.Enum):
     """Lifecycle states for an `AnalysisResult`, spanning the confirm ->
-    override -> approve -> release chain plus retake/escalation/failure exits."""
+    override -> approve -> release chain plus retake/escalation/failure exits.
+    """
 
     PENDING_CONFIRM = "PENDING_CONFIRM"
     PENDING_SUPERVISOR_APPROVAL = "PENDING_SUPERVISOR_APPROVAL"
@@ -40,8 +41,7 @@ class ResultStatus(str, enum.Enum):
 
 
 class AnalysisResult(Base):
-    """
-    AI inference output attached to a specimen. The central record of the
+    """AI inference output attached to a specimen. The central record of the
     MedTech and Supervisor workflows. One row per specimen.
     Source: Migration 0014 — T2.5, T2.6, T3.1, T3.2, T3.3, T3.4, T3.5.
 
@@ -143,27 +143,27 @@ class AnalysisResult(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    specimen: Mapped["Specimen"] = relationship(back_populates="analysis_result")
-    image: Mapped["Image | None"] = relationship(back_populates="analysis_result")
-    confirmation: Mapped["ResultConfirmation | None"] = relationship(
+    specimen: Mapped[Specimen] = relationship(back_populates="analysis_result")
+    image: Mapped[Image | None] = relationship(back_populates="analysis_result")
+    confirmation: Mapped[ResultConfirmation | None] = relationship(
         back_populates="analysis_result", uselist=False
     )
-    manual_overrides: Mapped[list["ManualOverride"]] = relationship(
+    manual_overrides: Mapped[list[ManualOverride]] = relationship(
         back_populates="analysis_result"
     )
-    smart_diagnosis_output: Mapped["SmartDiagnosisOutput | None"] = relationship(
+    smart_diagnosis_output: Mapped[SmartDiagnosisOutput | None] = relationship(
         back_populates="analysis_result", uselist=False
     )
-    engine_error_logs: Mapped[list["EngineErrorLog"]] = relationship(
+    engine_error_logs: Mapped[list[EngineErrorLog]] = relationship(
         back_populates="analysis_result"
     )
-    result_views: Mapped[list["ResultView"]] = relationship(
+    result_views: Mapped[list[ResultView]] = relationship(
         back_populates="analysis_result"
     )
-    patient: Mapped["Patient | None"] = relationship(
+    patient: Mapped[Patient | None] = relationship(
         back_populates="analysis_results"
     )
-    medtech: Mapped["User | None"] = relationship(
+    medtech: Mapped[User | None] = relationship(
         foreign_keys=[medtech_id]
     )
 

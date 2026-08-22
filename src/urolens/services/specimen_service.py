@@ -1,20 +1,24 @@
 """Specimen intake: receiving a specimen against a lab request, listing, and
 the two distinct rejection flows (receiving-desk vs. post-assignment MedTech
-rejection)."""
+rejection).
+"""
 from __future__ import annotations
 
 import logging
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.encryption import decrypt_pii, encrypt_pii
-from ..core.exceptions import ConflictException, NotFoundException, SpecimenNotFoundError
+from ..core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    SpecimenNotFoundError,
+)
 from ..models.lab_request import LabRequest
 from ..models.patient import Patient
 from ..models.specimen import Specimen
@@ -36,7 +40,8 @@ _UID_GENERATION_ATTEMPTS = 5
 async def _generate_sample_uid(db: AsyncSession) -> str:
     """Retry-on-collision UID generation, matching physician_service.py's
     _generate_request_uid pattern — the correct existing example in this
-    codebase (real-date-based, checked against the table before use)."""
+    codebase (real-date-based, checked against the table before use).
+    """
     date_str = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
         uid = f"SMP-{date_str}-{random.randint(10000, 99999)}"
@@ -141,7 +146,7 @@ async def receive_specimen(
     )
 
 
-async def list_specimens(db: AsyncSession, status_filter: Optional[str]) -> list[SpecimenListItem]:
+async def list_specimens(db: AsyncSession, status_filter: str | None) -> list[SpecimenListItem]:
     """List specimens, optionally filtered by status, with decrypted patient names.
 
     Args:
@@ -193,8 +198,7 @@ async def reject_specimen(
     reason_code: str,
     free_text_note: str | None,
 ) -> SpecimenRejectResponse:
-    """
-    Post-assignment MedTech rejection of an already-received specimen.
+    """Post-assignment MedTech rejection of an already-received specimen.
 
     Ported from app/services/specimen_service.py (Track A2 audit confirmed this
     was the only surviving logic in that module — its auth pattern was

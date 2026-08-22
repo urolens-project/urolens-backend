@@ -1,5 +1,6 @@
 """Physician-portal routes: patient search, lab request creation, and result
-listing/detail."""
+listing/detail.
+"""
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -14,7 +15,11 @@ from src.urolens.schemas.physician import (
     PhysicianResultDetail,
     PhysicianResultListResponse,
 )
-from src.urolens.services import lab_request_service, physician_service, physician_result_service
+from src.urolens.services import (
+    lab_request_service,
+    physician_result_service,
+    physician_service,
+)
 
 router = APIRouter(prefix="/api/v1/physician", tags=["physician"])
 
@@ -38,7 +43,8 @@ async def create_lab_request(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a lab request on behalf of the authenticated physician; see
-    `lab_request_service.create_lab_request`."""
+    `lab_request_service.create_lab_request`.
+    """
     physician_id = uuid.UUID(claims["user_id"])
     ip_address = request.client.host if request.client else None
     return await lab_request_service.create_lab_request(
@@ -61,7 +67,8 @@ async def list_my_results(
     claims: dict = Depends(_physician),
 ):
     """List the authenticated physician's results; see
-    `physician_result_service.list_results`."""
+    `physician_result_service.list_results`.
+    """
     return await physician_result_service.list_results(
         physician_id=claims["user_id"],
         page=page,
@@ -76,7 +83,8 @@ async def get_result_detail(
     claims: dict = Depends(_physician),
 ):
     """Fetch one result's detail for the authenticated physician; see
-    `physician_result_service.get_result_detail`."""
+    `physician_result_service.get_result_detail`.
+    """
     return await physician_result_service.get_result_detail(
         result_id=result_id,
         physician_id=claims["user_id"],

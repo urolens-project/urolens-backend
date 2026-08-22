@@ -1,8 +1,8 @@
 """The canonical, session-revocation-aware auth/RBAC dependencies. Every
 protected route should depend on `RequireRole` (which itself depends on
 `get_current_user`), never re-implement token decoding or role checks
-inline."""
-from typing import List
+inline.
+"""
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -69,7 +69,7 @@ class RequireRole:
             case-insensitively against the caller's `role` claim.
     """
 
-    def __init__(self, allowed_roles: List[str]):
+    def __init__(self, allowed_roles: list[str]):
         self.allowed_roles = allowed_roles
 
     async def __call__(self, request: Request, current_user: dict = Depends(get_current_user)) -> dict:

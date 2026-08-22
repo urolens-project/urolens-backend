@@ -2,7 +2,8 @@
 too (a separate Supabase-REST implementation of `lab_request_service.py`'s
 SQLAlchemy version) — consolidated away; physicians now go through
 `lab_request_service.create_lab_request` directly (see changelog.md's
-"Duplicate lab-request creation implementations" entry)."""
+"Duplicate lab-request creation implementations" entry).
+"""
 from src.urolens.core.encryption import decrypt_pii
 from src.urolens.core.supabase import supabase
 from src.urolens.schemas.physician import PhysicianPatientItem

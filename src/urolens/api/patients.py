@@ -28,7 +28,8 @@ async def create_patient(
     service: PatientService = Depends(get_patient_service),
 ):
     """Create a patient record with a linked portal account; see
-    `PatientService.create_patient`."""
+    `PatientService.create_patient`.
+    """
     return await service.create_patient(data, current_user["user_id"], request)
 
 

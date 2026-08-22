@@ -1,7 +1,7 @@
 """Specimen labeling routes (MedTech-facing): label search, generation, and
-affixed confirmation."""
+affixed confirmation.
+"""
 import uuid
-from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends
@@ -26,14 +26,15 @@ router = APIRouter(
 _medtech = RequireRole([UserRole.MEDTECH])
 
 
-@router.get("/search-received", response_model=List[ReceivedSpecimenSearchItem])
+@router.get("/search-received", response_model=list[ReceivedSpecimenSearchItem])
 async def search_received_specimens(
     q: str,
     current_user: dict = Depends(_medtech),
     db: AsyncSession = Depends(get_db),
 ):
     """Search `RECEIVED` specimens by name/UID; see
-    `labeling_service.search_received_specimens`."""
+    `labeling_service.search_received_specimens`.
+    """
     return await labeling_service.search_received_specimens(db, q)
 
 
@@ -56,7 +57,8 @@ async def confirm_label_affixed_endpoint(
     payload: LabelConfirmRequest = Body(...),
 ):
     """Confirm a label is physically affixed; see
-    `labeling_service.confirm_label_affixed`."""
+    `labeling_service.confirm_label_affixed`.
+    """
     operator_id = uuid.UUID(current_user["user_id"])
     return await labeling_service.confirm_label_affixed(
         db, id, operator_id, payload.offline_override

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from src.urolens.core.supabase import supabase
 
@@ -60,7 +60,7 @@ async def seed():
     lab_request_ids = [r["lab_request_id"] for r in lab_reqs.data]
     print(f"Found {len(lab_request_ids)} lab_request(s) to use\n")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for i, spec in enumerate(SPECIMENS):
         # Skip if already seeded

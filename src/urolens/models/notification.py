@@ -1,7 +1,8 @@
 """ORM model for the `notifications` table."""
-from sqlalchemy import Boolean, Column, ForeignKey, Text, VARCHAR, TIMESTAMP
+from sqlalchemy import TIMESTAMP, VARCHAR, Boolean, Column, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
+
 from .base import Base
 
 

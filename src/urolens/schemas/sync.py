@@ -6,7 +6,8 @@ from pydantic import BaseModel
 
 class TableChanges(BaseModel):
     """Created/updated rows for one table in a sync response. Exactly one of
-    `created`/`updated` is populated per `sync_service.pull`'s full-vs-delta rule."""
+    `created`/`updated` is populated per `sync_service.pull`'s full-vs-delta rule.
+    """
 
     created: list[Any]
     updated: list[Any]

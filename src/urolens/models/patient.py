@@ -2,21 +2,23 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from sqlalchemy import Boolean, Column, ForeignKey, Text, VARCHAR, TIMESTAMP
+
+from sqlalchemy import TIMESTAMP, VARCHAR, Boolean, Column, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from .base import Base
 
 if TYPE_CHECKING:
-    from .analysis_result import AnalysisResult
-    from .result_view import ResultView
+    pass
 
 
 class Patient(Base):
     """A patient record, created by `PatientService.create_patient`. PII
     fields (`first_name`, `last_name`, `date_of_birth`, `contact_no`,
-    `address`) are Fernet-encrypted ciphertext, not plaintext."""
+    `address`) are Fernet-encrypted ciphertext, not plaintext.
+    """
 
     __tablename__ = "patients"
 

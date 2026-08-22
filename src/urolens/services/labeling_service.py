@@ -1,10 +1,11 @@
 """Specimen label generation, printing, and affixed-confirmation for the
-receptionist/encoder intake flow."""
+receptionist/encoder intake flow.
+"""
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -28,8 +29,7 @@ _MAX_SEARCH_RESULTS = 5
 
 
 def _decrypt_patient_name_or_raise(specimen: Specimen) -> str:
-    """
-    A printed specimen label with the wrong patient name is a patient-safety
+    """A printed specimen label with the wrong patient name is a patient-safety
     issue, not just a display bug — unlike search (which can drop a bad row),
     label generation must surface a decryption failure loudly rather than
     silently falling back to ciphertext or an empty string.
@@ -218,7 +218,7 @@ async def confirm_label_affixed(
 
     specimen.status = "LABELED"
     label.affixed_confirmed = True
-    label.affixed_at = datetime.now(timezone.utc)
+    label.affixed_at = datetime.now(UTC)
 
     await db.commit()
 

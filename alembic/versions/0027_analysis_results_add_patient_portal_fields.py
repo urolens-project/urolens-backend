@@ -7,9 +7,10 @@ Create Date: 2026-05-26
 Source: Migration 0015 — STORY-WEB-16 Patient Result Viewing
 Depends on: analysis_results (0014), patients (0004), users (0001)
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0027"
 down_revision = "0021"

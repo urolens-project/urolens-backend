@@ -40,7 +40,8 @@ class PatientCreateRequest(BaseModel):
 class PatientResponse(BaseModel):
     """Response body for a patient record. `portal_username`/`portal_password`
     are populated only on creation (the one-time plaintext password isn't
-    re-derivable afterward)."""
+    re-derivable afterward).
+    """
 
     patient_id: UUID
     patient_uid: str

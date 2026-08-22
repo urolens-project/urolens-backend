@@ -1,23 +1,24 @@
 """Patient-portal authentication: patients log in with their patient UID and
 a password derived from their (decrypted) last name + date of birth, rather
-than a stored credential."""
+than a stored credential.
+"""
 import asyncio
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import HTTPException, Request, status
 
 from src.urolens.core import audit_logger
-from src.urolens.core.config import settings
-from src.urolens.core.encryption import decrypt_pii
-from src.urolens.core.supabase import supabase
 from src.urolens.core.auth_service import (
     close_session,
     create_session,
     increment_failed_attempts,
     reset_failed_attempts,
 )
+from src.urolens.core.config import settings
+from src.urolens.core.encryption import decrypt_pii
+from src.urolens.core.supabase import supabase
 from src.urolens.schemas.auth import PatientLoginResponse
 
 _PATIENT_TOKEN_EXPIRE_MINUTES = 30
@@ -52,7 +53,7 @@ def _derive_patient_password(last_name: str, date_of_birth: str) -> str:
 def _issue_patient_jwt(user_id, patient_uid: str, session_id) -> str:
     # Same shape/signing as core.auth_service.issue_jwt, hardcoded to the
     # PATIENT role and a shorter expiry (_PATIENT_TOKEN_EXPIRE_MINUTES).
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "user_id": str(user_id),
         "username": patient_uid,

@@ -5,7 +5,8 @@ lab-request creation implementations" entry). Physician-facing callers pass
 their own identity as `physician_id`/`physician_name` and
 `notify_receptionists=True`; receptionist-facing callers pass whatever
 physician was specified on the intake form (if any) and
-`notify_receptionists=False`."""
+`notify_receptionists=False`.
+"""
 from __future__ import annotations
 
 import random
@@ -33,7 +34,8 @@ _MAX_SEARCH_RESULTS = 5
 async def _generate_request_uid(db: AsyncSession) -> str:
     """Retry-on-collision UID generation — same pattern as
     app/services/physician_service.py's _generate_request_uid, the correct
-    existing example in this codebase (real-date-based, checked before use)."""
+    existing example in this codebase (real-date-based, checked before use).
+    """
     date_str = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
         uid = f"REQ-{date_str}-{random.randint(10000, 99999)}"

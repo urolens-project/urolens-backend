@@ -1,13 +1,11 @@
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException, status
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
-from src.urolens.core.enums import UserRole
-from src.urolens.schemas.queue import MedTechWorkload, QueueAssignRequest
+from src.urolens.schemas.queue import QueueAssignRequest
 from src.urolens.services.notification_service import NotificationService
 from src.urolens.services.queue_service import QueueService
 
@@ -130,7 +128,7 @@ class TestAssignSpecimen:
             "specimen_id": str(sid),
             "medtech_id": str(mid),
             "assigned_by": str(uuid.uuid4()),
-            "assigned_at": datetime.now(timezone.utc).isoformat(),
+            "assigned_at": datetime.now(UTC).isoformat(),
             "status": "ACTIVE",
         }])
 
@@ -159,7 +157,7 @@ class TestAssignSpecimen:
                     "specimen_id": str(specimen_id),
                     "medtech_id": str(medtech_id),
                     "assigned_by": str(assigned_by),
-                    "assigned_at": datetime.now(timezone.utc).isoformat(),
+                    "assigned_at": datetime.now(UTC).isoformat(),
                     "status": "ACTIVE",
                 }])
             elif table_name == "specimens" and call_order.count("specimens") == 2:
@@ -394,7 +392,7 @@ class TestAssignSpecimen:
                         "specimen_id": str(specimen_id),
                         "medtech_id": str(medtech_id),
                         "assigned_by": str(assigned_by),
-                        "assigned_at": datetime.now(timezone.utc).isoformat(),
+                        "assigned_at": datetime.now(UTC).isoformat(),
                         "status": "ACTIVE",
                     }])
                 )

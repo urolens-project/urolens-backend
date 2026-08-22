@@ -1,5 +1,4 @@
-"""
-Shared fixtures for image-upload / AI-inference integration tests.
+"""Shared fixtures for image-upload / AI-inference integration tests.
 
 Architecture
 ------------
@@ -13,7 +12,7 @@ Architecture
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
@@ -21,11 +20,9 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from src.urolens.core.config import settings
-
 # Import app after env is loaded (main.py calls load_dotenv at top)
 from main import app
-
+from src.urolens.core.config import settings
 
 # ── Fixed IDs ────────────────────────────────────────────────────────────────
 
@@ -39,7 +36,7 @@ TEST_RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
 
 @pytest.fixture
 def medtech_token() -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "user_id": str(MEDTECH_USER_ID),
         "role": "MEDTECH",
@@ -57,8 +54,7 @@ def test_specimen() -> uuid.UUID:
 
 @pytest_asyncio.fixture(autouse=True)
 async def mock_session_active():
-    """
-    The canonical auth dependency (src.urolens.core.rbac, adopted by image.py
+    """The canonical auth dependency (src.urolens.core.rbac, adopted by image.py
     in the image/AI domain merge) checks session revocation via
     is_session_active(), which hits Supabase — unlike the old non-canonical
     dependency these tests were originally written against, which only
@@ -75,8 +71,7 @@ def _make_sb_mock(
     images_rows: list[dict] | None = None,
     analysis_rows: list[dict] | None = None,
 ) -> MagicMock:
-    """
-    Build a mock Supabase client whose chained call pattern mirrors the real
+    """Build a mock Supabase client whose chained call pattern mirrors the real
     async client:  sb.table(name).select(...).eq(...).execute()  → APIResponse
 
     Parameters
@@ -145,8 +140,7 @@ async def async_client():
 
 @pytest_asyncio.fixture
 async def client_with_mock_sb(async_client):
-    """
-    Yields (async_client, sb_mock).
+    """Yields (async_client, sb_mock).
 
     Patches both the image-router and the retake-service Supabase references so
     both use the same mock instance. Starts with no existing DB rows (empty

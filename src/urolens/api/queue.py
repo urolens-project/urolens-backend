@@ -1,5 +1,6 @@
 """MedTech queue routes (receptionist-facing): pending specimens, workloads,
-and assignment."""
+and assignment.
+"""
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient

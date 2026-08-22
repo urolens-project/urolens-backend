@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 
 class ResultView(Base):
     """A patient's view of a released result, recorded by
-    `PatientResultService.get_result_detail`."""
+    `PatientResultService.get_result_detail`.
+    """
 
     __tablename__ = "result_views"
 
@@ -40,10 +41,10 @@ class ResultView(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    analysis_result: Mapped["AnalysisResult"] = relationship(
+    analysis_result: Mapped[AnalysisResult] = relationship(
         back_populates="result_views"
     )
-    patient: Mapped["Patient"] = relationship(
+    patient: Mapped[Patient] = relationship(
         back_populates="result_views"
     )
 

@@ -13,22 +13,16 @@ silently shadow the other:
     (receptionist release queue) and `result_review.py` (supervisor
     approved-today list).
 Both stay reachable only via their submodule import, exactly as before
-this barrel existed."""
-from .sync import SyncChanges, SyncPullResponse, TableChanges  # noqa: F401
-from .image import AnalysisResultResponse, ImageDiscardResponse  # noqa: F401
+this barrel existed.
+"""
 from .auth import (  # noqa: F401
     LoginRequest,
     LoginResponse,
     PatientLoginRequest,
     PatientLoginResponse,
 )
+from .image import AnalysisResultResponse, ImageDiscardResponse  # noqa: F401
 from .lab_request import LabRequestCreateResponse, PhysicianItem  # noqa: F401
-from .result_releasing import (  # noqa: F401
-    ApprovedResultsResponse,
-    PaginationMeta,
-    ReleaseResultRequest,
-    ResultReleaseResponse,
-)
 from .labeling import (  # noqa: F401
     LabelConfirmRequest,
     LabelConfirmResponse,
@@ -36,12 +30,26 @@ from .labeling import (  # noqa: F401
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )
+from .notifications import NotificationOut, PushTokenRequest  # noqa: F401
+from .patient import (  # noqa: F401
+    ConsentData,
+    PatientCreateRequest,
+    PatientResponse,
+    SexEnum,
+)
 from .patient_portal import (  # noqa: F401
     PARTICLE_LABELS,
     ParticleCount,
     PatientResultDetail,
     PatientResultDetailResponse,
     PatientResultItem,
+)
+from .physician import (  # noqa: F401
+    PhysicianPatientItem,
+    PhysicianResultDetail,
+    PhysicianResultListResponse,
+    PhysicianResultSummary,
+    SmartDiagnosisDetail,
 )
 from .queue import (  # noqa: F401
     AssignSpecimenRequest,
@@ -51,38 +59,24 @@ from .queue import (  # noqa: F401
     QueueAssignRequest,
     QueueAssignResponse,
 )
-from .patient import (  # noqa: F401
-    ConsentData,
-    PatientCreateRequest,
-    PatientResponse,
-    SexEnum,
-)
-from .specimen import (  # noqa: F401
-    LabRequestSearchItem,
-    SpecimenListItem,
-    SpecimenReceiveRequest,
-    SpecimenReceiveResponse,
-    SpecimenRejectRequest,
-    SpecimenRejectResponse,
-)
-from .physician import (  # noqa: F401
-    PhysicianPatientItem,
-    PhysicianResultDetail,
-    PhysicianResultListResponse,
-    PhysicianResultSummary,
-    SmartDiagnosisDetail,
+from .result_releasing import (  # noqa: F401
+    ApprovedResultsResponse,
+    PaginationMeta,
+    ReleaseResultRequest,
+    ResultReleaseResponse,
 )
 from .result_review import (  # noqa: F401
+    VALID_ESCALATION_PATHS,
     AnnotationRequest,
     AnnotationResponse,
+    ApprovedTodayListResponse,
     ApproveRequest,
     ApproveResponse,
-    ApprovedTodayListResponse,
     ConfirmResultResponse,
-    EscalateRequest,
-    EscalateResponse,
     EscalatedListResponse,
     EscalatedResultItem,
+    EscalateRequest,
+    EscalateResponse,
     EscalationPath,
     EvidenceMap,
     FullResultDetail,
@@ -98,6 +92,13 @@ from .result_review import (  # noqa: F401
     SmartDiagnosisResponse,
     SmartDiagnosisUnavailable,
     SupervisorStatsResponse,
-    VALID_ESCALATION_PATHS,
 )
-from .notifications import NotificationOut, PushTokenRequest  # noqa: F401
+from .specimen import (  # noqa: F401
+    LabRequestSearchItem,
+    SpecimenListItem,
+    SpecimenReceiveRequest,
+    SpecimenReceiveResponse,
+    SpecimenRejectRequest,
+    SpecimenRejectResponse,
+)
+from .sync import SyncChanges, SyncPullResponse, TableChanges  # noqa: F401

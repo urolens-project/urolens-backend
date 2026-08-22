@@ -4,9 +4,10 @@ Revision ID: 0010
 Revises: 0005
 Create Date: 2026-05-23
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0010"
 down_revision = "0005"

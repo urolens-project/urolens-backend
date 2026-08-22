@@ -13,8 +13,7 @@ from .base import Base
 
 
 class SpecimenRejection(Base):
-    """
-    Rejection record logged when a specimen fails the receiving-desk visual
+    """Rejection record logged when a specimen fails the receiving-desk visual
     check. Distinct from `Specimen.rejection_reason`/`rejected_at`, which
     record a *post-assignment* MedTech rejection of an already-received
     specimen — the two are separate workflows in the source system.

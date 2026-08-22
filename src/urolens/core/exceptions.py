@@ -1,7 +1,8 @@
 """Domain-specific `HTTPException` subclasses, each carrying a machine-readable
 `error_code` alongside the HTTP status/detail. Routes should raise these
 directly rather than a bare `HTTPException`, per the response-envelope
-convention (no raw `detail=str(e)` to the client)."""
+convention (no raw `detail=str(e)` to the client).
+"""
 from __future__ import annotations
 
 from fastapi import HTTPException, status
@@ -9,7 +10,8 @@ from fastapi import HTTPException, status
 
 class ImageFormatError(HTTPException):
     """422 — an uploaded image isn't an accepted format (JPEG/PNG). `error_code`
-    is `"INVALID_IMAGE_FORMAT"`."""
+    is `"INVALID_IMAGE_FORMAT"`.
+    """
 
     def __init__(self, message: str = "Unsupported image format. Accepted: JPEG, PNG."):
         super().__init__(
@@ -21,7 +23,8 @@ class ImageFormatError(HTTPException):
 
 class ImageResolutionError(HTTPException):
     """422 — an uploaded image is below the minimum 640×480 resolution.
-    `error_code` is `"INVALID_IMAGE_RESOLUTION"`."""
+    `error_code` is `"INVALID_IMAGE_RESOLUTION"`.
+    """
 
     def __init__(self, message: str = "Image resolution is below the required 640×480 minimum."):
         super().__init__(
@@ -33,7 +36,8 @@ class ImageResolutionError(HTTPException):
 
 class StorageError(HTTPException):
     """503 — storing/retrieving a file (e.g. Supabase storage) failed.
-    `error_code` is `"STORAGE_ERROR"`."""
+    `error_code` is `"STORAGE_ERROR"`.
+    """
 
     def __init__(self, message: str = "Failed to store image. Please try again."):
         super().__init__(
@@ -56,7 +60,8 @@ class NotFoundError(HTTPException):
 
 class ConflictError(HTTPException):
     """409 — the resource exists but is in a state that conflicts with the
-    request. `error_code` is `"CONFLICT"`."""
+    request. `error_code` is `"CONFLICT"`.
+    """
 
     def __init__(self, message: str = "Resource state conflict."):
         super().__init__(

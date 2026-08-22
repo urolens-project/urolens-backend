@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import DateTime, String, Text
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -14,8 +14,7 @@ from .base import Base
 
 
 class AuditLog(Base):
-    """
-    Immutable, append-only record of every significant system event.
+    """Immutable, append-only record of every significant system event.
     Protected in production by a trigger that rejects UPDATE and DELETE.
     Source: Migration 0003 — SRS SO 4.4 RA 10173 audit trail requirement.
     """

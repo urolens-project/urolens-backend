@@ -26,8 +26,7 @@ class ScoreLevel(str, enum.Enum):
 
 
 class SmartDiagnosisOutput(Base):
-    """
-    Rule engine output per specimen. Generated automatically on result confirmation.
+    """Rule engine output per specimen. Generated automatically on result confirmation.
     Source: Migration 0017 — T3.1 Smart Diagnosis Engine.
 
     gout_score / gn_score / nephro_score: LOW / MODERATE / HIGH
@@ -74,7 +73,7 @@ class SmartDiagnosisOutput(Base):
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────
-    analysis_result: Mapped["AnalysisResult"] = relationship(
+    analysis_result: Mapped[AnalysisResult] = relationship(
         back_populates="smart_diagnosis_output"
     )
 

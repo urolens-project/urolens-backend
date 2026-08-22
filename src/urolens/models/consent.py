@@ -1,7 +1,8 @@
 """ORM model for the `consents` table."""
-from sqlalchemy import Boolean, Column, ForeignKey, TIMESTAMP
+from sqlalchemy import TIMESTAMP, Boolean, Column, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
+
 from .base import Base
 
 

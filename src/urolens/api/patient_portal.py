@@ -11,7 +11,10 @@ from src.urolens.core.database import get_db
 from src.urolens.core.enums import UserRole
 from src.urolens.core.rbac import RequireRole
 from src.urolens.core.supabase import get_supabase
-from src.urolens.schemas.patient_portal import PatientResultDetailResponse, PatientResultItem
+from src.urolens.schemas.patient_portal import (
+    PatientResultDetailResponse,
+    PatientResultItem,
+)
 from src.urolens.services.patient_result_service import PatientResultService
 from src.urolens.services.patient_service import PatientService
 from src.urolens.services.pdf_service import generate_result_pdf
@@ -41,7 +44,8 @@ async def get_my_results(
     service: PatientResultService = Depends(get_patient_result_service),
 ):
     """List the authenticated patient's results; see
-    `PatientResultService.get_patient_results`."""
+    `PatientResultService.get_patient_results`.
+    """
     return await service.get_patient_results(current_user["user_id"])
 
 
@@ -53,7 +57,8 @@ async def get_result_detail(
     service: PatientResultService = Depends(get_patient_result_service),
 ):
     """Fetch one result's detail for the authenticated patient; see
-    `PatientResultService.get_result_detail`."""
+    `PatientResultService.get_result_detail`.
+    """
     return await service.get_result_detail(result_id, current_user["user_id"], request)
 
 

@@ -1,5 +1,6 @@
 """Process-wide Supabase client, used by the Supabase-REST-backed
-services/routers that haven't been ported to SQLAlchemy."""
+services/routers that haven't been ported to SQLAlchemy.
+"""
 from supabase import AsyncClient
 
 from .config import settings

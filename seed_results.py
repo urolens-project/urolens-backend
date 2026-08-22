@@ -1,5 +1,4 @@
-"""
-seed_results.py — Creates test data for WEB-09 (Smart Diagnosis) and WEB-10 (Result Review).
+"""seed_results.py — Creates test data for WEB-09 (Smart Diagnosis) and WEB-10 (Result Review).
 
 What it creates:
   - 3 analysis_results in PENDING_SUPERVISOR_APPROVAL status
@@ -14,10 +13,10 @@ Usage:
 """
 
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from src.urolens.core.supabase import supabase
@@ -187,7 +186,7 @@ async def seed():
         sd = entry["smart_diagnosis"]
         sd_existing = await supabase.table("smart_diagnosis_outputs").select("output_id").eq("result_id", result_id).maybe_single().execute()
         if sd_existing.data:
-            print(f"    smart_diagnosis already exists — skipping")
+            print("    smart_diagnosis already exists — skipping")
         else:
             await supabase.table("smart_diagnosis_outputs").insert({
                 "result_id": result_id,

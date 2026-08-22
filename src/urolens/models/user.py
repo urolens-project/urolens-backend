@@ -7,18 +7,17 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, SmallInteger, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base
 
 if TYPE_CHECKING:
-    from .specimen import Specimen
+    pass
 
 
 class User(Base):
-    """
-    All system users across all roles. Passwords are bcrypt-hashed.
+    """All system users across all roles. Passwords are bcrypt-hashed.
     Source: Migration 0001 — T2.1 Login/Logout, cross-cutting RBAC.
     """
 

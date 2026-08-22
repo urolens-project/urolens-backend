@@ -10,8 +10,8 @@ Notes: Creates the smart_diagnosis_outputs table with the three condition
        columns aligned to the SDD: gout_score, gn_score (Glomerulonephritis),
        nephro_score (Nephrolithiasis).
 """
+
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0015"
 down_revision = "0014"

@@ -14,7 +14,8 @@ from .base import Base
 
 class ResultReturn(Base):
     """Supervisor return-for-correction record for an analysis result.
-    Source: migration 0019 — T3.2 Result Review."""
+    Source: migration 0019 — T3.2 Result Review.
+    """
 
     __tablename__ = "result_returns"
 

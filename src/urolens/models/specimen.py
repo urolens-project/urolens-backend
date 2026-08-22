@@ -13,13 +13,12 @@ from sqlalchemy.sql import func
 from .base import Base
 
 if TYPE_CHECKING:
-    from .image import Image
     from .analysis_result import AnalysisResult
+    from .image import Image
 
 
 class Specimen(Base):
-    """
-    Physical urine specimen record.
+    """Physical urine specimen record.
     Source: Migration 0007 — T1.4 Sample Receiving.
     """
 
@@ -79,10 +78,10 @@ class Specimen(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    images: Mapped[list["Image"]] = relationship(
+    images: Mapped[list[Image]] = relationship(
         back_populates="specimen", cascade="save-update, merge"
     )
-    analysis_result: Mapped["AnalysisResult | None"] = relationship(
+    analysis_result: Mapped[AnalysisResult | None] = relationship(
         back_populates="specimen", uselist=False
     )
 

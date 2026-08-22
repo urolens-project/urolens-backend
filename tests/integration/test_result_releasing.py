@@ -1,5 +1,4 @@
-"""
-Integration tests — STORY-WEB-15: Result Releasing (T4.1)
+"""Integration tests — STORY-WEB-15: Result Releasing (T4.1)
 
 Covers
 ------
@@ -20,7 +19,7 @@ is_session_active so auth middleware accepts the token without a live sessions t
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
@@ -29,14 +28,9 @@ import pytest_asyncio
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from src.urolens.core.config import settings
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.schemas.result_releasing import ReleaseResultRequest
-from src.urolens.services.notification_service import NotificationService
-from src.urolens.services.result_releasing_service import ResultReleasingService
-
 from main import app
-
+from src.urolens.core.config import settings
+from src.urolens.services.result_releasing_service import ResultReleasingService
 
 # ── Fixed IDs ─────────────────────────────────────────────────────────────────
 
@@ -87,7 +81,7 @@ def _approved_result_row(result_id=None, status="APPROVED"):
         "status": status,
         "patient_id": str(TEST_PATIENT_ID),
         "specimen_id": str(TEST_SPECIMEN_ID),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -97,7 +91,7 @@ def _release_row(release_id=None):
         "result_id": str(TEST_RESULT_ID),
         "released_by": str(RECEPTIONIST_ID),
         "release_method": "PHYSICAL",
-        "released_at": datetime.now(timezone.utc).isoformat(),
+        "released_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -276,7 +270,7 @@ class TestAlreadyReleased:
 
 def _mint_token(user_id: uuid.UUID, role: str) -> str:
     from datetime import timedelta
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "user_id": str(user_id),
         "role": role,

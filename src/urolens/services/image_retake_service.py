@@ -1,5 +1,4 @@
-"""
-Image Retake Service — T2.7 (Supabase implementation)
+"""Image Retake Service — T2.7 (Supabase implementation)
 
 Handles the Retake flow: the MedTech discards the current image and the capture
 screen re-opens so a new image can be uploaded.
@@ -17,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ..core.exceptions import ConflictError, NotFoundError
@@ -28,7 +27,8 @@ log = logging.getLogger(__name__)
 
 class ImageRetakeService:
     """Handles the Retake flow: discarding the current image so a new one
-    can be uploaded, per the module docstring above."""
+    can be uploaded, per the module docstring above.
+    """
 
     async def discard_and_retake(
         self,
@@ -36,12 +36,11 @@ class ImageRetakeService:
         medtech_id: uuid.UUID,
         request: Any = None,
     ) -> dict:
-        """
-        Mark the image DISCARDED so the MedTech can submit a new one.
+        """Mark the image DISCARDED so the MedTech can submit a new one.
 
         Returns a dict with image_id, status, discarded_at.
 
-        Raises
+        Raises:
         ------
         NotFoundError  — image not found
         ConflictError  — image is already DISCARDED or REPLACED
@@ -70,7 +69,7 @@ class ImageRetakeService:
             )
 
         # ── 2. Mark image DISCARDED ───────────────────────────────────────────
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         try:
             await (
                 sb.table("images")

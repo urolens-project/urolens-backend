@@ -1,5 +1,4 @@
-"""
-Image upload and discard routes — T2.7
+"""Image upload and discard routes — T2.7
 
 Routes
 ------
@@ -48,7 +47,8 @@ async def upload_image(
     service: AIIntegrationService = Depends(get_ai_integration_service),
 ) -> AnalysisResultResponse:
     """Upload a microscopy image for a specimen and run AI inference; see
-    `AIIntegrationService.handle_upload`."""
+    `AIIntegrationService.handle_upload`.
+    """
     uploader_id = uuid.UUID(claims["user_id"])
     result = await service.handle_upload(specimen_id, uploader_id, file, request)
     return AnalysisResultResponse(
@@ -75,7 +75,8 @@ async def discard_image(
     claims: dict = Depends(_medtech),
 ) -> ImageDiscardResponse:
     """Discard the current image so the MedTech can retake; see
-    `ImageRetakeService.discard_and_retake`."""
+    `ImageRetakeService.discard_and_retake`.
+    """
     medtech_id = uuid.UUID(claims["user_id"])
     result = await _retake_service.discard_and_retake(
         image_id=image_id,

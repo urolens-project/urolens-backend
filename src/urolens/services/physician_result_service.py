@@ -1,10 +1,10 @@
 """Physician-portal result listing/detail — Supabase-REST implementation,
 scoped to results for patients the requesting physician has an associated lab
-request for."""
+request for.
+"""
 import asyncio
 import uuid
-from datetime import date, datetime, timezone, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException, Request, status
 
@@ -13,7 +13,6 @@ from src.urolens.core.encryption import decrypt_pii
 from src.urolens.core.supabase import supabase
 from src.urolens.schemas.physician import (
     PhysicianResultDetail,
-    PhysicianResultListResponse,
     PhysicianResultSummary,
     SmartDiagnosisDetail,
 )
@@ -21,7 +20,7 @@ from src.urolens.schemas.physician import (
 _PHT = timezone(timedelta(hours=8))
 
 
-def _compute_age(dob_str: Optional[str]) -> Optional[int]:
+def _compute_age(dob_str: str | None) -> int | None:
     # Computes age in whole years from an ISO date-of-birth string;
     # returns None if unset or unparseable.
     if not dob_str:
@@ -34,7 +33,7 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
         return None
 
 
-def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
+def _image_public_url(storage_key: str | None) -> str | None:
     # Builds the public Supabase storage URL for a specimen image; returns
     # None if there's no storage key or no configured Supabase URL.
     if not storage_key or not settings.supabase_url:
@@ -194,7 +193,7 @@ async def get_result_detail(
         pat = (pat_res.data or [{}])[0]
 
     # Medtech username
-    medtech_name: Optional[str] = None
+    medtech_name: str | None = None
     if spec.get("medtech_id"):
         u_res = await supabase.table("users").select("username").eq(
             "user_id", spec["medtech_id"]
@@ -202,7 +201,7 @@ async def get_result_detail(
         medtech_name = ((u_res.data or [{}])[0]).get("username")
 
     # Image URL
-    image_url: Optional[str] = None
+    image_url: str | None = None
     if ar.get("image_id"):
         img_res = await supabase.table("images").select("storage_key").eq(
             "image_id", ar["image_id"]
@@ -221,7 +220,7 @@ async def get_result_detail(
     patient_name = f"{first} {last}".strip() or spec.get("patient_name", "")
 
     # Smart diagnosis
-    smart_diagnosis: Optional[SmartDiagnosisDetail] = None
+    smart_diagnosis: SmartDiagnosisDetail | None = None
     if not ar.get("smart_diagnosis_unavailable", True):
         sdo_rows = sdo_res.data or []
         if sdo_rows and sdo_rows[0].get("status") == "ATTACHED":
@@ -238,7 +237,7 @@ async def get_result_detail(
                 engine_version=sdo.get("engine_version", ""),
             )
 
-    annotation_notes: Optional[str] = None
+    annotation_notes: str | None = None
     if review_res.data:
         annotation_notes = review_res.data[0].get("annotation_notes")
 

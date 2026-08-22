@@ -1,5 +1,4 @@
-"""
-Quick test: upload a synthetic microscopy image for a given result_id.
+"""Quick test: upload a synthetic microscopy image for a given result_id.
 
 Usage:
     python test_image_upload.py
@@ -102,12 +101,12 @@ async def main():
         print(f"Response status: {upload_resp.status_code}")
         if upload_resp.status_code in (200, 201):
             data = upload_resp.json()
-            print(f"SUCCESS!")
+            print("SUCCESS!")
             print(f"  result_id:  {data.get('result_id')}")
             print(f"  image_id:   {data.get('image_id')}")
             print(f"  status:     {data.get('status')}")
             print(f"  ai_findings:{data.get('ai_findings')}")
-            print(f"\nRefresh the supervisor result review page — the image should now appear.")
+            print("\nRefresh the supervisor result review page — the image should now appear.")
         else:
             print(f"ERROR: {upload_resp.text}")
 

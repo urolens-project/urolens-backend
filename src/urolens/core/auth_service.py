@@ -1,8 +1,9 @@
 """Staff authentication primitives: password hashing/verification, session
 rows in the `sessions` table, and JWT issuing/decoding. Used by the auth
-router and by `core.rbac`'s request-authentication dependency."""
+router and by `core.rbac`'s request-authentication dependency.
+"""
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -62,14 +63,15 @@ async def get_user_by_username(username: str) -> dict | None:
 async def increment_failed_attempts(user_id) -> None:
     """Increment a user's `failed_attempts` counter after a failed login,
     locking the account (setting `locked_at`) once the count reaches
-    `settings.max_failed_attempts`. No-op if the user no longer exists."""
+    `settings.max_failed_attempts`. No-op if the user no longer exists.
+    """
     user = await _get_user_by_id(user_id)
     if not user:
         return
     new_count = user["failed_attempts"] + 1
     update_data = {"failed_attempts": new_count}
     if new_count >= settings.max_failed_attempts:
-        update_data["locked_at"] = datetime.now(timezone.utc).isoformat()
+        update_data["locked_at"] = datetime.now(UTC).isoformat()
     await supabase.table("users").update(update_data).eq(
         "user_id", str(user_id)
     ).execute()
@@ -77,7 +79,8 @@ async def increment_failed_attempts(user_id) -> None:
 
 async def reset_failed_attempts(user_id) -> None:
     """Clear a user's `failed_attempts` counter and any account lock,
-    typically after a successful login."""
+    typically after a successful login.
+    """
     await supabase.table("users").update(
         {"failed_attempts": 0, "locked_at": None}
     ).eq("user_id", str(user_id)).execute()
@@ -93,7 +96,7 @@ async def create_session(user_id, role: str, ip_address: str = None, user_agent:
     session_data = {
         "user_id": str(user_id),
         "user_role": role,
-        "login_at": datetime.now(timezone.utc).isoformat(),
+        "login_at": datetime.now(UTC).isoformat(),
         "is_active": True,
     }
     if ip_address:
@@ -110,7 +113,7 @@ async def close_session(session_id) -> None:
     await supabase.table("sessions").update(
         {
             "is_active": False,
-            "logout_at": datetime.now(timezone.utc).isoformat(),
+            "logout_at": datetime.now(UTC).isoformat(),
         }
     ).eq("session_id", str(session_id)).execute()
 
@@ -122,7 +125,7 @@ def issue_jwt(user_id, username: str, role: str, session_id) -> str:
         A JWT string signed with `settings.jwt_signing_key`, expiring after
         `settings.access_token_expire_minutes`.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "user_id": str(user_id),
         "username": username,

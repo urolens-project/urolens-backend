@@ -1,19 +1,19 @@
 """Runs the AI Engineer's rule engine (Smart Diagnosis) against a confirmed
 result's findings and persists the output — or, on any failure, logs the
-error and marks the result diagnosis-unavailable without propagating (T3.1)."""
+error and marks the result diagnosis-unavailable without propagating (T3.1).
+"""
 import logging
 import traceback
 import uuid
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..models.analysis_result import AnalysisResult
-from ..models.smart_diagnosis_output import SmartDiagnosisOutput
-from ..models.engine_error_log import EngineErrorLog
 from ..core.audit_logger import AuditLogger
+from ..models.analysis_result import AnalysisResult
+from ..models.engine_error_log import EngineErrorLog
+from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from .notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,7 @@ _RULE_ENGINE_ERROR_CODES = {
 
 
 class SmartDiagnosisService:
-    """
-    Triggers the AI Engineer's rule engine and persists the output (T3.1).
+    """Triggers the AI Engineer's rule engine and persists the output (T3.1).
 
     Critical contract: run() MUST NEVER re-raise exceptions. Engine failure
     must not break the MedTech's confirmation flow. All exceptions are caught,
@@ -47,9 +46,8 @@ class SmartDiagnosisService:
         self,
         result_id: uuid.UUID,
         db: AsyncSession,
-    ) -> Optional[SmartDiagnosisOutput]:
-        """
-        Runs Smart Diagnosis for the given result.
+    ) -> SmartDiagnosisOutput | None:
+        """Runs Smart Diagnosis for the given result.
 
         Runs inside a SAVEPOINT nested in the caller's transaction (`db`), so
         an engine failure rolls back only the diagnosis work, not the
@@ -164,7 +162,8 @@ class SmartDiagnosisService:
 
         Best-effort like the rest of the failure path: an exception here
         (e.g. the nested savepoint itself failing) is caught and logged, not
-        propagated — `run()` must still return `None` cleanly."""
+        propagated — `run()` must still return `None` cleanly.
+        """
         try:
             error_code = _classify_error(exc)
             async with db.begin_nested():

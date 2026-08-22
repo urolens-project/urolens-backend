@@ -7,9 +7,10 @@ Create Date: 2026-05-23
 Source: Migration 0014 — T2.5, T2.6, T3.1, T3.2, T3.3, T3.4, T3.5
 Depends on: specimens, images, users
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0014"
 down_revision = "0013"

@@ -6,9 +6,8 @@ Create Date: 2026-05-26
 
 Source: Migration 0025 — STORY-WEB-16 audit trail for patient result viewing
 """
+
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = "0025"
 down_revision = "0028"

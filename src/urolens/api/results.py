@@ -1,5 +1,4 @@
-"""
-Result confirm/override (plan row 6), supervisor review/approval (plan
+"""Result confirm/override (plan row 6), supervisor review/approval (plan
 row 7), and Smart Diagnosis lookup (plan: neither row) routes — the full
 /api/v1/results surface, in one router since the app/api/results.py ->
 src/urolens/api/results.py directory unification folded the last leftover
@@ -31,13 +30,13 @@ from ..core.rbac import RequireRole
 from ..schemas.result_review import (
     AnnotationRequest,
     AnnotationResponse,
+    ApprovedTodayListResponse,
     ApproveRequest,
     ApproveResponse,
-    ApprovedTodayListResponse,
     ConfirmResultResponse,
+    EscalatedListResponse,
     EscalateRequest,
     EscalateResponse,
-    EscalatedListResponse,
     FullResultDetail,
     OverrideRequest,
     OverrideResponse,
@@ -74,7 +73,8 @@ async def get_confirmation_service(
 ) -> ResultConfirmationService:
     """FastAPI dependency constructing a request-scoped
     `ResultConfirmationService`, wiring up its `SmartDiagnosisService`
-    collaborator."""
+    collaborator.
+    """
     smart_diag = SmartDiagnosisService(
         audit_logger=audit_logger,
         notif_service=notif_service,
@@ -155,7 +155,8 @@ async def get_supervisor_stats(
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> SupervisorStatsResponse:
     """Dashboard counts for the supervisor's review queue; see
-    `ResultReviewService.get_supervisor_stats`."""
+    `ResultReviewService.get_supervisor_stats`.
+    """
     return SupervisorStatsResponse(**await service.get_supervisor_stats())
 
 
@@ -200,7 +201,8 @@ async def annotate_result(
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> AnnotationResponse:
     """Save a supervisor's annotation on a result; see
-    `ResultReviewService.save_annotation`."""
+    `ResultReviewService.save_annotation`.
+    """
     result = await service.save_annotation(
         result_id=result_id,
         user_id=uuid.UUID(current_user["user_id"]),
@@ -269,7 +271,8 @@ async def get_smart_diagnosis_route(
     current_user: dict = Depends(_supervisor),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output; see
-    `result_review_service.get_smart_diagnosis`."""
+    `result_review_service.get_smart_diagnosis`.
+    """
     return await get_smart_diagnosis(result_id=result_id)
 
 
@@ -280,5 +283,6 @@ async def get_full_result(
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> FullResultDetail:
     """Fetch a result's full supervisor-review detail; see
-    `ResultReviewService.get_full_result`."""
+    `ResultReviewService.get_full_result`.
+    """
     return FullResultDetail(**await service.get_full_result(result_id))

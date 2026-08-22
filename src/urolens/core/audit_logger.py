@@ -1,6 +1,7 @@
 """Audit-log writing: the single `audit_logs`-table code path (`AuditLogger.record`)
 plus a set of auth-flow convenience wrappers around it (login/logout/access-denied
-events)."""
+events).
+"""
 from __future__ import annotations
 
 import uuid
@@ -13,7 +14,8 @@ from .supabase import supabase
 class AuditLogger:
     """Writes to the shared `audit_logs` table. The one audit-writing code
     path in this app — the auth-flow helpers below are thin wrappers around
-    `record()`, not a second path (they were, until this consolidation)."""
+    `record()`, not a second path (they were, until this consolidation).
+    """
 
     async def record(
         self,

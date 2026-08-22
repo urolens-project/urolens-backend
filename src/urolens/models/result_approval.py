@@ -14,7 +14,8 @@ from .base import Base
 
 class ResultApproval(Base):
     """Supervisor approval record for an analysis result. Source: migration
-    0019 — T3.2 Result Review."""
+    0019 — T3.2 Result Review.
+    """
 
     __tablename__ = "result_approvals"
 

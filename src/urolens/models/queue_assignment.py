@@ -1,7 +1,8 @@
 """ORM model for the `queue_assignments` table."""
-from sqlalchemy import Column, ForeignKey, VARCHAR, TIMESTAMP
+from sqlalchemy import TIMESTAMP, VARCHAR, Column, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
+
 from .base import Base
 
 

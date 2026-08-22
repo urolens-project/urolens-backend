@@ -1,7 +1,6 @@
 """Specimen labeling request/response shapes; see `services/labeling_service.py`."""
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -11,10 +10,10 @@ class ReceivedSpecimenSearchItem(BaseModel):
     """One `RECEIVED`-status specimen, for the label-generation search."""
 
     specimen_id: UUID
-    sample_uid: Optional[str] = None
+    sample_uid: str | None = None
     patient_name: str
-    patient_uid: Optional[str] = None
-    test_type: Optional[str] = None
+    patient_uid: str | None = None
+    test_type: str | None = None
     status: str
 
 
@@ -22,9 +21,9 @@ class LabelPreviewData(BaseModel):
     """The printable content of a generated specimen label."""
 
     patient_name: str
-    patient_uid: Optional[str] = None
-    sample_uid: Optional[str] = None
-    test_type: Optional[str] = None
+    patient_uid: str | None = None
+    sample_uid: str | None = None
+    test_type: str | None = None
     date: str
 
 

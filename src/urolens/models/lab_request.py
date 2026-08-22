@@ -13,8 +13,7 @@ from .base import Base
 
 
 class LabRequest(Base):
-    """
-    Physician-originated request for a lab test on a patient, prior to specimen
+    """Physician-originated request for a lab test on a patient, prior to specimen
     receipt. Added via migration 0032 — table pre-existed the merge (created
     out-of-band, no prior Alembic history) and was accessed only via raw
     Supabase REST calls; this model formalizes its already-live schema.

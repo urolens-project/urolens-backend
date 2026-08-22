@@ -1,6 +1,7 @@
 """Patient-portal result listing/detail — Supabase-REST implementation,
 deliberately left as-is (not ported to SQLAlchemy) per the consolidation
-plan's deferred-services list."""
+plan's deferred-services list.
+"""
 from datetime import datetime
 from uuid import UUID
 

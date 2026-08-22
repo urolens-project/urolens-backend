@@ -17,8 +17,7 @@ if TYPE_CHECKING:
 
 
 class EngineErrorLog(Base):
-    """
-    AI rule engine runtime failures. Does not block MedTech confirmation.
+    """AI rule engine runtime failures. Does not block MedTech confirmation.
     Source: Migration 0018 — T3.1 Alt Flow 2 Engine failure handling.
 
     error_code: INVALID_CLASSIFICATION | RULE_EVALUATION_FAILED | CONFIG_ERROR
@@ -43,7 +42,7 @@ class EngineErrorLog(Base):
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────
-    analysis_result: Mapped["AnalysisResult"] = relationship(
+    analysis_result: Mapped[AnalysisResult] = relationship(
         back_populates="engine_error_logs"
     )
 

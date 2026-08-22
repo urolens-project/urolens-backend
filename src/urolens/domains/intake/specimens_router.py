@@ -1,7 +1,7 @@
 """Specimen receiving routes (receptionist-facing) plus post-assignment
-MedTech rejection."""
+MedTech rejection.
+"""
 import uuid
-from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -29,25 +29,27 @@ _receptionist = RequireRole([UserRole.RECEPTIONIST])
 _medtech = RequireRole([UserRole.MEDTECH])
 
 
-@router.get("", response_model=List[SpecimenListItem])
+@router.get("", response_model=list[SpecimenListItem])
 async def list_specimens_endpoint(
-    specimen_status: Optional[str] = Query(default=None, alias="status"),
+    specimen_status: str | None = Query(default=None, alias="status"),
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
     """List specimens, optionally filtered by status; see
-    `specimen_service.list_specimens`."""
+    `specimen_service.list_specimens`.
+    """
     return await specimen_service.list_specimens(db, specimen_status)
 
 
-@router.get("/search-request", response_model=List[LabRequestSearchItem])
+@router.get("/search-request", response_model=list[LabRequestSearchItem])
 async def search_pending_lab_requests(
     q: str,
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
     """Search `PENDING_SAMPLE` lab requests; see
-    `lab_request_service.search_pending_lab_requests`."""
+    `lab_request_service.search_pending_lab_requests`.
+    """
     return await lab_request_service.search_pending_lab_requests(db, q)
 
 
@@ -58,7 +60,8 @@ async def receive_specimen_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """Receive a specimen against a lab request; see
-    `specimen_service.receive_specimen`."""
+    `specimen_service.receive_specimen`.
+    """
     receptionist_id = uuid.UUID(current_user["user_id"])
     return await specimen_service.receive_specimen(db, receptionist_id, payload)
 
@@ -70,8 +73,7 @@ async def reject_specimen_endpoint(
     current_user: dict = Depends(_medtech),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Ported from app/api/specimens.py + app/services/specimen_service.py
+    """Ported from app/api/specimens.py + app/services/specimen_service.py
     (consolidation plan row 9 / Track A2 reconciliation). Originally had no
     route-level role gate — ownership was checked inside the service only,
     which the standards skill's rule 2 forbids. Now gated at the route (rule
