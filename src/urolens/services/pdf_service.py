@@ -1,5 +1,5 @@
 """Renders a patient-facing PDF lab report from a confirmed/released result."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.urolens.schemas.patient_portal import PatientResultDetail
 
@@ -28,8 +28,10 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
     """
     from io import BytesIO
 
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.platypus import (
         Paragraph,
@@ -38,8 +40,6 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
         Table,
         TableStyle,
     )
-    from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -93,7 +93,7 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
     elements.append(Paragraph("Urine Sediment Analysis Report", subtitle_style))
     elements.append(Spacer(1, 6 * mm))
     elements.append(
-        Paragraph(f"Date Generated: {datetime.now(timezone.utc).strftime('%B %d, %Y')}", body_style)
+        Paragraph(f"Date Generated: {datetime.now(UTC).strftime('%B %d, %Y')}", body_style)
     )
     elements.append(Spacer(1, 6 * mm))
 

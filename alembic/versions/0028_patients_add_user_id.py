@@ -6,9 +6,10 @@ Create Date: 2026-05-26
 
 Source: Migration 0016 — STORY-WEB-16 linkage of patient record to user account
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0028"
 down_revision = "0027"

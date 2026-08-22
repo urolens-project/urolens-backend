@@ -1,5 +1,4 @@
-"""
-Integration tests — T2.7: Image upload → AI inference hook → discard/retake flow
+"""Integration tests — T2.7: Image upload → AI inference hook → discard/retake flow
 
 Covers
 ------
@@ -20,19 +19,16 @@ from __future__ import annotations
 
 import io
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image as PILImage
 
 from tests.integration.conftest import (
-    MEDTECH_USER_ID,
     TEST_IMAGE_ID,
-    TEST_RESULT_ID,
     TEST_SPECIMEN_ID,
     _make_sb_mock,
 )
-
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
 
@@ -130,8 +126,7 @@ async def test_upload_triggers_ai_inference_when_package_available(
     medtech_token: str,
     test_specimen: uuid.UUID,
 ) -> None:
-    """
-    When urolens_ai is installed, _try_run_inference is called and the findings
+    """When urolens_ai is installed, _try_run_inference is called and the findings
     are included in the response (ai_findings populated).
     """
     sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
@@ -166,8 +161,7 @@ async def test_upload_succeeds_when_ai_inference_fails(
     medtech_token: str,
     test_specimen: uuid.UUID,
 ) -> None:
-    """
-    AI failure must not break the upload. The endpoint returns 201 and
+    """AI failure must not break the upload. The endpoint returns 201 and
     ai_findings is None (the result row stays PENDING_CONFIRM with empty findings).
     """
     sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
@@ -288,8 +282,7 @@ async def test_discard_replaced_image_returns_409(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_import_mock(module_name: str, attr: str, value):
-    """
-    Returns a replacement for builtins.__import__ that intercepts imports of
+    """Returns a replacement for builtins.__import__ that intercepts imports of
     `module_name` and returns a mock module exposing `attr` = `value`.
 
     All other imports fall through to the real __import__.

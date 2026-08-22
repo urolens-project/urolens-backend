@@ -6,10 +6,8 @@ directly (rule 6). Importing anything from this package (even `UserRole`
 alone) now eagerly constructs the Settings/Supabase client/DB engine, since
 Python must run this file before any submodule import completes — a
 deliberate tradeoff, not an oversight; see changelog.md's barrel-indexing
-entry."""
-from .config import Settings, settings  # noqa: F401
-from .database import AsyncSessionLocal, engine, get_db  # noqa: F401
-from .supabase import get_supabase, supabase  # noqa: F401
+entry.
+"""
 from .audit_logger import (  # noqa: F401
     AuditLogger,
     get_audit_logger,
@@ -33,6 +31,8 @@ from .auth_service import (  # noqa: F401
     reset_failed_attempts,
     verify_password,
 )
+from .config import Settings, settings  # noqa: F401
+from .database import AsyncSessionLocal, engine, get_db  # noqa: F401
 from .encryption import decrypt_pii, encrypt_pii  # noqa: F401
 from .enums import UserRole  # noqa: F401
 from .exceptions import (  # noqa: F401
@@ -47,3 +47,4 @@ from .exceptions import (  # noqa: F401
     UnprocessableException,
 )
 from .rbac import RequireRole, get_current_user, security_scheme  # noqa: F401
+from .supabase import get_supabase, supabase  # noqa: F401

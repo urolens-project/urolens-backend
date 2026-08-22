@@ -1,5 +1,4 @@
-"""
-Unit tests — NotificationService
+"""Unit tests — NotificationService
 
 Covers `notify_active_receptionists`, added as part of consolidating
 lab-request creation (see changelog.md's "Duplicate lab-request creation

@@ -1,8 +1,8 @@
 """Mobile-client sync: builds a full or delta snapshot of a MedTech's specimens,
-queue assignments, and analysis results from Supabase."""
+queue assignments, and analysis results from Supabase.
+"""
 import asyncio
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from src.urolens.core.supabase import supabase
 
@@ -29,14 +29,14 @@ def _remap(row: dict, pk_col: str) -> dict:
     return out
 
 
-def _to_str(val) -> Optional[str]:
+def _to_str(val) -> str | None:
     """Coerce timestamps/enums to strings safely."""
     if val is None:
         return None
     return str(val)
 
 
-async def pull(user_id: str, last_synced_at: Optional[datetime]) -> dict:
+async def pull(user_id: str, last_synced_at: datetime | None) -> dict:
     """Build a sync payload for one MedTech: their specimens, queue
     assignments, and the analysis results for those specimens.
 
@@ -99,7 +99,7 @@ async def pull(user_id: str, last_synced_at: Optional[datetime]) -> dict:
         return {"created": records, "updated": []}
 
     return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "changes": {
             "specimens":         make_changes(specimens),
             "queue_assignments": make_changes(queue_assignments),

@@ -1,20 +1,21 @@
 """Manual parameter override transaction (T2.6): lets a MedTech correct a
 single AI-generated result parameter, recording both the original and
-corrected values."""
+corrected values.
+"""
 import uuid
+
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.analysis_result import AnalysisResult, ResultStatus
-from ..models.manual_override import ManualOverride
 from ..core.audit_logger import AuditLogger
 from ..core.exceptions import NotFoundException, UnprocessableException
+from ..models.analysis_result import AnalysisResult, ResultStatus
+from ..models.manual_override import ManualOverride
 
 
 class ManualOverrideService:
-    """
-    Owns the manual parameter override transaction (T2.6).
+    """Owns the manual parameter override transaction (T2.6).
 
     SRP  — one responsibility: record a MedTech's correction alongside the
             original AI value.
@@ -39,8 +40,7 @@ class ManualOverrideService:
         medtech_id: uuid.UUID,
         request: Request,
     ) -> ManualOverride:
-        """
-        Records a MedTech correction for a single AI-generated parameter.
+        """Records a MedTech correction for a single AI-generated parameter.
         The system uses the db-extracted original value as a secure source of truth.
 
         Args:
@@ -118,8 +118,7 @@ class ManualOverrideService:
     async def _extract_original_value(
         self, result: AnalysisResult, parameter: str
     ) -> float:
-        """
-        Reads the AI-generated value for the given parameter from ai_findings.
+        """Reads the AI-generated value for the given parameter from ai_findings.
         Raises UnprocessableException if the parameter is not present.
         """
         ai_findings: dict = result.ai_findings or {}

@@ -10,8 +10,8 @@ to an enum column, causing DatatypeMismatchError on every status update.
 Converting to VARCHAR matches the model and lets the Python ResultStatus enum
 be the sole source of truth.
 """
+
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0020"
 down_revision = "0019"

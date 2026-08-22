@@ -1,5 +1,4 @@
-"""
-Supervisor review/approval service — consolidation plan row 7.
+"""Supervisor review/approval service — consolidation plan row 7.
 
 SQLAlchemy port of app/services/result_review_service.py (636 lines, pure
 Supabase REST, deleted after this port — see CHANGELOG.md). Tier-1 workflow
@@ -23,16 +22,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fastapi import HTTPException, status
-
 from ..core.config import settings
 from ..core.encryption import decrypt_pii
-from ..core.exceptions import ConflictException, NotFoundException, UnprocessableException
+from ..core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
@@ -51,7 +53,7 @@ _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
 
 
-def _compute_age(dob_str: Optional[str]) -> Optional[int]:
+def _compute_age(dob_str: str | None) -> int | None:
     """Age in whole years from an ISO date string, or None if unparseable."""
     if not dob_str:
         return None
@@ -63,7 +65,7 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
         return None
 
 
-def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
+def _image_public_url(storage_key: str | None) -> str | None:
     # Builds the public Supabase storage URL for a specimen image; returns
     # None if there's no storage key or no configured Supabase URL.
     if not storage_key or not settings.supabase_url:
@@ -72,7 +74,7 @@ def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
     return f"{base}/storage/v1/object/public/{settings.supabase_image_bucket}/{storage_key}"
 
 
-def _decrypt_or_none(ciphertext: Optional[str]) -> Optional[str]:
+def _decrypt_or_none(ciphertext: str | None) -> str | None:
     # Decrypts PII, returning None (rather than raising) for an unset or
     # undecryptable value.
     if not ciphertext:
@@ -86,7 +88,8 @@ def _decrypt_or_none(ciphertext: Optional[str]) -> Optional[str]:
 class ResultReviewService:
     """Owns the supervisor review/approval workflow: pending queue, approved/
     escalated lists, full result detail, annotation, and the
-    approve/return/escalate transitions."""
+    approve/return/escalate transitions.
+    """
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -114,7 +117,8 @@ class ResultReviewService:
         self, specimen_ids: list[uuid.UUID]
     ) -> tuple[dict[uuid.UUID, Specimen], dict[str, Patient], dict[uuid.UUID, str]]:
         """Batch-load specimens, their patients (by patient_uid), and their
-        assigned medtechs' usernames, for a page of results."""
+        assigned medtechs' usernames, for a page of results.
+        """
         if not specimen_ids:
             return {}, {}, {}
 
@@ -142,7 +146,7 @@ class ResultReviewService:
 
         return spec_map, pat_map, user_map
 
-    def _patient_display(self, spec: Optional[Specimen], pat_map: dict[str, Patient]) -> tuple[str, Optional[int], Optional[str]]:
+    def _patient_display(self, spec: Specimen | None, pat_map: dict[str, Patient]) -> tuple[str, int | None, str | None]:
         """Returns (patient_name, patient_age, patient_sex) for a list row."""
         if spec is None:
             return "", None, None
@@ -409,7 +413,7 @@ class ResultReviewService:
 
         spec = await self.db.get(Specimen, ar.specimen_id)
 
-        pat: Optional[Patient] = None
+        pat: Patient | None = None
         if spec and spec.patient_uid:
             pat = (
                 await self.db.execute(select(Patient).where(Patient.patient_uid == spec.patient_uid))
@@ -420,7 +424,7 @@ class ResultReviewService:
             medtech = await self.db.get(User, spec.medtech_id)
             medtech_name = medtech.username if medtech else ""
 
-        image_url: Optional[str] = None
+        image_url: str | None = None
         if ar.image_id:
             image = await self.db.get(Image, ar.image_id)
             image_url = _image_public_url(image.storage_key) if image else None
@@ -505,7 +509,7 @@ class ResultReviewService:
         result_id: uuid.UUID,
         user_id: uuid.UUID,
         annotation_notes: str,
-        spatial_annotations: Optional[list] = None,
+        spatial_annotations: list | None = None,
     ) -> dict[str, Any]:
         """Upsert a supervisor's annotation on a result.
 
@@ -553,7 +557,7 @@ class ResultReviewService:
     # ── Approve ───────────────────────────────────────────────────────────
 
     async def approve_result(
-        self, result_id: uuid.UUID, user_id: uuid.UUID, notes: Optional[str]
+        self, result_id: uuid.UUID, user_id: uuid.UUID, notes: str | None
     ) -> dict[str, Any]:
         """Approve a pending result, marking its specimen `COMPLETED`.
 
@@ -622,7 +626,7 @@ class ResultReviewService:
         result_id: uuid.UUID,
         user_id: uuid.UUID,
         escalation_path: str,
-        escalation_note: Optional[str],
+        escalation_note: str | None,
     ) -> dict[str, Any]:
         """Escalate a pending result to `CRITICAL_ESCALATED`.
 

@@ -1,8 +1,8 @@
 """MedTech queue request/response shapes; see `services/queue_service.py`."""
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel
 
+from pydantic import BaseModel
 
 # ── Mobile Developer schemas (do not modify) ──────────────────────────────────
 

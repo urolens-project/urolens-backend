@@ -7,9 +7,8 @@ Create Date: 2026-05-26
 Source: Migration 0026 — STORY-WEB-15 Result Releasing (T4.1)
 Depends on: analysis_results, users
 """
+
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = "0026"
 down_revision = "0025"

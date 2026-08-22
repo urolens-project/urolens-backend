@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
 # import src.urolens.models  # noqa: F401 — registers all SQLAlchemy models before first query
@@ -7,21 +8,29 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi import FastAPI, HTTPException, Request
 
-
-# Web developer routers
-from src.urolens.domains.intake.specimens_router import router as src_specimens_router
-from src.urolens.domains.request.lab_requests_router import router as lab_requests_router
-from src.urolens.domains.intake.labeling_router import router as labeling_router
-from src.urolens.api import patients, queue, patient_portal, auth, patient_auth, physician
+from src.urolens.api import (
+    auth,
+    patient_auth,
+    patient_portal,
+    patients,
+    physician,
+    queue,
+)
+from src.urolens.api.image import router as images_router
+from src.urolens.api.notifications import router as notifications_router  # Epic 8
 from src.urolens.api.result_releasing import router as result_releasing_router
 
 # Mobile developer routers
 from src.urolens.api.results import router as results_router
 from src.urolens.api.sync import router as sync_router
-from src.urolens.api.image import router as images_router
-from src.urolens.api.notifications import router as notifications_router  # Epic 8
+from src.urolens.domains.intake.labeling_router import router as labeling_router
+
+# Web developer routers
+from src.urolens.domains.intake.specimens_router import router as src_specimens_router
+from src.urolens.domains.request.lab_requests_router import (
+    router as lab_requests_router,
+)
 
 app = FastAPI(title="UroLens LIS Engine")
 

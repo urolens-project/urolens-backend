@@ -1,5 +1,6 @@
 """Result release routes (receptionist-facing): listing approved results
-awaiting release and performing the release."""
+awaiting release and performing the release.
+"""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -39,7 +40,8 @@ async def get_approved_results(
     service: ResultReleasingService = Depends(get_result_releasing_service),
 ):
     """List approved results awaiting release; see
-    `ResultReleasingService.get_approved_results`."""
+    `ResultReleasingService.get_approved_results`.
+    """
     return await service.get_approved_results(limit=limit, cursor=cursor)
 
 

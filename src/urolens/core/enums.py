@@ -4,7 +4,8 @@ from enum import StrEnum
 
 class UserRole(StrEnum):
     """The set of roles a session can hold. Used for RBAC checks (`core.rbac.RequireRole`)
-    and stored on `users`/session rows."""
+    and stored on `users`/session rows.
+    """
 
     ADMINISTRATOR = "ADMINISTRATOR"
     MEDTECH = "MEDTECH"

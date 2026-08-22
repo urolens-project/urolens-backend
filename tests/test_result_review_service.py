@@ -1,5 +1,4 @@
-"""
-Unit tests — ResultReviewService (supervisor review/approval, plan row 7)
+"""Unit tests — ResultReviewService (supervisor review/approval, plan row 7)
 
 Tier-1 workflow (standards skill's named example: confirm -> override ->
 approve -> release). Baseline coverage per the original task's Task 5, not
@@ -25,7 +24,7 @@ attempted here either, out of scope for the regression fix.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,7 +72,8 @@ def _make_db_mock(get_side_effect: list) -> AsyncMock:
 async def test_approve_result_transitions_status_and_completes_specimen():
     """Happy path: approving a pending result records the approval, moves the
     result to APPROVED, and marks its specimen COMPLETED so it leaves the
-    medtech's active queue."""
+    medtech's active queue.
+    """
     result = _make_result()
     specimen = _make_specimen()
     db = _make_db_mock(get_side_effect=[result, specimen])
@@ -99,7 +99,8 @@ async def test_approve_result_transitions_status_and_completes_specimen():
 @pytest.mark.asyncio
 async def test_return_result_transitions_status_and_records_reason():
     """Happy path: returning a pending result records the return reason and
-    moves the result to RETURNED_FOR_CORRECTION."""
+    moves the result to RETURNED_FOR_CORRECTION.
+    """
     result = _make_result()
     db = _make_db_mock(get_side_effect=[result])
 
@@ -122,7 +123,8 @@ async def test_return_result_transitions_status_and_records_reason():
 @pytest.mark.asyncio
 async def test_escalate_result_transitions_status_and_records_path():
     """Happy path: escalating a pending result records the escalation path
-    and moves the result to CRITICAL_ESCALATED."""
+    and moves the result to CRITICAL_ESCALATED.
+    """
     result = _make_result()
     db = _make_db_mock(get_side_effect=[result])
 
@@ -149,7 +151,8 @@ async def test_escalate_result_transitions_status_and_records_path():
 @pytest.mark.asyncio
 async def test_escalate_result_rejects_invalid_escalation_path():
     """An unrecognized escalation_path is rejected before any DB access —
-    the same validation the pre-port Supabase service performed."""
+    the same validation the pre-port Supabase service performed.
+    """
     db = _make_db_mock(get_side_effect=[])
 
     service = ResultReviewService(db=db)
@@ -165,7 +168,8 @@ async def test_escalate_result_rejects_invalid_escalation_path():
 @pytest.mark.asyncio
 async def test_approve_result_rejects_result_not_pending():
     """approve/return/escalate all share _require_pending — a result that
-    isn't PENDING_SUPERVISOR_APPROVAL (e.g. already APPROVED) is rejected."""
+    isn't PENDING_SUPERVISOR_APPROVAL (e.g. already APPROVED) is rejected.
+    """
     result = _make_result(status=ResultStatus.APPROVED)
     db = _make_db_mock(get_side_effect=[result])
 
@@ -235,7 +239,7 @@ async def test_annotate_result_persists_and_round_trips_spatial_annotations():
     assert write_response["spatial_annotations"] == payload
 
     # ── Read path: get_full_result must read the same saved object back ──
-    saved_review.updated_at = datetime.now(timezone.utc)
+    saved_review.updated_at = datetime.now(UTC)
 
     ar_for_read = _make_result()
     ar_for_read.image_id = None
@@ -260,7 +264,8 @@ async def test_annotate_result_persists_and_round_trips_spatial_annotations():
 async def test_annotate_result_omitting_spatial_annotations_preserves_existing_value():
     """Matches the pre-port behavior: calling save_annotation again without
     spatial_annotations (e.g. to update just the notes) must not clear a
-    previously-saved value."""
+    previously-saved value.
+    """
     ar = _make_result()
     existing_review = MagicMock(spec=ResultReview)
     existing_review.spatial_annotations = [{"x": 1, "y": 2, "label": "prior"}]

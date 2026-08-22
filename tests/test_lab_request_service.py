@@ -1,5 +1,4 @@
-"""
-Unit tests — lab_request_service.create_lab_request (consolidated)
+"""Unit tests — lab_request_service.create_lab_request (consolidated)
 
 Covers the unified implementation that now backs both the receptionist-
 facing and physician-facing lab-request creation routes (see
@@ -22,10 +21,12 @@ import pytest
 from fastapi import HTTPException
 
 from src.urolens.core.exceptions import NotFoundException
-from src.urolens.models.lab_request import LabRequest
 from src.urolens.models.patient import Patient
 from src.urolens.models.user import User
-from src.urolens.services.lab_request_service import create_lab_request, _generate_request_uid
+from src.urolens.services.lab_request_service import (
+    _generate_request_uid,
+    create_lab_request,
+)
 
 PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
 PHYSICIAN_ID = uuid.UUID("00000000-0000-0000-0000-000000000041")
@@ -43,7 +44,8 @@ def _make_db(patient=_NOT_GIVEN, get_side_effect: list | None = None) -> AsyncMo
     UID-collision check always reports no collision. db.flush populates
     lab_request_id (mirrors SQLAlchemy assigning the Python-side UUID
     default at flush time — needed before the notify-then-audit calls that
-    read it); db.refresh populates created_at."""
+    read it); db.refresh populates created_at.
+    """
     resolved_patient = MagicMock(spec=Patient) if patient is _NOT_GIVEN else patient
     db = AsyncMock()
     db.get = AsyncMock(side_effect=[resolved_patient, *(get_side_effect or [])])
@@ -88,7 +90,8 @@ async def test_create_lab_request_raises_404_when_patient_missing_receptionist_s
 async def test_create_lab_request_raises_404_when_patient_missing_physician_style():
     """The patient-existence check now applies to the physician-style call
     path too — previously only enforced by the now-deleted
-    physician_service.create_lab_request."""
+    physician_service.create_lab_request.
+    """
     db = _make_db(patient=None)
     with pytest.raises(NotFoundException) as exc_info:
         await create_lab_request(

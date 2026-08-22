@@ -14,8 +14,7 @@ from .base import Base
 
 
 class ResultReview(Base):
-    """
-    Supervisor annotation on an analysis result, prior to approve/return/
+    """Supervisor annotation on an analysis result, prior to approve/return/
     escalate. Source: migration 0019 — T3.2 Result Review.
 
     `spatial_annotations` was originally left unmapped (schema-drift finding

@@ -14,8 +14,7 @@ from .base import Base
 
 
 class SampleLabel(Base):
-    """
-    Printed specimen label record. Added via migration 0032 — table pre-existed
+    """Printed specimen label record. Added via migration 0032 — table pre-existed
     the merge (created out-of-band, no prior Alembic history) and was accessed
     only via raw Supabase REST calls; this model formalizes its already-live
     schema.

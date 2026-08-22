@@ -1,5 +1,4 @@
-"""
-Single source of application config (consolidation plan row 1, Task 5).
+"""Single source of application config (consolidation plan row 1, Task 5).
 
 Replaces the previously-split `app/config.py` and `src/urolens/core/config.py`
 flat `os.getenv` module constants. Every secret raises `RuntimeError` at
@@ -42,7 +41,8 @@ _PLACEHOLDER_JWT_SIGNING_KEY = "change-me-in-production-use-a-long-random-string
 
 class Settings(BaseModel):
     """Typed, validated application configuration. Access via the module-level
-    `settings` instance — never construct a second one."""
+    `settings` instance — never construct a second one.
+    """
 
     # ── Supabase ──────────────────────────────────────────────────────────
     supabase_url: str | None = None

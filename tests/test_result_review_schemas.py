@@ -1,5 +1,4 @@
-"""
-Unit tests — schemas/result_review.py's EscalateRequest
+"""Unit tests — schemas/result_review.py's EscalateRequest
 
 Covers the request-boundary validation added when consolidating
 VALID_ESCALATION_PATHS into a single Literal-backed source of truth (see
@@ -13,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.urolens.schemas.result_review import EscalateRequest, VALID_ESCALATION_PATHS
+from src.urolens.schemas.result_review import VALID_ESCALATION_PATHS, EscalateRequest
 
 
 def test_valid_escalation_paths_accepted():

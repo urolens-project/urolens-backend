@@ -14,8 +14,8 @@ from sqlalchemy.sql import func
 from .base import Base
 
 if TYPE_CHECKING:
-    from .specimen import Specimen
     from .analysis_result import AnalysisResult
+    from .specimen import Specimen
 
 
 class ImageStatus(str, enum.Enum):
@@ -27,8 +27,7 @@ class ImageStatus(str, enum.Enum):
 
 
 class Image(Base):
-    """
-    Microscopy image metadata. Binary stored in Supabase Storage (see
+    """Microscopy image metadata. Binary stored in Supabase Storage (see
     `services/ai_integration_service.py` — no AWS credentials exist anywhere
     in this project, so this was previously and incorrectly documented as S3;
     corrected here, along with an unimplemented "EXIF stripped before upload"
@@ -79,8 +78,8 @@ class Image(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    specimen: Mapped["Specimen"] = relationship(back_populates="images")
-    analysis_result: Mapped["AnalysisResult | None"] = relationship(
+    specimen: Mapped[Specimen] = relationship(back_populates="images")
+    analysis_result: Mapped[AnalysisResult | None] = relationship(
         back_populates="image", uselist=False
     )
 

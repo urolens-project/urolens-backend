@@ -9,7 +9,8 @@ are deliberately excluded: several modules define a logger under the same
 name, so re-exporting them here would silently collide, and none of them
 are meant as public API in the first place — same convention
 `models/__init__.py` already follows (only domain classes, nothing
-incidental)."""
+incidental).
+"""
 from .ai_integration_service import AIIntegrationService  # noqa: F401
 from .image_retake_service import ImageRetakeService  # noqa: F401
 from .lab_request_service import (  # noqa: F401
@@ -33,7 +34,10 @@ from .physician_service import search_patients  # noqa: F401
 from .queue_service import QueueService  # noqa: F401
 from .result_confirmation_service import ResultConfirmationService  # noqa: F401
 from .result_releasing_service import ResultReleasingService  # noqa: F401
-from .result_review_service import ResultReviewService, get_smart_diagnosis  # noqa: F401
+from .result_review_service import (  # noqa: F401
+    ResultReviewService,
+    get_smart_diagnosis,
+)
 from .smart_diagnosis_service import SmartDiagnosisService  # noqa: F401
 from .specimen_service import (  # noqa: F401
     list_specimens,

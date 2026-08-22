@@ -33,17 +33,15 @@ Uses the same idempotent-guard idiom as 0032/0033 (ADD COLUMN IF NOT
 EXISTS) rather than assuming the column is absent — the whole premise of
 this finding is that it may already exist live in some shape.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
 revision: str = '0034'
-down_revision: Union[str, Sequence[str], None] = '0033'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = '0033'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -1,11 +1,12 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from src.urolens.core.supabase import supabase
 from src.urolens.core.auth_service import hash_password
+from src.urolens.core.supabase import supabase
 
 SEED_USERS = [
     {
@@ -61,7 +62,7 @@ SEED_USERS = [
         "password": "password123",
         "role": "RECEPTIONIST",
         "is_active": True,
-        "locked_at": datetime.now(timezone.utc).isoformat(),
+        "locked_at": datetime.now(UTC).isoformat(),
         "failed_attempts": 5,
     },
 ]

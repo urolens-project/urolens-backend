@@ -1,10 +1,17 @@
 """Staff login/logout routes."""
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 
 from src.urolens.core import audit_logger
-from src.urolens.core.rbac import get_current_user
 from src.urolens.core.auth_service import (
     close_session,
     create_session,
@@ -14,6 +21,7 @@ from src.urolens.core.auth_service import (
     reset_failed_attempts,
     verify_password,
 )
+from src.urolens.core.rbac import get_current_user
 from src.urolens.schemas.auth import LoginRequest, LoginResponse
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

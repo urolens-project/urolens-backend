@@ -7,9 +7,10 @@ Create Date: 2026-05-23
 Source: Migration 0013 — T2.7 Image Retake / Re-upload
 Depends on: specimens, users
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0013"
 down_revision = "0005"

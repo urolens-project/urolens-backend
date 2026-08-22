@@ -1,5 +1,6 @@
 """In-app notification and push-token request/response shapes; see
-`api/notifications.py`."""
+`api/notifications.py`.
+"""
 from __future__ import annotations
 
 import uuid

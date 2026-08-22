@@ -1,6 +1,7 @@
 """MedTech queue management: workload views and specimen-to-MedTech
-assignment, for both the supervisor/admin and receptionist-facing flows."""
-from datetime import datetime, timezone
+assignment, for both the supervisor/admin and receptionist-facing flows.
+"""
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
@@ -158,7 +159,7 @@ class QueueService:
             "specimen_id": str(data.specimen_id),
             "medtech_id": str(data.medtech_id),
             "assigned_by": str(assigned_by),
-            "assigned_at": datetime.now(timezone.utc).isoformat(),
+            "assigned_at": datetime.now(UTC).isoformat(),
             "status": "ACTIVE",
         }
 
@@ -183,7 +184,7 @@ class QueueService:
             {
                 "status": "ASSIGNED",
                 "medtech_id": str(data.medtech_id),  # ← add this
-                "assigned_at": datetime.now(timezone.utc).isoformat(),  # ← good to track too
+                "assigned_at": datetime.now(UTC).isoformat(),  # ← good to track too
             }
              ).eq("specimen_id", str(data.specimen_id)).execute()
 
@@ -234,7 +235,7 @@ class QueueService:
             specimen_id=data.specimen_id,
             medtech_id=data.medtech_id,
             assigned_by=assigned_by,
-            assigned_at=assignment_row.get("assigned_at", datetime.now(timezone.utc)),
+            assigned_at=assignment_row.get("assigned_at", datetime.now(UTC)),
             status="ACTIVE",
         )
 

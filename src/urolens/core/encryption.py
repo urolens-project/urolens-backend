@@ -1,6 +1,7 @@
 """Fernet-based encrypt/decrypt helpers for PHI/PII stored at rest — the one
 encryption policy for this app; no field should have a second, unencrypted
-storage path."""
+storage path.
+"""
 from cryptography.fernet import Fernet
 
 from .config import settings

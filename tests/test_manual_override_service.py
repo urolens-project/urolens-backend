@@ -1,5 +1,4 @@
-"""
-Unit tests — ManualOverrideService.override_parameter (T2.6)
+"""Unit tests — ManualOverrideService.override_parameter (T2.6)
 
 Tier-1 workflow (standards skill's named example: confirm -> override ->
 approve -> release). Added as part of the results merge (plan row 6/7) to
@@ -53,7 +52,8 @@ def _make_db_mock(result: AnalysisResult) -> AsyncMock:
 @pytest.mark.asyncio
 async def test_override_ignores_client_supplied_original_ai_value_and_uses_ai_findings():
     """A caller-supplied original_ai_value must never be trusted — the value
-    actually persisted must come from the stored ai_findings instead."""
+    actually persisted must come from the stored ai_findings instead.
+    """
     result = _make_result()
     db = _make_db_mock(result)
     audit_logger = MagicMock(spec=AuditLogger)
@@ -89,7 +89,8 @@ async def test_override_ignores_client_supplied_original_ai_value_and_uses_ai_fi
 @pytest.mark.asyncio
 async def test_override_unknown_parameter_raises_without_trusting_client_value():
     """If the parameter isn't in ai_findings at all, the override is rejected —
-    the service never falls back to trusting the client's original_ai_value."""
+    the service never falls back to trusting the client's original_ai_value.
+    """
     result = _make_result()
     db = _make_db_mock(result)
     audit_logger = MagicMock(spec=AuditLogger)
@@ -114,7 +115,8 @@ async def test_override_unknown_parameter_raises_without_trusting_client_value()
 @pytest.mark.asyncio
 async def test_override_rejected_after_result_finalised():
     """Cannot override a parameter once the result has been approved or
-    returned for correction."""
+    returned for correction.
+    """
     result = _make_result(status=ResultStatus.APPROVED)
     db = _make_db_mock(result)
     audit_logger = MagicMock(spec=AuditLogger)

@@ -1,10 +1,11 @@
 """Result confirm/override, supervisor review/approval, and Smart Diagnosis
 lookup request/response shapes; see `services/result_confirmation_service.py`,
-`services/manual_override_service.py`, and `services/result_review_service.py`."""
+`services/manual_override_service.py`, and `services/result_review_service.py`.
+"""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union, get_args
+from typing import Any, Literal, Union, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -26,14 +27,15 @@ class OverrideRequest(BaseModel):
 
     parameter: str = Field(..., min_length=1, max_length=100)
     corrected_value: float = Field(..., ge=0)
-    rationale: Optional[str] = Field("No rationale provided", max_length=2000)
+    rationale: str | None = Field("No rationale provided", max_length=2000)
     original_ai_value: float = Field(..., ge=0)
 
     @field_validator("parameter")
     @classmethod
     def parameter_no_whitespace_only(cls, v: str) -> str:
         """Reject a `parameter` that is blank or whitespace-only; strips
-        surrounding whitespace otherwise."""
+        surrounding whitespace otherwise.
+        """
         if not v.strip():
             raise ValueError("parameter must not be blank")
         return v.strip()
@@ -68,17 +70,17 @@ class PendingResultItem(BaseModel):
     result_id: UUID
     specimen_id: UUID
     patient_name: str
-    patient_age: Optional[int] = None
-    patient_sex: Optional[str] = None
+    patient_age: int | None = None
+    patient_sex: str | None = None
     medtech_name: str
-    confirmed_at: Optional[datetime] = None
+    confirmed_at: datetime | None = None
     status: str
 
 
 class PendingResultListResponse(BaseModel):
     """Response body for the supervisor's paginated pending queue."""
 
-    items: List[PendingResultItem]
+    items: list[PendingResultItem]
     total: int
     page: int
     page_size: int
@@ -87,13 +89,14 @@ class PendingResultListResponse(BaseModel):
 class ApprovedResultItem(BaseModel):
     """One result approved today, for the supervisor's approved-today list.
     Distinct from `schemas.result_releasing.ApprovedResultItem`, which serves
-    the receptionist release queue."""
+    the receptionist release queue.
+    """
 
     result_id: UUID
     specimen_id: UUID
     patient_name: str
-    patient_age: Optional[int] = None
-    patient_sex: Optional[str] = None
+    patient_age: int | None = None
+    patient_sex: str | None = None
     medtech_name: str
     approved_at: datetime
     status: str
@@ -102,7 +105,7 @@ class ApprovedResultItem(BaseModel):
 class ApprovedTodayListResponse(BaseModel):
     """Response body for the supervisor's paginated approved-today list."""
 
-    items: List[ApprovedResultItem]
+    items: list[ApprovedResultItem]
     total: int
     page: int
     page_size: int
@@ -114,10 +117,10 @@ class EscalatedResultItem(BaseModel):
     result_id: UUID
     specimen_id: UUID
     patient_name: str
-    patient_age: Optional[int] = None
-    patient_sex: Optional[str] = None
+    patient_age: int | None = None
+    patient_sex: str | None = None
     medtech_name: str
-    escalated_at: Optional[datetime] = None
+    escalated_at: datetime | None = None
     escalation_path: str
     status: str
 
@@ -125,7 +128,7 @@ class EscalatedResultItem(BaseModel):
 class EscalatedListResponse(BaseModel):
     """Response body for the supervisor's paginated escalated-results list."""
 
-    items: List[EscalatedResultItem]
+    items: list[EscalatedResultItem]
     total: int
     page: int
     page_size: int
@@ -148,24 +151,24 @@ class FullResultDetail(BaseModel):
     result_id: UUID
     specimen_id: UUID
     patient_name: str
-    patient_age: Optional[int] = None
-    patient_sex: Optional[str] = None
+    patient_age: int | None = None
+    patient_sex: str | None = None
     medtech_name: str
-    confirmed_at: Optional[datetime] = None
-    confirmation_notes: Optional[str] = None
+    confirmed_at: datetime | None = None
+    confirmation_notes: str | None = None
     """Always None in the ported service — analysis_results.confirmation_notes
     has no Alembic history (schema-drift finding, not modeled). Kept in the
     response shape for API-contract compatibility."""
-    ai_findings: Dict[str, Any]
-    flagged_anomalies: Dict[str, Any]
-    particle_classes: Dict[str, Any]
+    ai_findings: dict[str, Any]
+    flagged_anomalies: dict[str, Any]
+    particle_classes: dict[str, Any]
     model_version: str
-    manual_overrides: List[ManualOverrideItem]
-    image_url: Optional[str] = None
+    manual_overrides: list[ManualOverrideItem]
+    image_url: str | None = None
     smart_diagnosis_unavailable: bool
     status: str
-    annotation_notes: Optional[str] = None
-    spatial_annotations: Optional[List[Dict[str, Any]]] = None
+    annotation_notes: str | None = None
+    spatial_annotations: list[dict[str, Any]] | None = None
     """Persisted as of migration 0034 (JSONB) — type inferred from pre-port
     code, not yet verified against a live database. See the ResultReview
     model's docstring."""
@@ -175,7 +178,7 @@ class AnnotationRequest(BaseModel):
     """Request body for saving a supervisor's annotation on a result."""
 
     annotation_notes: str
-    spatial_annotations: Optional[List[Dict[str, Any]]] = None
+    spatial_annotations: list[dict[str, Any]] | None = None
 
 
 class AnnotationResponse(BaseModel):
@@ -183,13 +186,13 @@ class AnnotationResponse(BaseModel):
 
     result_id: UUID
     annotation_notes: str
-    spatial_annotations: Optional[List[Dict[str, Any]]] = None
+    spatial_annotations: list[dict[str, Any]] | None = None
 
 
 class ApproveRequest(BaseModel):
     """Request body for approving a pending result."""
 
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class ApproveResponse(BaseModel):
@@ -229,7 +232,7 @@ class EscalateRequest(BaseModel):
     """Request body for escalating a pending result."""
 
     escalation_path: EscalationPath
-    escalation_note: Optional[str] = None
+    escalation_note: str | None = None
 
 
 class EscalateResponse(BaseModel):
@@ -256,9 +259,9 @@ class EvidenceMap(BaseModel):
     API-contract compatibility from the pre-port schema.
     """
 
-    gout: List[str] = []
-    uti: List[str] = []
-    tricho: List[str] = []
+    gout: list[str] = []
+    uti: list[str] = []
+    tricho: list[str] = []
 
 
 class SmartDiagnosisAttached(BaseModel):
@@ -270,7 +273,7 @@ class SmartDiagnosisAttached(BaseModel):
     gout_score: ProbabilityLevel
     gn_score: ProbabilityLevel
     nephro_score: ProbabilityLevel
-    evidence_map: Dict[str, Any]
+    evidence_map: dict[str, Any]
     no_significant_indicators: bool
     engine_version: str
     generated_at: str

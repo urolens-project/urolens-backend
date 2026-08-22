@@ -68,7 +68,8 @@ async def register_push_token(
     db: AsyncSession = Depends(get_db),
 ):
     """Register or update the authenticated user's Expo push token for
-    mobile push notifications."""
+    mobile push notifications.
+    """
     user_id = uuid.UUID(current_user["user_id"])
     stmt = (
         update(User)

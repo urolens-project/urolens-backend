@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -17,8 +17,7 @@ if TYPE_CHECKING:
 
 
 class ManualOverride(Base):
-    """
-    MedTech correction to an individual AI-detected parameter.
+    """MedTech correction to an individual AI-detected parameter.
     BOTH the original AI value AND the corrected value are stored.
     Source: Migration 0016 — T2.6 Manual Override.
     """
@@ -48,7 +47,7 @@ class ManualOverride(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    analysis_result: Mapped["AnalysisResult"] = relationship(
+    analysis_result: Mapped[AnalysisResult] = relationship(
         back_populates="manual_overrides"
     )
 

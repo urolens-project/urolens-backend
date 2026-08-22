@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
@@ -65,8 +65,8 @@ class TestJWT:
         token = issue_jwt(user_id, "testuser", role, session_id)
         claims = decode_jwt(token)
 
-        iat = datetime.fromtimestamp(claims["iat"], tz=timezone.utc)
-        exp = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
+        iat = datetime.fromtimestamp(claims["iat"], tz=UTC)
+        exp = datetime.fromtimestamp(claims["exp"], tz=UTC)
         delta = exp - iat
         assert delta == timedelta(hours=1)
 
@@ -75,7 +75,7 @@ class TestJWT:
             decode_jwt("not.a.valid.token")
 
     def test_decode_expired_token_raises(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired_payload = {
             "user_id": str(uuid.uuid4()),
             "role": "PATIENT",
@@ -98,8 +98,8 @@ class TestJWT:
             "user_id": str(user_id),
             "role": "RECEPTIONIST",
             "session_id": str(session_id),
-            "iat": datetime.now(timezone.utc),
-            "exp": datetime.now(timezone.utc) + timedelta(hours=8),
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=8),
         }
         token = jwt.encode(payload, "wrong-secret-key", algorithm="HS256")
         with pytest.raises(jwt.InvalidSignatureError):

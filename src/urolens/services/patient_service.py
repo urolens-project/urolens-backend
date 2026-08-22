@@ -1,5 +1,6 @@
 """Patient intake: creation (with linked portal account and consent record),
-search, and portal-account-linked lookup."""
+search, and portal-account-linked lookup.
+"""
 from __future__ import annotations
 
 import asyncio

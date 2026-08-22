@@ -7,9 +7,8 @@ Create Date: 2026-05-26
 Source: Migration 0019 — T3.2 Result Review
 Depends on: analysis_results, users
 """
+
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = "0019"
 down_revision = "0018"

@@ -1,8 +1,9 @@
 """SQLAlchemy async engine/session setup for the app's Postgres database, plus
-the `get_db` FastAPI dependency routes use to get a request-scoped session."""
+the `get_db` FastAPI dependency routes use to get a request-scoped session.
+"""
 from __future__ import annotations
 
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -30,7 +31,7 @@ AsyncSessionLocal = async_sessionmaker(
 this directly outside of a request context."""
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db() -> AsyncGenerator[AsyncSession]:
     """FastAPI dependency yielding one `AsyncSession` per request.
 
     On any exception raised while the session is in use, rolls back before

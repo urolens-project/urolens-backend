@@ -1,20 +1,18 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
+import src.urolens.models.analysis_result  # noqa: F401
+import src.urolens.models.audit_log  # noqa: F401
+import src.urolens.models.image  # noqa: F401 — register tables with Base
+import src.urolens.models.manual_override  # noqa: F401
+import src.urolens.models.patient  # noqa: F401
+import src.urolens.models.result_confirmation  # noqa: F401
+import src.urolens.models.result_view  # noqa: F401
+import src.urolens.models.smart_diagnosis_output  # noqa: F401
 from alembic import context
-
 from src.urolens.core.config import settings
 from src.urolens.models.base import Base
-import src.urolens.models.image  # noqa: F401 — register tables with Base
-import src.urolens.models.analysis_result  # noqa: F401
-import src.urolens.models.result_confirmation  # noqa: F401
-import src.urolens.models.manual_override  # noqa: F401
-import src.urolens.models.smart_diagnosis_output  # noqa: F401
-import src.urolens.models.audit_log  # noqa: F401
-import src.urolens.models.result_view  # noqa: F401
-import src.urolens.models.patient  # noqa: F401
 
 config = context.config
 

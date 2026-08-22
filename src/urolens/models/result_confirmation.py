@@ -17,8 +17,7 @@ if TYPE_CHECKING:
 
 
 class ResultConfirmation(Base):
-    """
-    MedTech result confirmation event. One per result. Triggers Smart Diagnosis.
+    """MedTech result confirmation event. One per result. Triggers Smart Diagnosis.
     Source: Migration 0015 — T2.5 Result Confirmation.
     """
 
@@ -43,7 +42,7 @@ class ResultConfirmation(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    analysis_result: Mapped["AnalysisResult"] = relationship(
+    analysis_result: Mapped[AnalysisResult] = relationship(
         back_populates="confirmation"
     )
 

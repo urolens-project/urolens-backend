@@ -1,10 +1,10 @@
 # Path: urolens-backend/src/urolens/services/result_confirmation_service.py
 """MedTech result-confirmation transaction (T2.5): confirms an analysis
 result, settles particle_classes, triggers Smart Diagnosis, and notifies the
-supervisor — all as one unit of work."""
+supervisor — all as one unit of work.
+"""
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import Request
 from sqlalchemy import select
@@ -12,16 +12,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..models.analysis_result import AnalysisResult, ResultStatus
-from ..models.result_confirmation import ResultConfirmation
 from ..core.audit_logger import AuditLogger
 from ..core.exceptions import (
-    NotFoundException,
     ConflictException,
+    NotFoundException,
     UnprocessableException,
 )
-from .smart_diagnosis_service import SmartDiagnosisService
+from ..models.analysis_result import AnalysisResult, ResultStatus
+from ..models.result_confirmation import ResultConfirmation
 from .notification_service import NotificationService
+from .smart_diagnosis_service import SmartDiagnosisService
 
 # All statuses that mean the result has already passed the medtech confirmation step
 _ALREADY_CONFIRMED_STATUSES = {
@@ -34,8 +34,7 @@ _ALREADY_CONFIRMED_STATUSES = {
 
 
 class ResultConfirmationService:
-    """
-    Owns the confirm-result transaction (T2.5).
+    """Owns the confirm-result transaction (T2.5).
 
     SRP  — one responsibility: confirm a result and trigger downstream steps.
     DIP  — depends on injected AuditLogger, SmartDiagnosisService, NotificationService.
@@ -61,8 +60,7 @@ class ResultConfirmationService:
         medtech_id: uuid.UUID,
         request: Request,
     ) -> ResultConfirmation:
-        """
-        Confirms an analysis result and triggers Smart Diagnosis.
+        """Confirms an analysis result and triggers Smart Diagnosis.
 
         Args:
             medtech_id: the authenticated user recorded as `confirmed_by`.
@@ -90,7 +88,7 @@ class ResultConfirmationService:
         await self._validate_no_pending_retake(result)
 
         # Create confirmation record
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         confirmation = ResultConfirmation(
             result_id=result_id,
             medtech_id=medtech_id,

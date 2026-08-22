@@ -1,6 +1,5 @@
 """Lab request routes (receptionist-facing): physician lookup and creation."""
 import uuid
-from typing import List
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +22,7 @@ router = APIRouter(
 _receptionist = RequireRole([UserRole.RECEPTIONIST])
 
 
-@router.get("/physicians", response_model=List[PhysicianItem])
+@router.get("/physicians", response_model=list[PhysicianItem])
 async def get_physicians_endpoint(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),

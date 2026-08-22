@@ -1,7 +1,8 @@
 """Physician-portal patient search, lab-request creation, and result
 listing/detail shapes; see `services/physician_service.py` and
-`services/physician_result_service.py`."""
-from typing import Any, Optional
+`services/physician_result_service.py`.
+"""
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -13,7 +14,7 @@ class PhysicianPatientItem(BaseModel):
     patient_id: UUID
     patient_uid: str
     first_name: str
-    middle_name: Optional[str] = None
+    middle_name: str | None = None
     last_name: str
     date_of_birth: str
     sex: str
@@ -22,11 +23,12 @@ class PhysicianPatientItem(BaseModel):
 class LabRequestCreateRequest(BaseModel):
     """Request body for a physician creating a lab request. Unlike
     `schemas.lab_request.LabRequestCreateRequest`, the physician is implicit
-    (from the authenticated caller), so there's no `physician_id` field."""
+    (from the authenticated caller), so there's no `physician_id` field.
+    """
 
     patient_id: UUID
     test_type: str
-    clinical_notes: Optional[str] = None
+    clinical_notes: str | None = None
 
 
 # The response schema for lab-request creation lives in schemas/lab_request.py
@@ -42,10 +44,10 @@ class PhysicianResultSummary(BaseModel):
     specimen_id: str
     patient_name: str
     patient_uid: str
-    patient_age: Optional[int]
-    patient_sex: Optional[str]
+    patient_age: int | None
+    patient_sex: str | None
     status: str
-    confirmed_at: Optional[str]
+    confirmed_at: str | None
     created_at: str
 
 
@@ -78,15 +80,15 @@ class PhysicianResultDetail(BaseModel):
     specimen_id: str
     patient_name: str
     patient_uid: str
-    patient_age: Optional[int]
-    patient_sex: Optional[str]
-    medtech_name: Optional[str]
-    confirmed_at: Optional[str]
+    patient_age: int | None
+    patient_sex: str | None
+    medtech_name: str | None
+    confirmed_at: str | None
     ai_findings: dict[str, Any]
     flagged_anomalies: dict[str, Any]
     particle_classes: dict[str, Any]
     model_version: str
-    smart_diagnosis: Optional[SmartDiagnosisDetail]
-    image_url: Optional[str]
+    smart_diagnosis: SmartDiagnosisDetail | None
+    image_url: str | None
     status: str
-    annotation_notes: Optional[str]
+    annotation_notes: str | None

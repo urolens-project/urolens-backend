@@ -1,9 +1,10 @@
 """Supervisor result release — Supabase-REST implementation, deliberately
 left as-is (not ported to SQLAlchemy) per the consolidation plan's
-deferred-services list."""
+deferred-services list.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
@@ -22,7 +23,8 @@ from src.urolens.services.notification_service import NotificationService
 
 class ResultReleasingService:
     """Lists approved results awaiting release and performs the release
-    transaction (status update + notifications + audit log)."""
+    transaction (status update + notifications + audit log).
+    """
 
     def __init__(
         self,
@@ -210,7 +212,7 @@ class ResultReleasingService:
         release_id = release_row["release_id"]
 
         try:
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
 
             update_res = await self.db.table("analysis_results").update({
                 "status": "RELEASED",
@@ -293,5 +295,5 @@ class ResultReleasingService:
             result_id=result_id,
             released_by=UUID(str(current_user["user_id"])),
             release_method=release_method,
-            released_at=release_row.get("released_at", datetime.now(timezone.utc)),
+            released_at=release_row.get("released_at", datetime.now(UTC)),
         )

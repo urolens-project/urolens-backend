@@ -1,5 +1,4 @@
-"""
-AI Integration Service — T2.7
+"""AI Integration Service — T2.7
 
 Wraps urolens_ai.infer() and owns the full upload -> inference -> persist
 lifecycle. Canonical implementation for the image/AI analysis domain
@@ -37,7 +36,7 @@ import asyncio
 import io
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import UploadFile
 from PIL import Image as PILImage
@@ -46,8 +45,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
 from ..core.config import settings
-from ..core.supabase import supabase as sb
 from ..core.exceptions import ImageFormatError, ImageResolutionError
+from ..core.supabase import supabase as sb
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.lab_request import LabRequest
@@ -269,7 +268,7 @@ class AIIntegrationService:
 
     async def _run_inference(
         self, result: AnalysisResult, raw_bytes: bytes
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Run YOLOv8 inference and persist findings onto the result row.
 
         All exceptions are caught — inference failure must never block the
@@ -303,7 +302,7 @@ class AIIntegrationService:
 
     async def _run_smart_diagnosis(
         self, result: AnalysisResult, findings: dict
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Pre-compute Smart Diagnosis at upload time so both panels are
         visible before the MedTech clicks Confirm.
 

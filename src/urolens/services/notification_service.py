@@ -3,7 +3,7 @@ import logging
 import uuid
 
 import httpx
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.enums import UserRole
@@ -70,7 +70,8 @@ class NotificationService:
         result_id: uuid.UUID,
     ) -> None:
         """Notify every active supervisor that Smart Diagnosis failed for a
-        confirmed result."""
+        confirmed result.
+        """
         supervisor_ids = await self._get_active_user_ids(UserRole.SUPERVISOR)
         for sup_id in supervisor_ids:
             await self.notify(
@@ -87,7 +88,8 @@ class NotificationService:
         lab_request_id: uuid.UUID,
     ) -> None:
         """Notify every active receptionist that a physician submitted a new
-        lab request needing follow-up (e.g. specimen collection)."""
+        lab request needing follow-up (e.g. specimen collection).
+        """
         receptionist_ids = await self._get_active_user_ids(UserRole.RECEPTIONIST)
         for rec_id in receptionist_ids:
             await self.notify(
