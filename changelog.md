@@ -1247,3 +1247,79 @@ was written to describe the *kind* of pre-existing failure a contributor
 might see rather than cite an exact count, so it didn't need a correction;
 this entry is the correction for the exact numbers cited in this file's own
 "Verified" sections throughout this session.
+
+## Full-codebase Pylance/Pyright scan, and four fixes
+
+VS Code's own diagnostics tool only reports on files already open in an
+editor tab (25 files, all clean). To actually check "the entire codebase,"
+Pyright (the open-source engine Pylance is built on) was installed
+temporarily, run in Pylance's default **basic** mode against the project
+venv (no `pyrightconfig.json`/`[tool.pyright]` exists to override that
+default), then removed again.
+
+### Findings
+**1,370 diagnostics total, ~99% attributable to one systemic, non-actionable
+cause**: every Supabase-REST-backed service (`physician_result_service.py`,
+`queue_service.py`, `result_releasing_service.py`, `result_review_service.py`,
+`patient_result_service.py`, `patient_auth_service.py`, the seed scripts,
+etc.) trips Pyright on nearly every `.data` access, because `supabase-py`
+types that attribute as a very loose `JSON` union it can't narrow without
+an explicit cast. A secondary version of the same friction shows up as
+`Column[str]` vs `str` in SQLAlchemy-ported files. **Not fixed, and not
+worth fixing by hand** — the real resolution is finishing the
+already-in-progress Supabase-REST → SQLAlchemy port for these services;
+once ported, ORM column types make this whole class of diagnostic
+disappear on its own.
+
+Out of that noise, five genuinely distinct issues stood out:
+
+### Fixed
+- **`api/result_releasing.py`'s `get_result_releasing_service` constructed
+  `NotificationService` with the wrong DB client** (the Supabase
+  `AsyncClient` meant for `ResultReleasingService`, not the SQLAlchemy
+  `AsyncSession` `NotificationService` actually needs) — silently breaking
+  patient/physician notifications on every `DIGITAL` result release, since
+  `NotificationService.notify()`'s own best-effort try/except swallowed the
+  resulting failure. None of the existing `test_result_releasing.py` tests
+  catch this, since they bypass the dependency factory and mock
+  `NotificationService` directly. Fixed by adding a second
+  `sqlalchemy_db: AsyncSession = Depends(get_db)` dependency; new
+  `tests/test_result_releasing_dependency.py` exercises the factory itself
+  and would have caught the original bug.
+- **`core/auth_service.py`'s `create_session`** had `ip_address`/`user_agent`
+  typed as bare `str` with a `None` default, when both real call sites pass
+  `request.headers.get("user-agent")` (`str | None`). Retyped, no behavior
+  change.
+- **`core/config.py`** never validated `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`
+  at startup, unlike every other secret — an inconsistency with rule 1, not
+  a deliberate choice, since `core/supabase.py` unconditionally constructs a
+  real client from them regardless. Now raises `RuntimeError` at import time
+  if either is unset, matching the `JWT_SIGNING_KEY`/`ENCRYPTION_KEY`
+  pattern exactly.
+- **`schemas/result_review.py`'s `OverrideRequest.rationale`** was
+  `str | None` with a non-`None` default — since `ManualOverride.rationale`
+  is a `NOT NULL` column, an explicit `"rationale": null` in a request body
+  would previously reach the service and fail as an unhandled
+  `IntegrityError` (violating rule 12). Retyped to plain `str`; verified
+  directly against the schema that an omitted field still gets the default
+  and an explicit `null` is now a clean 422 instead of a 500.
+
+### Flagged, not fixed — needs a product decision, not a type fix
+- **`services/pdf_service.py`'s `generate_result_pdf` is fundamentally
+  broken against the schema it's actually called with.** Its type hint says
+  `PatientResultDetail` (an empty alias of `PatientResultDetailResponse`),
+  but its body accesses `result.result_id`, `.created_at`, `.cell_counts`,
+  `.interpretation`, `.medtech_name`, `.pathologist_name`,
+  `.pathologist_license` — **none of which exist on that schema.**
+  `GET /api/v1/patient/results/{result_id}/pdf` crashes on the very first
+  unconditional access (`result.result_id`) every single time it's called.
+  The fields `generate_result_pdf` expects match `AnalysisResult` (the
+  SQLAlchemy model) instead — but `cell_counts`, `interpretation`,
+  `pathologist_name`, and `pathologist_license` are declared columns on
+  that model that are **never written anywhere in this codebase** (grep-
+  confirmed) — scaffolded, never wired up. Properly fixing this means
+  deciding what data actually populates the PDF (extend
+  `PatientResultDetail` with the missing fields and populate them in
+  `PatientResultService`, or point `generate_result_pdf` at a differently-
+  sourced object) — a real feature-completion decision, not something to
+  guess at while doing a type-hint pass. Not fixed here.
