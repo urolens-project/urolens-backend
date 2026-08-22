@@ -1,12 +1,57 @@
-"""Supervisor review/approval and Smart Diagnosis lookup request/response
-shapes; see `services/result_review_service.py`."""
+"""Result confirm/override, supervisor review/approval, and Smart Diagnosis
+lookup request/response shapes; see `services/result_confirmation_service.py`,
+`services/manual_override_service.py`, and `services/result_review_service.py`."""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union, get_args
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+
+class ConfirmResultResponse(BaseModel):
+    """Response shape for a successful result confirmation."""
+
+    id: UUID
+    result_id: UUID
+    confirmed_by: UUID
+    confirmed_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class OverrideRequest(BaseModel):
+    """Request body for overriding a single AI-generated result parameter."""
+
+    parameter: str = Field(..., min_length=1, max_length=100)
+    corrected_value: float = Field(..., ge=0)
+    rationale: Optional[str] = Field("No rationale provided", max_length=2000)
+    original_ai_value: float = Field(..., ge=0)
+
+    @field_validator("parameter")
+    @classmethod
+    def parameter_no_whitespace_only(cls, v: str) -> str:
+        """Reject a `parameter` that is blank or whitespace-only; strips
+        surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("parameter must not be blank")
+        return v.strip()
+
+
+class OverrideResponse(BaseModel):
+    """Response shape for a successful parameter override."""
+
+    id: UUID
+    result_id: UUID
+    parameter: str
+    original_ai_value: float
+    corrected_value: float
+    rationale: str
+    overridden_by: UUID
+    overridden_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class SupervisorStatsResponse(BaseModel):
