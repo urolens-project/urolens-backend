@@ -1,3 +1,4 @@
+"""ORM model for the `patients` table."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -13,6 +14,10 @@ if TYPE_CHECKING:
 
 
 class Patient(Base):
+    """A patient record, created by `PatientService.create_patient`. PII
+    fields (`first_name`, `last_name`, `date_of_birth`, `contact_no`,
+    `address`) are Fernet-encrypted ciphertext, not plaintext."""
+
     __tablename__ = "patients"
 
     patient_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())

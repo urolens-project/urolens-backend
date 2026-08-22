@@ -1,3 +1,5 @@
+"""ORM model for the `result_releases` table (currently unused — see the
+`ResultRelease` class docstring)."""
 from __future__ import annotations
 
 import uuid
@@ -20,6 +22,12 @@ class ResultRelease(Base):
     """
     Records every release event for an approved analysis result.
     Source: Migration 0026 — STORY-WEB-15 Result Releasing (T4.1)
+
+    Not imported anywhere in the app (including `models/__init__.py`) —
+    `result_releasing_service.py` writes the same `result_releases` table via
+    raw Supabase REST calls instead of this ORM model. A rule-14
+    unreferenced-model candidate, not deleted here since this pass is
+    documentation-only; see the flagged-findings changelog entry.
     """
 
     __tablename__ = "result_releases"

@@ -1,3 +1,4 @@
+"""ORM model for the `consents` table."""
 from sqlalchemy import Boolean, Column, ForeignKey, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -5,6 +6,8 @@ from .base import Base
 
 
 class Consent(Base):
+    """A patient's recorded consent answers, created alongside patient intake."""
+
     __tablename__ = "consents"
 
     consent_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())

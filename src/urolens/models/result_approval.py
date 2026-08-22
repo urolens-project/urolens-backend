@@ -1,3 +1,4 @@
+"""ORM model for the `result_approvals` table."""
 from __future__ import annotations
 
 import uuid
@@ -38,4 +39,5 @@ class ResultApproval(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `approval_id`, for callers expecting a generic `id` field."""
         return self.approval_id

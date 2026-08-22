@@ -1,3 +1,4 @@
+"""ORM model for the `result_confirmations` table."""
 from __future__ import annotations
 
 import uuid
@@ -48,8 +49,10 @@ class ResultConfirmation(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `confirmation_id`, for callers expecting a generic `id` field."""
         return self.confirmation_id
 
     @property
     def confirmed_by(self) -> uuid.UUID:
+        """Alias for `medtech_id`, matching the API-contract field name."""
         return self.medtech_id

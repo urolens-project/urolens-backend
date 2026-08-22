@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM models, re-exported here so `Base.metadata` (used by
+Alembic) sees every table regardless of which module first imports it."""
 from .base import Base  # noqa: F401
 from .user import User  # noqa: F401
 from .patient import Patient  # noqa: F401

@@ -1,3 +1,4 @@
+"""ORM model for the `print_jobs` table."""
 from __future__ import annotations
 
 import uuid
@@ -43,4 +44,5 @@ class PrintJob(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `print_job_id`, for callers expecting a generic `id` field."""
         return self.print_job_id

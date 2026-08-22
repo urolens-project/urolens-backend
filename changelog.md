@@ -840,3 +840,69 @@ flagged-findings entry below for those).
   `services/result_review_service.py`, never consolidated. `schemas/__init__.py`
   has no public re-exports (a pre-existing rule-11 gap) — documented as such,
   left as-is.
+- **Chunk 5 — `src/urolens/domains/` and `src/urolens/models/`.** All 7
+  `domains/` files (routers plus package markers) and all 23 `models/` files
+  (ORM models plus `__init__.py`) — roughly 65 exported classes/functions/
+  properties. Noted while documenting, not fixed (see the flagged-findings
+  entry below): `domains/intake/service.py` is a completely empty,
+  unreferenced file; `models/result_release.py`'s `ResultRelease` model is
+  never imported anywhere (including `models/__init__.py`) since
+  `result_releasing_service.py` writes the same table via raw Supabase REST
+  instead; `models/image.py`'s `Image` class docstring says binary storage is
+  S3, contradicting `ai_integration_service.py`'s explicit Supabase Storage
+  implementation.
+
+### Flagged findings (not fixed — documentation-only pass)
+- **Duplicate lab-request creation implementations**: `services/physician_service.py`'s
+  `create_lab_request` (Supabase REST, physician-facing) and
+  `services/lab_request_service.py`'s `create_lab_request` (SQLAlchemy,
+  receptionist/encoder-facing) both create a `PENDING_SAMPLE` lab request with
+  independent UID-generation logic. Two implementations of the same feature,
+  never consolidated under rule 14.
+- **Duplicate `VALID_ESCALATION_PATHS` constant**: defined identically in both
+  `schemas/result_review.py` (module-level) and
+  `services/result_review_service.py` (module-level) — same three string
+  values, two separate definitions.
+- **Inline schemas outside `schemas/`** (rule 11): `api/notifications.py`
+  (`NotificationOut`, `PushTokenRequest`) and `api/results.py`
+  (`ConfirmResultResponse`, `OverrideRequest`, `OverrideResponse`) define
+  Pydantic models directly in the router.
+- **`schemas/__init__.py` has no public re-exports**, unlike every other
+  package's `__init__.py` in this tree — a rule-11 gap predating this pass.
+- **`domains/intake/service.py` is a completely empty file with zero
+  importers** anywhere in the repo (grep-verified) — a rule-14
+  dead-file/unreferenced-code candidate.
+- **`models/result_release.py`'s `ResultRelease` ORM model is never imported
+  anywhere**, including its own package's `models/__init__.py` (every other
+  model is re-exported there). `result_releasing_service.py` writes the same
+  `result_releases` table via raw Supabase REST calls instead of this model —
+  a rule-14 unreferenced-model candidate.
+- **`models/image.py`'s `Image` class docstring says image binaries are
+  stored in S3.** This contradicts `services/ai_integration_service.py`'s own
+  module docstring, which explicitly states storage is Supabase Storage (not
+  S3/boto3) and confirms no AWS credentials exist anywhere in the project.
+  The docstring is stale relative to the actual (and documented-elsewhere)
+  implementation; left as originally written rather than guessed at, per the
+  hard constraint against inventing corrections while documenting.
+
+### Verified
+- `python -c "import main"` boots clean after every one of the five chunks.
+- Full test suite held at the existing 20-failed/38-passed baseline after
+  every chunk, with an identical failure list each time.
+- Every diff in this task is additive (docstrings/comments/module summaries
+  only) — confirmed via `git diff --stat` per chunk before each commit;
+  zero lines of existing logic were changed, renamed, or reformatted.
+- **Coverage (interrogate)**: neither `pydocstyle` nor `interrogate` was
+  pre-installed, but `pip install interrogate` worked in this environment, so
+  it was installed and run before and after. `src/urolens/` docstring
+  coverage went from **16.9%** (pre-existing baseline, measured against the
+  pre-chunk-1 commit `c1c34c1` via `git archive`) to **88.6%** post-pass
+  (`interrogate src/urolens`, 437 covered/total nodes, 50 missing). The
+  remaining gap is interrogate's broader definition of "coverable" (it also
+  counts `__init__` methods, magic methods, and every private method by
+  default) against this task's narrower scope (exported members, plus a
+  short comment — not necessarily a full docstring — for private helpers);
+  spot-checking the lowest-scoring files (`patient_auth_service.py` 43%,
+  `notification_service.py` 56%) confirmed their gaps are non-underscore
+  `__init__`/private helper methods already carrying an explanatory comment
+  per this task's rule, not missing documentation.

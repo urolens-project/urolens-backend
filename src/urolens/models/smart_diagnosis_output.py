@@ -1,3 +1,4 @@
+"""ORM model for the `smart_diagnosis_outputs` table."""
 from __future__ import annotations
 
 import enum
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
 
 
 class ScoreLevel(str, enum.Enum):
+    """The three risk levels a Smart Diagnosis condition score can take."""
+
     LOW = "LOW"
     MODERATE = "MODERATE"
     HIGH = "HIGH"
@@ -77,4 +80,5 @@ class SmartDiagnosisOutput(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `output_id`, for callers expecting a generic `id` field."""
         return self.output_id
