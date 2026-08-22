@@ -1,3 +1,6 @@
+"""Patient-portal result listing/detail — Supabase-REST implementation,
+deliberately left as-is (not ported to SQLAlchemy) per the consolidation
+plan's deferred-services list."""
 from datetime import datetime
 from uuid import UUID
 
@@ -14,11 +17,15 @@ from src.urolens.schemas.patient_portal import (
 
 
 class PatientResultService:
+    """Read-side operations for the patient portal's result list/detail views."""
+
     def __init__(self, db: AsyncClient, audit_logger: AuditLogger):
         self.db = db
         self.audit_logger = audit_logger
 
     async def _resolve_patient_id(self, user_id: UUID) -> UUID:
+        # Maps an authenticated portal user_id to their patient_id.
+        # Raises HTTPException 404 (PATIENT_NOT_FOUND) if no patient row exists for this user.
         result = (
             await self.db.table("patients")
             .select("patient_id")
@@ -37,6 +44,15 @@ class PatientResultService:
         return UUID(row["patient_id"])
 
     async def get_patient_results(self, user_id: UUID) -> list[PatientResultItem]:
+        """List the authenticated patient's analysis results, newest-released first.
+
+        Returns:
+            One `PatientResultItem` per result, ordered by `released_at` descending.
+
+        Raises:
+            HTTPException: 404 (`PATIENT_NOT_FOUND`), if no patient record is
+                linked to this user account.
+        """
         patient_id = await self._resolve_patient_id(user_id)
 
         result = await (
@@ -61,6 +77,23 @@ class PatientResultService:
     async def get_result_detail(
         self, result_id: UUID, user_id: UUID, request: Request
     ) -> PatientResultDetailResponse:
+        """Fetch one result's full detail for the patient portal, recording
+        the view (a `result_views` row plus a `RESULT_VIEWED` audit entry).
+
+        Args:
+            user_id: the authenticated portal user; the result must belong to
+                this user's own patient record.
+
+        Returns:
+            The result detail, including particle counts normalised against
+            the fixed `PARTICLE_LABELS` set.
+
+        Raises:
+            HTTPException: 404 (`PATIENT_NOT_FOUND`), if no patient record is
+                linked to this user account. 404 (`RESULT_NOT_FOUND`), if
+                `result_id` doesn't exist. 403 (`ACCESS_DENIED`), if the
+                result belongs to a different patient.
+        """
         patient_id = await self._resolve_patient_id(user_id)
 
         result = await (
@@ -132,6 +165,8 @@ class PatientResultService:
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
+    # Parses an ISO timestamp (with trailing "Z" normalised to "+00:00");
+    # returns None for a missing or unparseable value rather than raising.
     if value is None:
         return None
     try:

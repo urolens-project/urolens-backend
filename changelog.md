@@ -814,3 +814,14 @@ flagged-findings entry below for those).
   class/function docstrings from the earlier consolidation; only its one
   undocumented private helper and the module-level `settings` singleton got added
   comments.
+- **Chunk 2 — `src/urolens/services/`.** All 19 files (`__init__.py` plus 18
+  service modules) — roughly 60 exported functions/classes/methods plus
+  private-helper comments. `patient_service.py` and `ai_integration_service.py`
+  already had near-complete docstrings from earlier work; only their missing
+  module docstring / one undocumented private helper were added. Noted while
+  documenting, not fixed (see the flagged-findings entry below):
+  `physician_service.py`'s `create_lab_request` duplicates
+  `lab_request_service.py`'s SQLAlchemy version of the same operation — two
+  implementations of lab-request creation, one Supabase-REST (physician-facing)
+  and one SQLAlchemy (receptionist/encoder-facing), never consolidated under
+  rule 14.

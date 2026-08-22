@@ -1,3 +1,4 @@
+"""In-app notification rows plus best-effort Expo push delivery."""
 import logging
 import uuid
 
@@ -15,6 +16,8 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 
 class NotificationService:
+    """Creates `Notification` rows and attempts best-effort Expo push delivery."""
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
@@ -25,6 +28,13 @@ class NotificationService:
         notification_type: str,
         entity_id: uuid.UUID | None = None,
     ) -> None:
+        """Insert a notification row and attempt push delivery. Never raises —
+        a DB failure is logged and swallowed; push delivery failures are
+        swallowed inside `_push`.
+
+        Args:
+            entity_id: the related entity (e.g. a result or specimen ID), if any.
+        """
         try:
             stmt = insert(Notification).values(
                 user_id=user_id,
@@ -45,6 +55,7 @@ class NotificationService:
         result_id: uuid.UUID,
         specimen_id: uuid.UUID,
     ) -> None:
+        """Notify every active supervisor that a result is ready for their review."""
         supervisor_ids = await self._get_supervisor_ids()
         for sup_id in supervisor_ids:
             await self.notify(
@@ -58,6 +69,8 @@ class NotificationService:
         self,
         result_id: uuid.UUID,
     ) -> None:
+        """Notify every active supervisor that Smart Diagnosis failed for a
+        confirmed result."""
         supervisor_ids = await self._get_supervisor_ids()
         for sup_id in supervisor_ids:
             await self.notify(
@@ -76,6 +89,8 @@ class NotificationService:
         notification_type: str,
         entity_id: uuid.UUID | None,
     ) -> None:
+        # Best-effort Expo push delivery; no-ops if the user has no token, and
+        # swallows any HTTP failure — push is never allowed to break notify().
         token = await self._get_push_token(user_id)
         if not token or not token.startswith("ExponentPushToken"):
             return
@@ -96,6 +111,7 @@ class NotificationService:
             logger.warning("Expo push delivery failed for user %s", user_id)
 
     async def _get_push_token(self, user_id: uuid.UUID) -> str | None:
+        # Returns None (rather than raising) on lookup failure or missing token.
         try:
             stmt = select(User.expo_push_token).where(User.user_id == user_id)
             result = await self.db.execute(stmt)
@@ -104,6 +120,7 @@ class NotificationService:
             return None
 
     async def _get_supervisor_ids(self) -> list[uuid.UUID]:
+        # Returns [] (rather than raising) on query failure.
         try:
             stmt = select(User.user_id).where(
                 User.role == UserRole.SUPERVISOR,

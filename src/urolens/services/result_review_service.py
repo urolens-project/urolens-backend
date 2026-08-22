@@ -64,6 +64,8 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
+    # Builds the public Supabase storage URL for a specimen image; returns
+    # None if there's no storage key or no configured Supabase URL.
     if not storage_key or not settings.supabase_url:
         return None
     base = settings.supabase_url.rstrip("/")
@@ -71,6 +73,8 @@ def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
 
 
 def _decrypt_or_none(ciphertext: Optional[str]) -> Optional[str]:
+    # Decrypts PII, returning None (rather than raising) for an unset or
+    # undecryptable value.
     if not ciphertext:
         return None
     try:
@@ -90,6 +94,10 @@ class ResultReviewService:
     # ── Private helpers ──────────────────────────────────────────────────
 
     async def _require_pending(self, result_id: uuid.UUID) -> AnalysisResult:
+        # Loads a result and enforces it's awaiting supervisor action, for
+        # approve_result/return_result/escalate_result's shared guard.
+        # Raises NotFoundException (RESULT_NOT_FOUND) or ConflictException
+        # (INVALID_RESULT_STATUS) if either check fails.
         result = await self.db.get(AnalysisResult, result_id)
         if result is None:
             raise NotFoundException(
@@ -147,6 +155,13 @@ class ResultReviewService:
     # ── Supervisor dashboard stats ───────────────────────────────────────
 
     async def get_supervisor_stats(self) -> dict[str, int]:
+        """Dashboard counts for the supervisor's review queue.
+
+        Returns:
+            A dict with `pendingCount` (results awaiting approval),
+            `approvedToday` (approvals recorded today, PHT), and
+            `escalatedCount` (results currently `CRITICAL_ESCALATED`).
+        """
         today_pht = datetime.now(_PHT).date()
         tomorrow_pht = today_pht + timedelta(days=1)
 
@@ -186,6 +201,16 @@ class ResultReviewService:
     # ── Pending queue ─────────────────────────────────────────────────────
 
     async def get_pending(self, page: int, page_size: int) -> dict[str, Any]:
+        """List results awaiting supervisor approval, oldest-confirmed first.
+
+        Args:
+            page: 1-indexed page number.
+            page_size: rows per page.
+
+        Returns:
+            A dict with `items` (patient/medtech context flattened per row),
+            `total`, `page`, and `page_size`.
+        """
         offset = (page - 1) * page_size
 
         total = (
@@ -232,6 +257,16 @@ class ResultReviewService:
     # ── Approved today list ───────────────────────────────────────────────
 
     async def get_approved_today(self, page: int, page_size: int) -> dict[str, Any]:
+        """List results approved today (PHT), newest-approved first.
+
+        Args:
+            page: 1-indexed page number.
+            page_size: rows per page.
+
+        Returns:
+            A dict with `items` (patient/medtech context flattened per row),
+            `total`, `page`, and `page_size`.
+        """
         offset = (page - 1) * page_size
         today_pht = datetime.now(_PHT).date()
         tomorrow_pht = today_pht + timedelta(days=1)
@@ -290,6 +325,16 @@ class ResultReviewService:
     # ── Escalated list ────────────────────────────────────────────────────
 
     async def get_escalated(self, page: int, page_size: int) -> dict[str, Any]:
+        """List results currently `CRITICAL_ESCALATED`, newest-updated first.
+
+        Args:
+            page: 1-indexed page number.
+            page_size: rows per page.
+
+        Returns:
+            A dict with `items` (patient/medtech/escalation context flattened
+            per row), `total`, `page`, and `page_size`.
+        """
         offset = (page - 1) * page_size
 
         total = (
@@ -345,6 +390,17 @@ class ResultReviewService:
     # ── Full result detail ────────────────────────────────────────────────
 
     async def get_full_result(self, result_id: uuid.UUID) -> dict[str, Any]:
+        """Assemble the full supervisor-review detail view for one result:
+        patient/medtech context, AI findings, manual overrides, the latest
+        annotation, and Smart Diagnosis (if attached).
+
+        Returns:
+            A dict of the assembled detail fields. `confirmation_notes` is
+            always `None` — see the module docstring's schema-drift note.
+
+        Raises:
+            NotFoundException: `result_id` doesn't exist.
+        """
         ar = await self.db.get(AnalysisResult, result_id)
         if ar is None:
             raise NotFoundException(
@@ -499,6 +555,19 @@ class ResultReviewService:
     async def approve_result(
         self, result_id: uuid.UUID, user_id: uuid.UUID, notes: Optional[str]
     ) -> dict[str, Any]:
+        """Approve a pending result, marking its specimen `COMPLETED`.
+
+        Args:
+            user_id: the authenticated supervisor recorded as `approved_by`.
+            notes: optional free-text approval notes.
+
+        Returns:
+            A dict confirming the new status and `approved_at` timestamp.
+
+        Raises:
+            NotFoundException: `result_id` doesn't exist.
+            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+        """
         ar = await self._require_pending(result_id)
 
         now = datetime.now(_PHT)
@@ -519,6 +588,19 @@ class ResultReviewService:
     async def return_result(
         self, result_id: uuid.UUID, user_id: uuid.UUID, reason: str
     ) -> dict[str, Any]:
+        """Return a pending result to the MedTech for correction.
+
+        Args:
+            user_id: the authenticated supervisor recorded as `returned_by`.
+            reason: required free-text explanation for the return.
+
+        Returns:
+            A dict confirming the new status and `returned_at` timestamp.
+
+        Raises:
+            NotFoundException: `result_id` doesn't exist.
+            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+        """
         ar = await self._require_pending(result_id)
 
         now = datetime.now(_PHT)
@@ -542,6 +624,23 @@ class ResultReviewService:
         escalation_path: str,
         escalation_note: Optional[str],
     ) -> dict[str, Any]:
+        """Escalate a pending result to `CRITICAL_ESCALATED`.
+
+        Args:
+            user_id: the authenticated supervisor recorded as `escalated_by`.
+            escalation_path: must be one of `VALID_ESCALATION_PATHS`
+                (`NOTIFY_PHYSICIAN`, `FLAG_SENIOR_REVIEW`, `MARK_CRITICAL`).
+            escalation_note: optional free-text note.
+
+        Returns:
+            A dict confirming the new status, `escalation_path`, and
+            `escalated_at` timestamp.
+
+        Raises:
+            UnprocessableException: `escalation_path` isn't a valid path.
+            NotFoundException: `result_id` doesn't exist.
+            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+        """
         if escalation_path not in VALID_ESCALATION_PATHS:
             raise UnprocessableException(
                 code="INVALID_ESCALATION_PATH",
@@ -579,6 +678,19 @@ class ResultReviewService:
 # than being ported to SQLAlchemy speculatively.
 
 async def get_smart_diagnosis(result_id: str) -> dict:
+    """Fetch a result's Smart Diagnosis output, preferring the authoritative
+    `smart_diagnosis_outputs` row and falling back to the denormalized
+    `analysis_results.smart_diagnosis` JSONB column if no attached output
+    record exists.
+
+    Returns:
+        A dict with `status` `"ATTACHED"` (with scores/evidence) if found via
+        either source, or `{"result_id": ..., "status": "FLAGGED_UNAVAILABLE"}`
+        if neither has usable data.
+
+    Raises:
+        HTTPException: 404, if `result_id` doesn't exist.
+    """
     # Fetch result including the denormalized smart_diagnosis JSONB column
     result = await (
         supabase.table("analysis_results")

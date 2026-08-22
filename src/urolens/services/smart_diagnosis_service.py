@@ -1,3 +1,6 @@
+"""Runs the AI Engineer's rule engine (Smart Diagnosis) against a confirmed
+result's findings and persists the output — or, on any failure, logs the
+error and marks the result diagnosis-unavailable without propagating (T3.1)."""
 import logging
 import traceback
 import uuid
@@ -48,8 +51,18 @@ class SmartDiagnosisService:
         """
         Runs Smart Diagnosis for the given result.
 
-        Returns the persisted SmartDiagnosisOutput on success, None on failure.
-        Never raises — all exceptions are handled internally.
+        Runs inside a SAVEPOINT nested in the caller's transaction (`db`), so
+        an engine failure rolls back only the diagnosis work, not the
+        caller's parent transaction.
+
+        Returns:
+            The persisted `SmartDiagnosisOutput` on success; `None` on any
+            failure (already logged to `engine_error_logs` and audited via
+            `_handle_failure`).
+
+        Raises:
+            Never raises — all exceptions are handled internally, per the
+            class's critical contract.
         """
         try:
             # SAVEPOINT isolates SmartDiagnosis from the parent confirmation
@@ -93,6 +106,7 @@ class SmartDiagnosisService:
     async def _load_result(
         self, result_id: uuid.UUID, db: AsyncSession
     ) -> AnalysisResult:
+        # Loads the AnalysisResult for `run()`; raises ValueError if it doesn't exist.
         # Eagerly load smart_diagnosis_output so the relationship is in a
         # "loaded" state (None for fresh results) before db.add(SmartDiagnosisOutput).
         # Without this, the autoflush that INSERTs the new SmartDiagnosisOutput
@@ -113,6 +127,8 @@ class SmartDiagnosisService:
     async def _persist_output(
         self, engine_output, result_id: uuid.UUID, db: AsyncSession
     ) -> SmartDiagnosisOutput:
+        # Persists a SmartDiagnosisOutput row and denormalizes a summary onto
+        # analysis_results.smart_diagnosis for the mobile sync path to read.
         evidence_map = _build_evidence_map(engine_output)
         record = SmartDiagnosisOutput(
             result_id=result_id,
@@ -144,7 +160,11 @@ class SmartDiagnosisService:
     async def _handle_failure(
         self, result_id: uuid.UUID, exc: Exception, db: AsyncSession
     ) -> None:
-        """Persists the engine error and marks the result as diagnosis-unavailable."""
+        """Persists the engine error and marks the result as diagnosis-unavailable.
+
+        Best-effort like the rest of the failure path: an exception here
+        (e.g. the nested savepoint itself failing) is caught and logged, not
+        propagated — `run()` must still return `None` cleanly."""
         try:
             error_code = _classify_error(exc)
             async with db.begin_nested():

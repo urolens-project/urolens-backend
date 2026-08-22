@@ -1,3 +1,5 @@
+"""Specimen label generation, printing, and affixed-confirmation for the
+receptionist/encoder intake flow."""
 from __future__ import annotations
 
 import logging
@@ -47,6 +49,19 @@ def _decrypt_patient_name_or_raise(specimen: Specimen) -> str:
 
 
 async def search_received_specimens(db: AsyncSession, q: str) -> list[ReceivedSpecimenSearchItem]:
+    """Search `RECEIVED`-status specimens by decrypted patient name, patient
+    UID, or sample UID (case-insensitive substring match).
+
+    Fetches up to 200 candidate rows and decrypts/filters in Python, since
+    patient names are encrypted at rest. A row that fails to decrypt is
+    logged and excluded rather than returned with ciphertext.
+
+    Args:
+        q: search text, matched against name/patient UID/sample UID.
+
+    Returns:
+        Up to `_MAX_SEARCH_RESULTS` matches, in the order scanned.
+    """
     stmt = select(Specimen).where(Specimen.status == "RECEIVED").limit(200)
     rows = (await db.execute(stmt)).scalars().all()
 
@@ -84,6 +99,20 @@ async def search_received_specimens(db: AsyncSession, q: str) -> list[ReceivedSp
 async def generate_label(
     db: AsyncSession, specimen_id: uuid.UUID, operator_id: uuid.UUID
 ) -> PrintLabelResponse:
+    """Generate and record a printable label for a `RECEIVED` specimen.
+
+    Args:
+        operator_id: the authenticated user recorded as the label's `generated_by`.
+
+    Returns:
+        Confirmation of the created label and print job, plus the label preview data.
+
+    Raises:
+        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        UnprocessableException: the specimen isn't in `RECEIVED` status, or
+            the patient name fails to decrypt (`PATIENT_NAME_DECRYPTION_FAILED`
+            — refuses to print a label with a wrong/missing name).
+    """
     specimen = await db.get(Specimen, specimen_id)
     if specimen is None:
         raise SpecimenNotFoundError(str(specimen_id))
@@ -131,6 +160,26 @@ async def confirm_label_affixed(
     operator_id: uuid.UUID,
     offline_override: bool,
 ) -> LabelConfirmResponse:
+    """Confirm a specimen's label has been physically affixed, advancing it
+    to `LABELED` status.
+
+    Args:
+        operator_id: the authenticated user; recorded as `generated_by` if an
+            offline-override label is created here.
+        offline_override: if `True` and no label record exists yet, creates
+            one on the fly (flagged `offline_override: True` in its content)
+            instead of requiring `generate_label` to have run first.
+
+    Returns:
+        Confirmation of the status transition.
+
+    Raises:
+        HTTPException: 400, if no label exists and `offline_override` is `False`.
+        SpecimenNotFoundError: `specimen_id` doesn't exist (checked when a
+            label must be looked up or created against it).
+        UnprocessableException: the patient name fails to decrypt while
+            building an offline-override label (`PATIENT_NAME_DECRYPTION_FAILED`).
+    """
     stmt = select(SampleLabel).where(SampleLabel.specimen_id == specimen_id)
     label = (await db.execute(stmt)).scalars().first()
 

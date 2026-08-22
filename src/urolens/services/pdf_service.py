@@ -1,17 +1,31 @@
+"""Renders a patient-facing PDF lab report from a confirmed/released result."""
 from datetime import datetime, timezone
 
 from src.urolens.schemas.patient_portal import PatientResultDetail
 
 
 def _safe_str(value: str | None, fallback: str = "Pending") -> str:
+    # Placeholder text for an unset signature/label field in the PDF.
     return value if value else fallback
 
 
 def _safe_val(value: int | None, fallback: int = 0) -> int:
+    # Placeholder count (0) for an unset cell-count field in the PDF.
     return value if value is not None else fallback
 
 
 def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes:
+    """Render a one-page A4 PDF lab report for a patient result.
+
+    Args:
+        result: the result detail to render (cell counts, interpretation,
+            signatures, etc.).
+        patient_name: decrypted patient name to display; passed separately
+            since `result` doesn't carry PII.
+
+    Returns:
+        The generated PDF as raw bytes.
+    """
     from io import BytesIO
 
     from reportlab.lib.pagesizes import A4

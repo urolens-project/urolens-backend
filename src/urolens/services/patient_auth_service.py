@@ -1,3 +1,6 @@
+"""Patient-portal authentication: patients log in with their patient UID and
+a password derived from their (decrypted) last name + date of birth, rather
+than a stored credential."""
 import asyncio
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -21,12 +24,16 @@ _PATIENT_TOKEN_EXPIRE_MINUTES = 30
 
 
 def _api_error(status_code: int, code: str, message: str) -> HTTPException:
+    # Builds an HTTPException carrying a machine-readable error_code attribute,
+    # for endpoints not using one of the typed exceptions in core.exceptions.
     exc = HTTPException(status_code=status_code, detail=message)
     exc.error_code = code  # type: ignore[attr-defined]
     return exc
 
 
 def _invalid_creds() -> HTTPException:
+    # 401 with a generic message — deliberately doesn't distinguish "unknown
+    # patient ID" from "wrong password" to avoid leaking which is wrong.
     return _api_error(
         status.HTTP_401_UNAUTHORIZED,
         "INVALID_CREDENTIALS",
@@ -35,6 +42,7 @@ def _invalid_creds() -> HTTPException:
 
 
 def _derive_patient_password(last_name: str, date_of_birth: str) -> str:
+    # Deterministic password: normalized/uppercased last name + DDMMYYYY DOB.
     # date_of_birth is ISO date string "YYYY-MM-DD" after decryption
     normalized = unicodedata.normalize("NFC", last_name).replace(" ", "").upper()
     dob = datetime.strptime(date_of_birth, "%Y-%m-%d")
@@ -42,6 +50,8 @@ def _derive_patient_password(last_name: str, date_of_birth: str) -> str:
 
 
 def _issue_patient_jwt(user_id, patient_uid: str, session_id) -> str:
+    # Same shape/signing as core.auth_service.issue_jwt, hardcoded to the
+    # PATIENT role and a shorter expiry (_PATIENT_TOKEN_EXPIRE_MINUTES).
     now = datetime.now(timezone.utc)
     payload = {
         "user_id": str(user_id),
@@ -55,6 +65,22 @@ def _issue_patient_jwt(user_id, patient_uid: str, session_id) -> str:
 
 
 async def patient_login(patient_uid: str, password: str, request: Request) -> PatientLoginResponse:
+    """Authenticate a patient-portal login and issue a scoped access token.
+
+    Password isn't stored — it's re-derived on each attempt from the
+    patient's decrypted last name and date of birth
+    (`_derive_patient_password`) and compared case-insensitively. Every
+    rejection path is audit-logged.
+
+    Returns:
+        A `PatientLoginResponse` with the issued access token.
+
+    Raises:
+        HTTPException: 401 (`INVALID_CREDENTIALS`), for an unknown patient
+            UID, a user record that can't be resolved, undecryptable PII, or
+            a password mismatch. 423 (`ACCOUNT_LOCKED`), if the account is
+            locked. 403 (`ACCOUNT_INACTIVE`), if the account is inactive.
+    """
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent")
 
@@ -131,6 +157,7 @@ async def patient_login(patient_uid: str, password: str, request: Request) -> Pa
 
 
 async def patient_logout(session_id, user_id, request: Request) -> None:
+    """Close a patient's session and record a `PATIENT_LOGOUT` audit entry."""
     ip_address = request.client.host if request.client else "unknown"
     await asyncio.gather(
         close_session(session_id),

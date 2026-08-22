@@ -1,3 +1,6 @@
+"""Physician-portal result listing/detail — Supabase-REST implementation,
+scoped to results for patients the requesting physician has an associated lab
+request for."""
 import asyncio
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -19,6 +22,8 @@ _PHT = timezone(timedelta(hours=8))
 
 
 def _compute_age(dob_str: Optional[str]) -> Optional[int]:
+    # Computes age in whole years from an ISO date-of-birth string;
+    # returns None if unset or unparseable.
     if not dob_str:
         return None
     try:
@@ -30,6 +35,8 @@ def _compute_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
+    # Builds the public Supabase storage URL for a specimen image; returns
+    # None if there's no storage key or no configured Supabase URL.
     if not storage_key or not settings.supabase_url:
         return None
     base = settings.supabase_url.rstrip("/")
@@ -37,6 +44,8 @@ def _image_public_url(storage_key: Optional[str]) -> Optional[str]:
 
 
 async def _get_physician_patient_ids(physician_id: str) -> list[str]:
+    # Distinct patient IDs from lab requests attributed to this physician —
+    # the access-scoping set used by list_results/get_result_detail.
     res = await supabase.table("lab_requests").select("patient_id").eq(
         "physician_id", physician_id
     ).execute()
@@ -44,6 +53,19 @@ async def _get_physician_patient_ids(physician_id: str) -> list[str]:
 
 
 async def list_results(physician_id: str, page: int, page_size: int) -> dict:
+    """List analysis results for patients associated with this physician's
+    lab requests, newest-created first.
+
+    Args:
+        physician_id: the authenticated physician; results are scoped to
+            patients from this physician's own lab requests.
+        page: 1-indexed page number.
+        page_size: rows per page.
+
+    Returns:
+        A dict with `items` (list of `PhysicianResultSummary`), `total`
+        (matching row count), `page`, and `page_size`.
+    """
     patient_ids = await _get_physician_patient_ids(physician_id)
     if not patient_ids:
         return {"items": [], "total": 0, "page": page, "page_size": page_size}
@@ -115,6 +137,22 @@ async def get_result_detail(
     physician_id: str,
     request: Request,
 ) -> dict:
+    """Fetch one result's full detail for the physician portal, verifying
+    the physician has access via their own lab requests, and logging the
+    retrieval (both a `result_retrievals` row and an audit entry, best-effort).
+
+    Args:
+        physician_id: the authenticated physician; access is denied unless
+            this physician has a lab request for the result's patient.
+
+    Returns:
+        A `PhysicianResultDetail` with patient info, findings, smart
+        diagnosis (if attached), and image URL.
+
+    Raises:
+        HTTPException: 404, if `result_id` doesn't exist. 403, if the result's
+            patient isn't among this physician's own patients.
+    """
     ar_res = await supabase.table("analysis_results").select(
         "result_id, specimen_id, patient_id, image_id, ai_findings, flagged_anomalies, "
         "particle_classes, model_version, status, smart_diagnosis_unavailable, confirmed_at"

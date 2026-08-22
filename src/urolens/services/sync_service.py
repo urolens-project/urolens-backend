@@ -1,3 +1,5 @@
+"""Mobile-client sync: builds a full or delta snapshot of a MedTech's specimens,
+queue assignments, and analysis results from Supabase."""
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional
@@ -35,6 +37,22 @@ def _to_str(val) -> Optional[str]:
 
 
 async def pull(user_id: str, last_synced_at: Optional[datetime]) -> dict:
+    """Build a sync payload for one MedTech: their specimens, queue
+    assignments, and the analysis results for those specimens.
+
+    Args:
+        user_id: the requesting MedTech's user ID; specimens/assignments are
+            scoped to this user.
+        last_synced_at: if given, only rows updated after this timestamp are
+            returned (as `updated`); if `None`, all rows are returned (as
+            `created`) — a full sync.
+
+    Returns:
+        A dict with `timestamp` (server time of this sync) and `changes`,
+        keyed by table name (`specimens`, `queue_assignments`,
+        `analysis_results`), each holding `{"created": [...], "updated": [...]}`
+        with the DB primary key column remapped to `"id"`.
+    """
     is_delta = last_synced_at is not None
     ts = last_synced_at.isoformat() if is_delta else None
 

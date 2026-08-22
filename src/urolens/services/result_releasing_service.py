@@ -1,3 +1,6 @@
+"""Supervisor result release — Supabase-REST implementation, deliberately
+left as-is (not ported to SQLAlchemy) per the consolidation plan's
+deferred-services list."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -18,6 +21,9 @@ from src.urolens.services.notification_service import NotificationService
 
 
 class ResultReleasingService:
+    """Lists approved results awaiting release and performs the release
+    transaction (status update + notifications + audit log)."""
+
     def __init__(
         self,
         db: AsyncClient,
@@ -33,6 +39,19 @@ class ResultReleasingService:
         limit: int = 20,
         cursor: str | None = None,
     ) -> ApprovedResultsResponse:
+        """List `APPROVED` results awaiting release, newest-updated first,
+        cursor-paginated.
+
+        Args:
+            limit: max rows to return per page.
+            cursor: an `updated_at` value from a previous page's
+                `next_cursor`; rows with `updated_at` before it are returned.
+                `None` starts from the most recent.
+
+        Returns:
+            A page of `ApprovedResultItem`s (patient name decrypted, or
+            `"Unknown Patient"` if decryption fails) plus pagination metadata.
+        """
         query = (
             self.db.table("analysis_results")
             .select("result_id, specimen_id, patient_id, updated_at")
@@ -100,6 +119,30 @@ class ResultReleasingService:
         current_user: dict,
         request: Request,
     ) -> ResultReleaseResponse:
+        """Release an `APPROVED` result: creates the `result_releases` row,
+        transitions the result to `RELEASED` and its specimen to
+        `COMPLETED`, notifies the patient (if `release_method` is
+        `"DIGITAL"`) and the ordering physician, and writes an audit log
+        entry.
+
+        If the status update after creating the release record fails, the
+        release record is deleted to avoid leaving an orphaned release with
+        no corresponding status change.
+
+        Args:
+            current_user: the authenticated caller; recorded as `released_by`.
+
+        Returns:
+            Confirmation of the release, including its generated `release_id`.
+
+        Raises:
+            HTTPException: 404 (`NOT_FOUND`), if `result_id` doesn't exist.
+                422 (`RESULT_NOT_APPROVED`), if the result isn't in `APPROVED`
+                status. 422 (`ALREADY_RELEASED`), if it's already been
+                released. 500 (`RELEASE_FAILED`/`STATUS_UPDATE_FAILED`), if
+                the release-record insert or the subsequent status update
+                returns no data.
+        """
         # Verify result exists
         r_res = await self.db.table("analysis_results").select(
             "result_id, status, patient_id, specimen_id"

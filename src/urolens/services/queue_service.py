@@ -1,3 +1,5 @@
+"""MedTech queue management: workload views and specimen-to-MedTech
+assignment, for both the supervisor/admin and receptionist-facing flows."""
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -19,6 +21,8 @@ from src.urolens.services.notification_service import NotificationService
 
 
 class QueueService:
+    """Specimen queue assignment and workload reporting for MedTechs."""
+
     def __init__(
         self,
         db: AsyncClient,
@@ -32,6 +36,12 @@ class QueueService:
         self.sqlalchemy_db = sqlalchemy_db
 
     async def get_workloads(self) -> list[MedTechWorkload]:
+        """List active MedTechs with their current active queue-assignment
+        count, ascending by count (least-loaded first).
+
+        Returns:
+            One `MedTechWorkload` per active MedTech.
+        """
         users_result = await self.db.table("users").select(
             "user_id", "username"
         ).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
@@ -61,6 +71,28 @@ class QueueService:
         assigned_by: UUID,
         request: Request,
     ) -> QueueAssignResponse:
+        """Assign a `LABELED` specimen to an active MedTech, advancing it to
+        `ASSIGNED`, notifying the MedTech, and writing an audit log entry.
+
+        If the specimen-status update fails after the assignment row is
+        created, the assignment row is deleted to avoid leaving an orphaned
+        assignment with no corresponding status change.
+
+        Args:
+            assigned_by: the authenticated user recorded as the assignment's author.
+
+        Returns:
+            Confirmation of the created assignment.
+
+        Raises:
+            HTTPException: 404 (`SPECIMEN_NOT_FOUND`/`MEDTECH_NOT_FOUND`), if
+                the specimen or MedTech doesn't exist (or the MedTech isn't
+                active). 422 (`INVALID_SPECIMEN_STATUS`), if the specimen
+                isn't `LABELED`. 422 (`SPECIMEN_ALREADY_ASSIGNED`), if it
+                already has an active assignment. 500
+                (`ASSIGNMENT_FAILED`/`STATUS_UPDATE_FAILED`), if the
+                assignment insert or the specimen status update returns no data.
+        """
         specimen_result = await self.db.table("specimens").select(
             "specimen_id", "status"
         ).eq("specimen_id", str(data.specimen_id)).execute()
@@ -211,6 +243,11 @@ class QueueService:
     async def get_pending_specimens(self) -> list[PendingSpecimenItem]:
         """Return all LABELED specimens with decrypted patient PII and test type.
         Ordered by received_at ascending (FIFO).
+
+        Returns:
+            One `PendingSpecimenItem` per `LABELED` specimen. A row whose
+            patient name fails to decrypt falls back to `"Unknown Patient"`
+            rather than being excluded.
         """
         spec_res = await self.db.table("specimens").select(
             "specimen_id, sample_uid, status, received_at, lab_request_id"
@@ -262,6 +299,9 @@ class QueueService:
         """Return all active MedTechs with their active specimen queue depth.
         Active = specimens.status IN (ASSIGNED, IN_QUEUE, PROCESSING).
         Sorted ascending by active_count (least-loaded first).
+
+        Returns:
+            One `MedTechWorkloadItem` per active MedTech.
         """
         users_res = await self.db.table("users").select(
             "user_id, username"
