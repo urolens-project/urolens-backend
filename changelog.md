@@ -825,3 +825,10 @@ flagged-findings entry below for those).
   implementations of lab-request creation, one Supabase-REST (physician-facing)
   and one SQLAlchemy (receptionist/encoder-facing), never consolidated under
   rule 14.
+- **Chunk 3 — `src/urolens/api/`.** All 12 files (`__init__.py` plus 11
+  routers) — roughly 40 exported route handlers, dependency factories, and
+  inline schemas. Noted while documenting, not fixed (see the flagged-findings
+  entry below): `notifications.py` (`NotificationOut`, `PushTokenRequest`) and
+  `results.py` (`ConfirmResultResponse`, `OverrideRequest`, `OverrideResponse`)
+  each define Pydantic models inline in the router instead of in `schemas/`,
+  a pre-existing rule-11 gap.

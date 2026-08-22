@@ -1,3 +1,5 @@
+"""Physician-portal routes: patient search, lab request creation, and result
+listing/detail."""
 from fastapi import APIRouter, Depends, Query, Request
 
 from src.urolens.core.rbac import RequireRole
@@ -20,6 +22,7 @@ async def search_patients(
     q: str = Query(default="", min_length=1),
     claims: dict = Depends(_physician),
 ):
+    """Search patients by name; see `physician_service.search_patients`."""
     return await physician_service.search_patients(q)
 
 
@@ -29,6 +32,8 @@ async def create_lab_request(
     request: Request,
     claims: dict = Depends(_physician),
 ):
+    """Create a lab request on behalf of the authenticated physician; see
+    `physician_service.create_lab_request`."""
     return await physician_service.create_lab_request(
         data=body,
         physician_id=claims["user_id"],
@@ -43,6 +48,8 @@ async def list_my_results(
     page_size: int = Query(20, ge=1, le=100),
     claims: dict = Depends(_physician),
 ):
+    """List the authenticated physician's results; see
+    `physician_result_service.list_results`."""
     return await physician_result_service.list_results(
         physician_id=claims["user_id"],
         page=page,
@@ -56,6 +63,8 @@ async def get_result_detail(
     request: Request,
     claims: dict = Depends(_physician),
 ):
+    """Fetch one result's detail for the authenticated physician; see
+    `physician_result_service.get_result_detail`."""
     return await physician_result_service.get_result_detail(
         result_id=result_id,
         physician_id=claims["user_id"],

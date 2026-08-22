@@ -30,6 +30,7 @@ async def get_ai_integration_service(
     db: AsyncSession = Depends(get_db),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> AIIntegrationService:
+    """FastAPI dependency constructing a request-scoped `AIIntegrationService`."""
     return AIIntegrationService(db=db, audit_logger=audit_logger)
 
 
@@ -46,6 +47,8 @@ async def upload_image(
     claims: dict = Depends(_medtech),
     service: AIIntegrationService = Depends(get_ai_integration_service),
 ) -> AnalysisResultResponse:
+    """Upload a microscopy image for a specimen and run AI inference; see
+    `AIIntegrationService.handle_upload`."""
     uploader_id = uuid.UUID(claims["user_id"])
     result = await service.handle_upload(specimen_id, uploader_id, file, request)
     return AnalysisResultResponse(
@@ -71,6 +74,8 @@ async def discard_image(
     request: Request,
     claims: dict = Depends(_medtech),
 ) -> ImageDiscardResponse:
+    """Discard the current image so the MedTech can retake; see
+    `ImageRetakeService.discard_and_retake`."""
     medtech_id = uuid.UUID(claims["user_id"])
     result = await _retake_service.discard_and_retake(
         image_id=image_id,

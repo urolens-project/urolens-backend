@@ -1,3 +1,5 @@
+"""Result release routes (receptionist-facing): listing approved results
+awaiting release and performing the release."""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -21,6 +23,7 @@ router = APIRouter()
 async def get_result_releasing_service(
     db: AsyncClient = Depends(get_supabase),
 ) -> ResultReleasingService:
+    """FastAPI dependency constructing a request-scoped `ResultReleasingService`."""
     return ResultReleasingService(
         db=db,
         audit_logger=AuditLogger(),
@@ -35,6 +38,8 @@ async def get_approved_results(
     current_user: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
     service: ResultReleasingService = Depends(get_result_releasing_service),
 ):
+    """List approved results awaiting release; see
+    `ResultReleasingService.get_approved_results`."""
     return await service.get_approved_results(limit=limit, cursor=cursor)
 
 
@@ -50,4 +55,5 @@ async def release_result(
     current_user: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
     service: ResultReleasingService = Depends(get_result_releasing_service),
 ):
+    """Release an approved result; see `ResultReleasingService.release_result`."""
     return await service.release_result(result_id, data.release_method, current_user, request)
