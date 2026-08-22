@@ -1,11 +1,4 @@
-"""ORM model for the `images` table.
-
-Note: the `Image` class docstring below states binary storage is S3, but
-`services/ai_integration_service.py` explicitly documents (and this repo's
-actual upload path uses) Supabase Storage, not S3/boto3 — no AWS credentials
-exist anywhere in this project. That's a pre-existing doc/reality mismatch,
-not corrected here since this pass is documentation-only; see the
-flagged-findings changelog entry."""
+"""ORM model for the `images` table."""
 from __future__ import annotations
 
 import enum
@@ -35,7 +28,11 @@ class ImageStatus(str, enum.Enum):
 
 class Image(Base):
     """
-    Microscopy image metadata. Binary stored in S3. EXIF stripped before upload.
+    Microscopy image metadata. Binary stored in Supabase Storage (see
+    `services/ai_integration_service.py` — no AWS credentials exist anywhere
+    in this project, so this was previously and incorrectly documented as S3;
+    corrected here, along with an unimplemented "EXIF stripped before upload"
+    claim that no code in this repo actually performs).
     Source: Migration 0013 — T2.7 Image Retake / Re-upload.
 
     status:
