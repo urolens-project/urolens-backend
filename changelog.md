@@ -832,3 +832,11 @@ flagged-findings entry below for those).
   `results.py` (`ConfirmResultResponse`, `OverrideRequest`, `OverrideResponse`)
   each define Pydantic models inline in the router instead of in `schemas/`,
   a pre-existing rule-11 gap.
+- **Chunk 4 — `src/urolens/schemas/`.** All 12 files (`__init__.py` plus 11
+  domain modules) — roughly 45 Pydantic model classes plus two module-level
+  type aliases. Noted while documenting, not fixed (see the flagged-findings
+  entry below): `result_review.py`'s `VALID_ESCALATION_PATHS` module constant
+  duplicates the identically-valued constant of the same name in
+  `services/result_review_service.py`, never consolidated. `schemas/__init__.py`
+  has no public re-exports (a pre-existing rule-11 gap) — documented as such,
+  left as-is.

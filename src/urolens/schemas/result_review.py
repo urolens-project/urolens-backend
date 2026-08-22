@@ -1,3 +1,5 @@
+"""Supervisor review/approval and Smart Diagnosis lookup request/response
+shapes; see `services/result_review_service.py`."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,12 +10,16 @@ from pydantic import BaseModel
 
 
 class SupervisorStatsResponse(BaseModel):
+    """Response body for the supervisor dashboard's summary counts."""
+
     pendingCount: int
     approvedToday: int
     escalatedCount: int
 
 
 class PendingResultItem(BaseModel):
+    """One result awaiting supervisor approval, for the pending queue list."""
+
     result_id: UUID
     specimen_id: UUID
     patient_name: str
@@ -25,6 +31,8 @@ class PendingResultItem(BaseModel):
 
 
 class PendingResultListResponse(BaseModel):
+    """Response body for the supervisor's paginated pending queue."""
+
     items: List[PendingResultItem]
     total: int
     page: int
@@ -32,6 +40,10 @@ class PendingResultListResponse(BaseModel):
 
 
 class ApprovedResultItem(BaseModel):
+    """One result approved today, for the supervisor's approved-today list.
+    Distinct from `schemas.result_releasing.ApprovedResultItem`, which serves
+    the receptionist release queue."""
+
     result_id: UUID
     specimen_id: UUID
     patient_name: str
@@ -43,6 +55,8 @@ class ApprovedResultItem(BaseModel):
 
 
 class ApprovedTodayListResponse(BaseModel):
+    """Response body for the supervisor's paginated approved-today list."""
+
     items: List[ApprovedResultItem]
     total: int
     page: int
@@ -50,6 +64,8 @@ class ApprovedTodayListResponse(BaseModel):
 
 
 class EscalatedResultItem(BaseModel):
+    """One escalated result, for the supervisor's escalated-results list."""
+
     result_id: UUID
     specimen_id: UUID
     patient_name: str
@@ -62,6 +78,8 @@ class EscalatedResultItem(BaseModel):
 
 
 class EscalatedListResponse(BaseModel):
+    """Response body for the supervisor's paginated escalated-results list."""
+
     items: List[EscalatedResultItem]
     total: int
     page: int
@@ -69,6 +87,8 @@ class EscalatedListResponse(BaseModel):
 
 
 class ManualOverrideItem(BaseModel):
+    """One MedTech parameter override, as shown in a result's full detail view."""
+
     override_id: UUID
     parameter_name: str
     original_ai_value: str
@@ -78,6 +98,8 @@ class ManualOverrideItem(BaseModel):
 
 
 class FullResultDetail(BaseModel):
+    """Response body for the supervisor's full single-result review/detail view."""
+
     result_id: UUID
     specimen_id: UUID
     patient_name: str
@@ -105,45 +127,64 @@ class FullResultDetail(BaseModel):
 
 
 class AnnotationRequest(BaseModel):
+    """Request body for saving a supervisor's annotation on a result."""
+
     annotation_notes: str
     spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 class AnnotationResponse(BaseModel):
+    """Response body confirming a saved annotation."""
+
     result_id: UUID
     annotation_notes: str
     spatial_annotations: Optional[List[Dict[str, Any]]] = None
 
 
 class ApproveRequest(BaseModel):
+    """Request body for approving a pending result."""
+
     notes: Optional[str] = None
 
 
 class ApproveResponse(BaseModel):
+    """Response body confirming a result approval."""
+
     result_id: UUID
     status: str
     approved_at: datetime
 
 
 class ReturnRequest(BaseModel):
+    """Request body for returning a pending result for correction."""
+
     reason: str
 
 
 class ReturnResponse(BaseModel):
+    """Response body confirming a result return."""
+
     result_id: UUID
     status: str
     returned_at: datetime
 
 
+# Duplicated in services/result_review_service.py's module-level
+# VALID_ESCALATION_PATHS (same three values) — not consolidated as part of
+# this documentation-only pass; see the flagged-findings changelog entry.
 VALID_ESCALATION_PATHS = {"NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"}
 
 
 class EscalateRequest(BaseModel):
+    """Request body for escalating a pending result."""
+
     escalation_path: str
     escalation_note: Optional[str] = None
 
 
 class EscalateResponse(BaseModel):
+    """Response body confirming a result escalation."""
+
     result_id: UUID
     status: str
     escalation_path: str
@@ -154,15 +195,25 @@ class EscalateResponse(BaseModel):
 # Folded in from app/schemas/results.py, unchanged.
 
 ProbabilityLevel = Literal["LOW", "MODERATE", "HIGH"]
+"""The three risk levels a Smart Diagnosis condition score can take."""
 
 
 class EvidenceMap(BaseModel):
+    """Per-condition list of contributing evidence particle names.
+
+    Unused by `get_smart_diagnosis` itself, which returns a raw
+    `dict[str, Any]` for `evidence_map` rather than this shape — kept for
+    API-contract compatibility from the pre-port schema.
+    """
+
     gout: List[str] = []
     uti: List[str] = []
     tricho: List[str] = []
 
 
 class SmartDiagnosisAttached(BaseModel):
+    """Response shape for a result with an attached Smart Diagnosis output."""
+
     output_id: str
     result_id: str
     status: Literal["ATTACHED"]
@@ -176,8 +227,12 @@ class SmartDiagnosisAttached(BaseModel):
 
 
 class SmartDiagnosisUnavailable(BaseModel):
+    """Response shape for a result with no usable Smart Diagnosis output."""
+
     result_id: str
     status: Literal["FLAGGED_UNAVAILABLE"]
 
 
 SmartDiagnosisResponse = Union[SmartDiagnosisAttached, SmartDiagnosisUnavailable]
+"""Response model for `GET /{result_id}/smart-diagnosis` — one of the two
+shapes above, discriminated by `status`."""

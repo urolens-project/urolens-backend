@@ -1,8 +1,11 @@
+"""Patient-portal result listing/detail shapes; see `services/patient_result_service.py`."""
 from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
 
+# The fixed set of particle types every result's particle_counts is normalised
+# against, in display order — see PatientResultService.get_result_detail.
 PARTICLE_LABELS: list[str] = [
     "bacteria",
     "crystals",
@@ -18,11 +21,15 @@ PARTICLE_LABELS: list[str] = [
 
 
 class ParticleCount(BaseModel):
+    """One particle type's detected count, for one entry of `PARTICLE_LABELS`."""
+
     label: str
     count: int
 
 
 class PatientResultItem(BaseModel):
+    """One result summary, for the patient's result list."""
+
     result_id: UUID
     test_type: str
     status: str
@@ -30,6 +37,8 @@ class PatientResultItem(BaseModel):
 
 
 class PatientResultDetailResponse(BaseModel):
+    """Response body for a patient's single-result detail view."""
+
     status: str
     confirmed_at: datetime | None
     confirmation_notes: str | None
@@ -43,4 +52,6 @@ class PatientResultDetailResponse(BaseModel):
 
 # Legacy alias kept for the PDF service which builds its own view of the data.
 class PatientResultDetail(PatientResultDetailResponse):
+    """Alias of `PatientResultDetailResponse`, used by `pdf_service.generate_result_pdf`."""
+
     pass

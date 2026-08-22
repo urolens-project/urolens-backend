@@ -1,3 +1,6 @@
+"""Physician-portal patient search, lab-request creation, and result
+listing/detail shapes; see `services/physician_service.py` and
+`services/physician_result_service.py`."""
 from typing import Any, Optional
 from uuid import UUID
 
@@ -5,6 +8,8 @@ from pydantic import BaseModel
 
 
 class PhysicianPatientItem(BaseModel):
+    """One patient, for the physician's patient-search results (decrypted)."""
+
     patient_id: UUID
     patient_uid: str
     first_name: str
@@ -15,12 +20,18 @@ class PhysicianPatientItem(BaseModel):
 
 
 class LabRequestCreateRequest(BaseModel):
+    """Request body for a physician creating a lab request. Unlike
+    `schemas.lab_request.LabRequestCreateRequest`, the physician is implicit
+    (from the authenticated caller), so there's no `physician_id` field."""
+
     patient_id: UUID
     test_type: str
     clinical_notes: Optional[str] = None
 
 
 class LabRequestCreateResponse(BaseModel):
+    """Response body confirming a physician-created lab request."""
+
     request_uid: str
     patient_id: UUID
     physician_name: str
@@ -30,6 +41,8 @@ class LabRequestCreateResponse(BaseModel):
 
 
 class PhysicianResultSummary(BaseModel):
+    """One result, for the physician's result list."""
+
     result_id: str
     specimen_id: str
     patient_name: str
@@ -42,6 +55,8 @@ class PhysicianResultSummary(BaseModel):
 
 
 class PhysicianResultListResponse(BaseModel):
+    """Response body for the physician's paginated result list."""
+
     items: list[PhysicianResultSummary]
     total: int
     page: int
@@ -49,6 +64,8 @@ class PhysicianResultListResponse(BaseModel):
 
 
 class SmartDiagnosisDetail(BaseModel):
+    """Smart Diagnosis output, as shown in the physician result-detail view."""
+
     gout_score: str
     gn_score: str
     nephro_score: str
@@ -60,6 +77,8 @@ class SmartDiagnosisDetail(BaseModel):
 
 
 class PhysicianResultDetail(BaseModel):
+    """Response body for the physician's single-result detail view."""
+
     result_id: str
     specimen_id: str
     patient_name: str
