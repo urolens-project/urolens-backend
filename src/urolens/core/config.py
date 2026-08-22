@@ -73,6 +73,9 @@ class Settings(BaseModel):
 
 
 def _to_async_database_url(sync_url: str) -> str:
+    # Rewrite a psycopg2-style DATABASE_URL to its asyncpg-driver equivalent
+    # (postgresql:// / postgres:// -> postgresql+asyncpg://); left unchanged
+    # if it's already in asyncpg form or uses some other scheme.
     if sync_url.startswith("postgresql+asyncpg://"):
         return sync_url
     if sync_url.startswith("postgresql://"):
@@ -132,4 +135,5 @@ def _load_settings() -> Settings:
     )
 
 
+# Module-level singleton — import and use this, never call _load_settings() again.
 settings = _load_settings()

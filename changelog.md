@@ -796,3 +796,21 @@ commits.
   not silently bypassed by the move.
 - Final repo-wide grep for any remaining `app.` reference — imports, string `patch()`
   targets, docstrings — came back empty before `app/` was deleted in chunk 4.
+
+## Docstring pass across `src/urolens/` (standards rule 9)
+
+Documentation-only task, chunked and separately committed/verified per directory.
+Every exported module-level function/class/constant gets a docstring (one-line
+summary, plus `Args:`/`Returns:`/`Raises:` where applicable); every module file gets
+a top-of-file summary if it lacked one. Zero logic changes — no refactors, renames,
+or behavior fixes, even where something looked questionable while reading it (see the
+flagged-findings entry below for those).
+
+### Documented
+- **Chunk 1 — `src/urolens/core/`.** All 10 files (`__init__.py`, `audit_logger.py`,
+  `auth_service.py`, `config.py`, `database.py`, `encryption.py`, `enums.py`,
+  `exceptions.py`, `rbac.py`, `supabase.py`) — 34 exported functions/classes/constants
+  plus 2 private-helper comments. `config.py` already had a module docstring and most
+  class/function docstrings from the earlier consolidation; only its one
+  undocumented private helper and the module-level `settings` singleton got added
+  comments.
