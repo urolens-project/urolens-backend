@@ -3,7 +3,7 @@ shapes; see `services/result_review_service.py`."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, get_args
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -169,16 +169,21 @@ class ReturnResponse(BaseModel):
     returned_at: datetime
 
 
-# Duplicated in services/result_review_service.py's module-level
-# VALID_ESCALATION_PATHS (same three values) — not consolidated as part of
-# this documentation-only pass; see the flagged-findings changelog entry.
-VALID_ESCALATION_PATHS = {"NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"}
+EscalationPath = Literal["NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"]
+"""The valid values for a result escalation path. Single source of truth for
+both `EscalateRequest`'s field type (rejected by Pydantic at the request
+boundary) and `VALID_ESCALATION_PATHS` (the runtime set
+`ResultReviewService.escalate_result` checks against) — previously two
+independent, duplicate definitions; see changelog.md's "Duplicate
+VALID_ESCALATION_PATHS constant" entry."""
+
+VALID_ESCALATION_PATHS = set(get_args(EscalationPath))
 
 
 class EscalateRequest(BaseModel):
     """Request body for escalating a pending result."""
 
-    escalation_path: str
+    escalation_path: EscalationPath
     escalation_note: Optional[str] = None
 
 
