@@ -1207,3 +1207,43 @@ baseline (20 failed / 51 passed) after the `requirements.txt` change;
 `ruff check .` still runs cleanly as a tool; every command/path referenced
 in the three new/rewritten docs was checked against the real repo (no
 invented flags, no stale paths) before being written down.
+
+### Correction — the "no-op install" claim above was wrong; the real baseline is 16 failed / 55 passed
+
+The verification above ran `pip show` against each of the six newly-pinned
+packages and confirmed their versions matched what was already installed —
+correct as far as it went, but incomplete: it didn't wait for `pip install
+-r requirements.txt` itself to finish before drawing that conclusion. That
+command was still running in the background (fetching and building the
+`urolens-ai-engine` git dependency, which pulls in `urolens_ai`'s own large
+dependency tree — `torch`, `torchvision`, `ultralytics`, `opencv-python`,
+`numpy`, etc.) and completed after this changelog entry's commit landed.
+
+Once it finished: **`urolens_ai` had never actually been installed in this
+dev environment before**, despite being declared in `requirements.txt` all
+along (a `git+https://...@develop` dependency — the mutable-branch pin
+already flagged, separately, in this same entry's "not fixed" list). Four
+of the twenty "baseline" test failures carried through every prior entry in
+this changelog were not pre-existing, unrelated bugs — they were
+`tests/integration/test_smart_diagnosis.py`'s four tests failing because
+`SmartDiagnosisService`'s `from urolens_ai import generate_smart_diagnosis`
+had nothing real to import against. All eight tests in that file pass now
+that the dependency is actually present (`pytest
+tests/integration/test_smart_diagnosis.py` → `8 passed`).
+
+**Corrected current baseline: 16 failed / 55 passed** (full suite). The
+other sixteen failures (`test_auth_service.py`'s `TestPasswordHashing`
+three, `test_queue_service.py`'s eight, `test_image_upload_and_inference.py`'s
+three) are unaffected and still genuinely pre-existing — this correction is
+scoped to the four `urolens_ai`-dependent tests only. The install also
+enforced the `python-dotenv==1.2.1` pin, downgrading a stray 1.2.2 that had
+been installed outside of `requirements.txt` at some point.
+
+Not treated as a reason to reopen the `urolens-ai-engine` branch-pin
+decision (still flagged, still not fixed, still out of scope here) — but
+worth recording plainly rather than leaving a confidently-stated wrong
+number standing in the entry above it. `README.md`'s test-suite section
+was written to describe the *kind* of pre-existing failure a contributor
+might see rather than cite an exact count, so it didn't need a correction;
+this entry is the correction for the exact numbers cited in this file's own
+"Verified" sections throughout this session.
