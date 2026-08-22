@@ -1071,3 +1071,86 @@ explicit decision rather than guessed at.
 - Grep-confirmed both excluded `schemas/` collision names
   (`LabRequestCreateRequest`, `ApprovedResultItem`) are genuinely absent
   from `schemas/__init__.py`'s import list, not accidentally included.
+
+## Add Ruff (linter/formatter) with an initial safe-fix pass
+
+Investigation before touching anything (rule 16, and this consolidation's own
+recurring discipline of verifying rather than assuming): no `pyproject.toml`
+existed anywhere in the repo, no lint config of any kind, no CI. Dependencies
+are managed in a single `requirements.txt` — which turned out to be UTF-16 LE
+with a BOM, and, on closer inspection, a genuinely *mixed*-encoding file: the
+first ~27 lines were UTF-16, but the last four (`Pillow`, `python-multipart`,
+the git dependency) were already plain UTF-8, appended at some point without
+re-saving the whole file.
+
+### Added
+- **`pyproject.toml`** (new — didn't exist before), containing only a
+  `[tool.ruff]`/`[tool.ruff.lint]` section — not migrating dependency
+  management there, since `requirements.txt` remains the sole manifest with
+  no sign of heading toward `pyproject.toml`-based deps.
+- **`ruff==0.16.4`** pinned (rule 16 — no floating spec) in `requirements.txt`,
+  in place, matching how every other dependency in this project-wide-single
+  manifest is already managed.
+- **Rule categories enabled** (report-only — nothing build-blocking, no CI
+  wired up, none of this decides pass/fail for anyone): `E`, `F`, `I`, `D`,
+  `T20`, `ANN`, `B`, `UP`, `S`. `pydocstyle.convention = "google"`, matching
+  the Args:/Returns:/Raises: format the docstring-pass task already used,
+  rather than measuring against pydocstyle's PEP-257 default.
+- **`requirements.txt` re-saved as clean UTF-8** — verified via a hex dump of
+  the result and a Python-level decode of each of the file's two differently-
+  encoded segments separately before recombining them, confirming no
+  corruption; content is otherwise the same pinned package list plus the new
+  `ruff` line.
+
+### Safe autofix (`ruff check --fix .`, no `--unsafe-fixes`)
+1700 total violations found before any fix; 482 resolved by the safe-fix
+pass (unused-import removal, import sorting, pyupgrade syntax modernization
+`datetime.timezone.utc`→`datetime.UTC`/`Optional[X]`→`X | None`/etc.,
+docstring blank-line/punctuation formatting, redundant f-string prefixes) —
+spot-checked the largest diffs (`main.py`, `alembic/env.py`, all 19 touched
+Alembic migration files, seed scripts) line-by-line to confirm every change
+is mechanical: `main.py` had a literal duplicate `fastapi` import collapsed
+into one; every touched migration file's diff is import-ordering plus a
+`Union[...]`→`X | Y` *type-annotation* swap only, with every `revision`/
+`down_revision` string value and every `upgrade()`/`downgrade()` body byte-
+for-byte unchanged (confirmed both by direct diff review and `alembic heads`
+still resolving to a single head, `0034`, afterward). 212 further violations
+are unsafe-fixable-only and were **not** applied.
+
+Verified: `python -c "import main"` boots clean; OpenAPI still generates the
+same 45 paths; full test suite holds at the identical 20-failed baseline
+(same 20 test names, same underlying pre-existing causes) — one test run
+mid-check showed a new `RuntimeWarning` alongside the already-failing
+`TestPasswordHashing` tests; traced it to garbage-collection timing on those
+tests' pre-existing bug (calling the `async def verify_password` without
+`await`), not to anything the autofix changed — `auth_service.py`'s diff is
+only the `datetime.UTC` alias and docstring formatting.
+
+### Reported, not fixed — baseline for future cleanup
+`ruff check .` after the safe-fix commit: **1259 violations remain.** Full
+category breakdown, the by-directory split for `D`/`ANN` (confirming the
+docstring pass completed for its actual `src/urolens/` scope — zero missing-
+docstring violations there, only Google-convention formatting nitpicks; the
+real missing-docstring hits are all in `tests/`/root scripts/`alembic/`,
+which were never in that pass's scope), and a one-line description of each
+distinct `S`-category pattern found (spoiler: ~94% is pytest's `assert`
+idiom or confirmed false positives — no new hardcoded-secret finding) are
+recorded in **`docs/ruff-baseline-report.md`** rather than here, given the
+length. Headline numbers: `D` 349, `ANN` 254 (only ~75 of those inside
+`src/urolens/`, the part rule 10 actually governs), `S` 194, `B` 121 (117 of
+which are the well-known FastAPI-`Depends()`-in-default-argument false
+positive), `E` 282, `T20` 53, `UP` 5, `F` 1, `I` 0.
+
+### Formatter — checked, not applied
+`ruff format --diff .` would reformat 118 of the ~133 tracked Python files
+(≈2841 changed lines) — a large, sweeping diff well beyond what Tasks 2-4
+touched. Per this task's own instruction, not applied; available for the
+user to run and review (`ruff format .`) as a separate, deliberate decision.
+
+### Explicitly not done here
+Fixing any individual `D`/`ANN`/`S`/`B` violation (reported only). Enabling
+any rule category as build-blocking. Running `--unsafe-fixes`. Closing the
+docstring-pass gap for `tests/`/root scripts (only documented). Pinning
+`urolens-ai-engine`'s branch-tracking git dependency (`@develop` — a
+separate, real rule-16 violation, flagged in the commit message, not fixed —
+needs a specific commit/tag decision this task isn't positioned to make).
