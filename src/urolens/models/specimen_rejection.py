@@ -1,3 +1,4 @@
+"""ORM model for the `specimen_rejections` table."""
 from __future__ import annotations
 
 import uuid
@@ -46,4 +47,5 @@ class SpecimenRejection(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `rejection_id`, for callers expecting a generic `id` field."""
         return self.rejection_id

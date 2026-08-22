@@ -1,3 +1,4 @@
+"""ORM model for the `escalations` table."""
 from __future__ import annotations
 
 import uuid
@@ -48,4 +49,5 @@ class Escalation(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `escalation_id`, for callers expecting a generic `id` field."""
         return self.escalation_id

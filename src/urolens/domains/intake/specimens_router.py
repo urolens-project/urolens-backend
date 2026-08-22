@@ -1,3 +1,5 @@
+"""Specimen receiving routes (receptionist-facing) plus post-assignment
+MedTech rejection."""
 import uuid
 from typing import List, Optional
 from uuid import UUID
@@ -33,6 +35,8 @@ async def list_specimens_endpoint(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
+    """List specimens, optionally filtered by status; see
+    `specimen_service.list_specimens`."""
     return await specimen_service.list_specimens(db, specimen_status)
 
 
@@ -42,6 +46,8 @@ async def search_pending_lab_requests(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
+    """Search `PENDING_SAMPLE` lab requests; see
+    `lab_request_service.search_pending_lab_requests`."""
     return await lab_request_service.search_pending_lab_requests(db, q)
 
 
@@ -51,6 +57,8 @@ async def receive_specimen_endpoint(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
+    """Receive a specimen against a lab request; see
+    `specimen_service.receive_specimen`."""
     receptionist_id = uuid.UUID(current_user["user_id"])
     return await specimen_service.receive_specimen(db, receptionist_id, payload)
 

@@ -1,3 +1,4 @@
+"""ORM model for the `result_returns` table."""
 from __future__ import annotations
 
 import uuid
@@ -38,4 +39,5 @@ class ResultReturn(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `return_id`, for callers expecting a generic `id` field."""
         return self.return_id

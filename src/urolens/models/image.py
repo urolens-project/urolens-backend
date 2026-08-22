@@ -1,3 +1,11 @@
+"""ORM model for the `images` table.
+
+Note: the `Image` class docstring below states binary storage is S3, but
+`services/ai_integration_service.py` explicitly documents (and this repo's
+actual upload path uses) Supabase Storage, not S3/boto3 — no AWS credentials
+exist anywhere in this project. That's a pre-existing doc/reality mismatch,
+not corrected here since this pass is documentation-only; see the
+flagged-findings changelog entry."""
 from __future__ import annotations
 
 import enum
@@ -18,6 +26,8 @@ if TYPE_CHECKING:
 
 
 class ImageStatus(str, enum.Enum):
+    """Lifecycle states for an uploaded microscopy image; see `Image.status`."""
+
     ACTIVE = "ACTIVE"
     DISCARDED = "DISCARDED"
     REPLACED = "REPLACED"
@@ -80,12 +90,15 @@ class Image(Base):
     # ── Helpers ──────────────────────────────────────────────────────────────
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `image_id`, for callers expecting a generic `id` field."""
         return self.image_id
 
     @property
     def is_discarded(self) -> bool:
+        """Whether this image has been discarded (retake flow)."""
         return self.status == ImageStatus.DISCARDED
 
     @property
     def meets_minimum_resolution(self) -> bool:
+        """Whether this image meets the 640×480 minimum required for AI analysis."""
         return self.width_px >= 640 and self.height_px >= 480

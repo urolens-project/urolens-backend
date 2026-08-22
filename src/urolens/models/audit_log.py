@@ -1,3 +1,4 @@
+"""ORM model for the `audit_logs` table."""
 from __future__ import annotations
 
 import uuid
@@ -38,4 +39,5 @@ class AuditLog(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `log_id`, for callers expecting a generic `id` field."""
         return self.log_id

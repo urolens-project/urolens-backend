@@ -1,3 +1,4 @@
+"""ORM model for the `analysis_results` table."""
 from __future__ import annotations
 
 import enum
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
 
 
 class ResultStatus(str, enum.Enum):
+    """Lifecycle states for an `AnalysisResult`, spanning the confirm ->
+    override -> approve -> release chain plus retake/escalation/failure exits."""
+
     PENDING_CONFIRM = "PENDING_CONFIRM"
     PENDING_SUPERVISOR_APPROVAL = "PENDING_SUPERVISOR_APPROVAL"
     APPROVED = "APPROVED"
@@ -166,8 +170,10 @@ class AnalysisResult(Base):
     # ── Helpers ──────────────────────────────────────────────────────────────
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `result_id`, for callers expecting a generic `id` field."""
         return self.result_id
 
     @property
     def has_pending_retake(self) -> bool:
+        """Whether this result's current image has been discarded and needs a retake."""
         return self.image is not None and self.image.is_discarded

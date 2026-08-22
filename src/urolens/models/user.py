@@ -1,3 +1,4 @@
+"""ORM model for the `users` table."""
 from __future__ import annotations
 
 import uuid
@@ -48,10 +49,12 @@ class User(Base):
     # ── Helpers ──────────────────────────────────────────────────────────────
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `user_id`, for callers expecting a generic `id` field."""
         return self.user_id
 
     @property
     def is_locked(self) -> bool:
+        """Whether the account is currently locked out (`locked_at` is set)."""
         return self.locked_at is not None
 
     def __repr__(self) -> str:

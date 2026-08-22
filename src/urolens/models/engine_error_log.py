@@ -1,3 +1,4 @@
+"""ORM model for the `engine_error_logs` table."""
 from __future__ import annotations
 
 import uuid
@@ -48,4 +49,5 @@ class EngineErrorLog(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `error_id`, for callers expecting a generic `id` field."""
         return self.error_id

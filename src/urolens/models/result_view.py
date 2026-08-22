@@ -1,3 +1,4 @@
+"""ORM model for the `result_views` table."""
 from __future__ import annotations
 
 import uuid
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
 
 
 class ResultView(Base):
+    """A patient's view of a released result, recorded by
+    `PatientResultService.get_result_detail`."""
+
     __tablename__ = "result_views"
 
     view_id: Mapped[uuid.UUID] = mapped_column(
@@ -45,4 +49,5 @@ class ResultView(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `view_id`, for callers expecting a generic `id` field."""
         return self.view_id

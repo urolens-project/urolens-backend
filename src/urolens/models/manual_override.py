@@ -1,3 +1,4 @@
+"""ORM model for the `manual_overrides` table."""
 from __future__ import annotations
 
 import uuid
@@ -53,12 +54,15 @@ class ManualOverride(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `override_id`, for callers expecting a generic `id` field."""
         return self.override_id
 
     @property
     def parameter(self) -> str:
+        """Alias for `parameter_name`, matching the API-contract field name."""
         return self.parameter_name
 
     @property
     def overridden_by(self) -> uuid.UUID:
+        """Alias for `medtech_id`, matching the API-contract field name."""
         return self.medtech_id

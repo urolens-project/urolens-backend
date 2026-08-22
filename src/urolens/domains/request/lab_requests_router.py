@@ -1,3 +1,4 @@
+"""Lab request routes (receptionist-facing): physician lookup and creation."""
 import uuid
 from typing import List
 
@@ -27,6 +28,7 @@ async def get_physicians_endpoint(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
+    """List active physicians; see `lab_request_service.get_physicians`."""
     return await lab_request_service.get_physicians(db)
 
 
@@ -36,5 +38,6 @@ async def create_lab_request_endpoint(
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
+    """Create a lab request; see `lab_request_service.create_lab_request`."""
     encoder_id = uuid.UUID(current_user["user_id"])
     return await lab_request_service.create_lab_request(db, encoder_id, payload)

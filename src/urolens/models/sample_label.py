@@ -1,3 +1,4 @@
+"""ORM model for the `sample_labels` table."""
 from __future__ import annotations
 
 import uuid
@@ -52,4 +53,5 @@ class SampleLabel(Base):
 
     @property
     def id(self) -> uuid.UUID:
+        """Alias for `label_id`, for callers expecting a generic `id` field."""
         return self.label_id

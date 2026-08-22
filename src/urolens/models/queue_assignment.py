@@ -1,3 +1,4 @@
+"""ORM model for the `queue_assignments` table."""
 from sqlalchemy import Column, ForeignKey, VARCHAR, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -5,6 +6,8 @@ from .base import Base
 
 
 class QueueAssignment(Base):
+    """A specimen's assignment to a MedTech, created by `QueueService.assign_specimen`."""
+
     __tablename__ = "queue_assignments"
 
     assignment_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
