@@ -1154,3 +1154,56 @@ docstring-pass gap for `tests/`/root scripts (only documented). Pinning
 `urolens-ai-engine`'s branch-tracking git dependency (`@develop` — a
 separate, real rule-16 violation, flagged in the commit message, not fixed —
 needs a specific commit/tag decision this task isn't positioned to make).
+
+## Backend Setup / Contributing / Standards documentation
+
+`README.md` was two lines (title + one-sentence description) — no setup
+instructions, no contribution workflow, no visible coding standards. The
+standards and "adding a new feature" workflow this whole consolidation
+effort has been following existed only in a Claude-specific skill file
+outside the repo, invisible to any human contributor or any other tool.
+Split across three files, per explicit direction, rather than one large
+README.
+
+### Added
+- **`README.md` (rewritten)** — Backend Setup: prerequisites, venv + install,
+  `.env` configuration (including the `RuntimeError`-at-import-time behavior
+  for missing `JWT_SIGNING_KEY`/`ENCRYPTION_KEY`, so it doesn't read as a
+  mystery failure), `alembic upgrade head`, running the dev server, the
+  verified seed-script run order (`seed_users.py` → `seed_specimens.py` →
+  `seed_results.py` — confirmed via `seed_results.py`'s own header, which
+  requires the other two to have run first), running tests, running Ruff.
+- **`CONTRIBUTING.md` (new)** — the required sequence for adding a feature
+  (check `schemas/`/`services/` first, canonical RBAC dependency, barrel-vs-
+  submodule import guidance reflecting the real current state, migration
+  discipline, risk-tiered tests) and a pre-PR checklist, both adapted from
+  this repo's own accumulated practice rather than generic boilerplate.
+- **`docs/backend-standards.md` (new)** — full rule reference (5
+  security-critical rules + 11 structure/code-quality rules), written
+  against this codebase's *actual current state* rather than restated
+  generically: rule 6 documents exactly which packages have `__init__.py`
+  barrels today (`core`/`services`/`schemas`/`models`) and which don't
+  (`api`/`domains`, due to the universal `router`-name collision across all
+  14 router modules) and the two schema name collisions excluded from the
+  `schemas/` barrel; rule 9 cites the docstring pass's actual completion
+  state; rule 10 cites Ruff's real `ANN` gap count; rule 16 notes Ruff as a
+  pinned-dependency example and re-flags the still-open `urolens-ai-engine`
+  branch-pin. Closes with a note that these snapshots need updating in the
+  same PR that changes what they describe.
+- **`requirements.txt`**: added `httpx==0.28.1`, `psycopg2-binary==2.9.12`,
+  `pytest==9.0.3`, `pytest-asyncio==1.3.0`, `reportlab==4.5.1`,
+  `supabase==2.30.0` — all six confirmed installed and imported directly by
+  this codebase (`core/supabase.py`, Alembic's psycopg2 driver requirement,
+  `notification_service.py`, the entire test suite, `pdf_service.py`) but
+  previously undeclared. Versions pinned to exactly what's already installed
+  in the dev environment (`pip show` per package), not guessed — so
+  `pip install -r requirements.txt` for anyone already working in this repo
+  is a no-op, and a fresh clone now gets a setup that actually works instead
+  of failing partway through on a missing import.
+
+### Verified
+`python -c "import main"` and the full test suite hold at the existing
+baseline (20 failed / 51 passed) after the `requirements.txt` change;
+`ruff check .` still runs cleanly as a tool; every command/path referenced
+in the three new/rewritten docs was checked against the real repo (no
+invented flags, no stale paths) before being written down.
