@@ -2,7 +2,7 @@
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.urolens.core.database import get_db
@@ -35,9 +35,21 @@ async def get_physicians_endpoint(
 @router.post("", response_model=LabRequestCreateResponse, status_code=201)
 async def create_lab_request_endpoint(
     payload: LabRequestCreateRequest,
+    request: Request,
     current_user: dict = Depends(_receptionist),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a lab request; see `lab_request_service.create_lab_request`."""
     encoder_id = uuid.UUID(current_user["user_id"])
-    return await lab_request_service.create_lab_request(db, encoder_id, payload)
+    ip_address = request.client.host if request.client else None
+    return await lab_request_service.create_lab_request(
+        db,
+        encoded_by=encoder_id,
+        patient_id=payload.patient_id,
+        test_type=payload.test_type,
+        clinical_notes=payload.clinical_notes,
+        physician_id=payload.physician_id,
+        physician_name=payload.physician_name,
+        notify_receptionists=False,
+        ip_address=ip_address,
+    )

@@ -1,5 +1,11 @@
-"""Lab-request creation/search and physician lookup for the receptionist/
-encoder intake flow."""
+"""Lab-request creation/search and physician lookup — the canonical
+implementation for both the receptionist/encoder intake flow and the
+physician-portal flow (consolidated; see changelog.md's "Duplicate
+lab-request creation implementations" entry). Physician-facing callers pass
+their own identity as `physician_id`/`physician_name` and
+`notify_receptionists=True`; receptionist-facing callers pass whatever
+physician was specified on the intake form (if any) and
+`notify_receptionists=False`."""
 from __future__ import annotations
 
 import random
@@ -10,10 +16,14 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.audit_logger import AuditLogger
+from ..core.exceptions import NotFoundException
 from ..models.lab_request import LabRequest
+from ..models.patient import Patient
 from ..models.user import User
-from ..schemas.lab_request import LabRequestCreateRequest, LabRequestCreateResponse, PhysicianItem
+from ..schemas.lab_request import LabRequestCreateResponse, PhysicianItem
 from ..schemas.specimen import LabRequestSearchItem
+from .notification_service import NotificationService
 
 _PHT = timezone(timedelta(hours=8))
 _UID_GENERATION_ATTEMPTS = 5
@@ -88,29 +98,52 @@ async def search_pending_lab_requests(db: AsyncSession, q: str) -> list[LabReque
 
 async def create_lab_request(
     db: AsyncSession,
-    encoder_id: uuid.UUID,
-    payload: LabRequestCreateRequest,
+    *,
+    encoded_by: uuid.UUID,
+    patient_id: uuid.UUID,
+    test_type: str,
+    clinical_notes: str | None,
+    physician_id: uuid.UUID | None,
+    physician_name: str | None,
+    notify_receptionists: bool = False,
+    ip_address: str | None = None,
 ) -> LabRequestCreateResponse:
-    """Create a new lab request in `PENDING_SAMPLE` status.
+    """Create a new lab request in `PENDING_SAMPLE` status — the single
+    implementation backing both the receptionist and physician creation
+    routes.
 
     Args:
-        encoder_id: the authenticated user recorded as `encoded_by`.
-        payload: request fields. If `physician_id` is given without
-            `physician_name`, the name is looked up from that physician's
-            user row.
+        encoded_by: the authenticated user recorded as `encoded_by` (the
+            receptionist for the receptionist-facing route, the physician
+            themselves for the physician-facing route).
+        physician_id: if given without `physician_name`, the name is looked
+            up from that physician's user row. The physician-facing caller
+            passes its own identity here; the receptionist-facing caller
+            passes whatever physician (if any) was specified on the form.
+        notify_receptionists: if `True`, every active receptionist is
+            notified of the new request (used by the physician-facing route,
+            since receptionists still need to act on it — not used when a
+            receptionist creates their own request).
+        ip_address: forwarded to the audit log entry, if available.
 
     Returns:
-        A response confirming creation, including the generated `request_uid`.
+        The created lab request, in the one response shape shared by both
+        creation routes.
 
     Raises:
+        NotFoundException: `patient_id` doesn't match an existing patient.
         HTTPException: 500, if a unique `request_uid` couldn't be generated
             after `_UID_GENERATION_ATTEMPTS` retries (propagated from
             `_generate_request_uid`).
     """
+    patient = await db.get(Patient, patient_id)
+    if patient is None:
+        raise NotFoundException(code="PATIENT_NOT_FOUND", message="Patient not found.")
+
     request_uid = await _generate_request_uid(db)
 
-    computed_id = payload.physician_id
-    computed_name = payload.physician_name
+    computed_id = physician_id
+    computed_name = physician_name
     if computed_id and not computed_name:
         physician = await db.get(User, computed_id)
         if physician is not None:
@@ -118,21 +151,44 @@ async def create_lab_request(
 
     lab_request = LabRequest(
         request_uid=request_uid,
-        patient_id=payload.patient_id,
+        patient_id=patient_id,
         physician_id=computed_id,
         physician_name=computed_name,
-        test_type=payload.test_type.upper().replace(" ", "_"),
-        clinical_notes=payload.clinical_notes,
+        test_type=test_type.upper().replace(" ", "_"),
+        clinical_notes=clinical_notes,
         status="PENDING_SAMPLE",
-        encoded_by=encoder_id,
+        encoded_by=encoded_by,
     )
     db.add(lab_request)
+    await db.flush([lab_request])
+
+    if notify_receptionists:
+        await NotificationService(db).notify_active_receptionists(
+            request_uid=lab_request.request_uid,
+            physician_name=computed_name or "",
+            lab_request_id=lab_request.lab_request_id,
+        )
+
+    await AuditLogger().record(
+        event_type="REQUEST_SUBMITTED",
+        entity_type="lab_request",
+        entity_id=lab_request.lab_request_id,
+        user_id=encoded_by,
+        ip_address=ip_address,
+        detail_json={"request_uid": request_uid, "patient_id": str(patient_id)},
+    )
+
     await db.commit()
     await db.refresh(lab_request)
 
     return LabRequestCreateResponse(
-        success=True,
-        request_id=request_uid,
-        message="Lab request created successfully.",
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        lab_request_id=lab_request.lab_request_id,
+        request_uid=lab_request.request_uid,
+        patient_id=lab_request.patient_id,
+        physician_id=lab_request.physician_id,
+        physician_name=lab_request.physician_name,
+        test_type=lab_request.test_type,
+        clinical_notes=lab_request.clinical_notes,
+        status=lab_request.status,
+        created_at=lab_request.created_at,
     )

@@ -56,7 +56,7 @@ class NotificationService:
         specimen_id: uuid.UUID,
     ) -> None:
         """Notify every active supervisor that a result is ready for their review."""
-        supervisor_ids = await self._get_supervisor_ids()
+        supervisor_ids = await self._get_active_user_ids(UserRole.SUPERVISOR)
         for sup_id in supervisor_ids:
             await self.notify(
                 user_id=sup_id,
@@ -71,13 +71,30 @@ class NotificationService:
     ) -> None:
         """Notify every active supervisor that Smart Diagnosis failed for a
         confirmed result."""
-        supervisor_ids = await self._get_supervisor_ids()
+        supervisor_ids = await self._get_active_user_ids(UserRole.SUPERVISOR)
         for sup_id in supervisor_ids:
             await self.notify(
                 user_id=sup_id,
                 message="Smart Diagnosis is unavailable for a confirmed result due to an engine error.",
                 notification_type="SMART_DIAGNOSIS_UNAVAILABLE",
                 entity_id=result_id,
+            )
+
+    async def notify_active_receptionists(
+        self,
+        request_uid: str,
+        physician_name: str,
+        lab_request_id: uuid.UUID,
+    ) -> None:
+        """Notify every active receptionist that a physician submitted a new
+        lab request needing follow-up (e.g. specimen collection)."""
+        receptionist_ids = await self._get_active_user_ids(UserRole.RECEPTIONIST)
+        for rec_id in receptionist_ids:
+            await self.notify(
+                user_id=rec_id,
+                message=f"New lab request {request_uid} submitted by Dr. {physician_name}.",
+                notification_type="LAB_REQUEST_SUBMITTED",
+                entity_id=lab_request_id,
             )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -119,15 +136,15 @@ class NotificationService:
         except Exception:
             return None
 
-    async def _get_supervisor_ids(self) -> list[uuid.UUID]:
+    async def _get_active_user_ids(self, role: UserRole) -> list[uuid.UUID]:
         # Returns [] (rather than raising) on query failure.
         try:
             stmt = select(User.user_id).where(
-                User.role == UserRole.SUPERVISOR,
+                User.role == role,
                 User.is_active.is_(True),
             )
             rows = await self.db.execute(stmt)
             return list(rows.scalars().all())
         except Exception:
-            logger.exception("Failed to query supervisor IDs for notification")
+            logger.exception("Failed to query active %s IDs for notification", role)
             return []
