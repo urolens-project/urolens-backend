@@ -27,7 +27,11 @@ class OverrideRequest(BaseModel):
 
     parameter: str = Field(..., min_length=1, max_length=100)
     corrected_value: float = Field(..., ge=0)
-    rationale: str | None = Field("No rationale provided", max_length=2000)
+    rationale: str = Field("No rationale provided", max_length=2000)
+    """Not Optional despite having a default: `ManualOverride.rationale` is a
+    NOT NULL column, so an explicit `"rationale": null` in the request must
+    be rejected by Pydantic (a clean 422) rather than reach the service and
+    fail as an unhandled IntegrityError."""
     original_ai_value: float = Field(..., ge=0)
 
     @field_validator("parameter")
