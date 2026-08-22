@@ -1,3 +1,4 @@
+"""Patient-portal result routes: listing, detail, and PDF download."""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -22,6 +23,7 @@ async def get_patient_result_service(
     db: AsyncClient = Depends(get_supabase),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> PatientResultService:
+    """FastAPI dependency constructing a request-scoped `PatientResultService`."""
     return PatientResultService(db=db, audit_logger=audit_logger)
 
 
@@ -29,6 +31,7 @@ async def get_patient_service(
     db: AsyncSession = Depends(get_db),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> PatientService:
+    """FastAPI dependency constructing a request-scoped `PatientService`."""
     return PatientService(db=db, audit_logger=audit_logger)
 
 
@@ -37,6 +40,8 @@ async def get_my_results(
     current_user: dict = Depends(RequireRole([UserRole.PATIENT])),
     service: PatientResultService = Depends(get_patient_result_service),
 ):
+    """List the authenticated patient's results; see
+    `PatientResultService.get_patient_results`."""
     return await service.get_patient_results(current_user["user_id"])
 
 
@@ -47,6 +52,8 @@ async def get_result_detail(
     current_user: dict = Depends(RequireRole([UserRole.PATIENT])),
     service: PatientResultService = Depends(get_patient_result_service),
 ):
+    """Fetch one result's detail for the authenticated patient; see
+    `PatientResultService.get_result_detail`."""
     return await service.get_result_detail(result_id, current_user["user_id"], request)
 
 
@@ -58,6 +65,7 @@ async def download_result_pdf(
     result_service: PatientResultService = Depends(get_patient_result_service),
     patient_service: PatientService = Depends(get_patient_service),
 ):
+    """Render and return the authenticated patient's result as a downloadable PDF."""
     result = await result_service.get_result_detail(
         result_id, current_user["user_id"], request
     )

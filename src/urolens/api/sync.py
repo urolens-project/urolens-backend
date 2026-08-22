@@ -1,3 +1,4 @@
+"""Mobile-client sync route."""
 from datetime import datetime
 from typing import Optional
 
@@ -18,5 +19,7 @@ async def pull_sync(
     ),
     claims: dict = Depends(get_current_user),
 ):
+    """Pull a full or delta sync payload for the authenticated MedTech; see
+    `sync_service.pull`."""
     user_id = claims["user_id"]
     return await sync_service.pull(user_id, last_synced_at)

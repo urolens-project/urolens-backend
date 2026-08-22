@@ -1,3 +1,4 @@
+"""Staff login/logout routes."""
 import asyncio
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 def _api_error(status_code: int, code: str, message: str) -> HTTPException:
+    # Builds an HTTPException carrying a machine-readable error_code attribute.
     exc = HTTPException(status_code=status_code, detail=message)
     exc.error_code = code  # type: ignore[attr-defined]
     return exc
@@ -26,6 +28,20 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
 async def login(body: LoginRequest, request: Request, background_tasks: BackgroundTasks):
+    """Authenticate a staff login and issue an access token.
+
+    Checks run in a fixed order — user exists, password correct, account not
+    locked, account active — with the password check deliberately performed
+    before the lock/active checks (so a lock only triggers on a correct
+    username, and to avoid revealing account state via timing). The
+    `LOGIN_SUCCESS` audit write is deferred to a background task so it
+    doesn't block the response.
+
+    Raises:
+        HTTPException: 401 (`INVALID_CREDENTIALS`), for an unknown username
+            or wrong password. 423 (`ACCOUNT_LOCKED`), if the account is
+            locked. 403 (`ACCOUNT_INACTIVE`), if the account is inactive.
+    """
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent")
 
@@ -68,6 +84,7 @@ async def login(body: LoginRequest, request: Request, background_tasks: Backgrou
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request, claims: dict = Depends(get_current_user)):
+    """Close the authenticated staff session and record a `LOGOUT` audit entry."""
     ip_address = request.client.host if request.client else "unknown"
     await close_session(claims["session_id"])
     await audit_logger.log_logout(claims["user_id"], claims["session_id"], ip_address)

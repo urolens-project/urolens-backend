@@ -13,6 +13,11 @@ catch-all would shadow them. `GET /{result_id}/smart-diagnosis` is a
 distinct two-segment shape and isn't at risk of the same collision, but
 stays grouped with the other `/{result_id}/...` routes above the catch-all
 for readability.
+
+`ConfirmResultResponse`/`OverrideRequest`/`OverrideResponse` are defined
+inline here rather than in `schemas/`, which is a pre-existing rule-11 gap —
+not fixed as part of this documentation-only pass; see the flagged-findings
+changelog entry.
 """
 import uuid
 from datetime import datetime
@@ -56,6 +61,8 @@ _supervisor = RequireRole([UserRole.SUPERVISOR])
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class ConfirmResultResponse(BaseModel):
+    """Response shape for a successful result confirmation."""
+
     id: uuid.UUID
     result_id: uuid.UUID
     confirmed_by: uuid.UUID
@@ -65,6 +72,8 @@ class ConfirmResultResponse(BaseModel):
 
 
 class OverrideRequest(BaseModel):
+    """Request body for overriding a single AI-generated result parameter."""
+
     parameter: str = Field(..., min_length=1, max_length=100)
     corrected_value: float = Field(..., ge=0)
     rationale: Optional[str] = Field("No rationale provided", max_length=2000)
@@ -73,12 +82,16 @@ class OverrideRequest(BaseModel):
     @field_validator("parameter")
     @classmethod
     def parameter_no_whitespace_only(cls, v: str) -> str:
+        """Reject a `parameter` that is blank or whitespace-only; strips
+        surrounding whitespace otherwise."""
         if not v.strip():
             raise ValueError("parameter must not be blank")
         return v.strip()
 
 
 class OverrideResponse(BaseModel):
+    """Response shape for a successful parameter override."""
+
     id: uuid.UUID
     result_id: uuid.UUID
     parameter: str
@@ -96,6 +109,7 @@ class OverrideResponse(BaseModel):
 async def get_notif_service(
     db: AsyncSession = Depends(get_db),
 ) -> NotificationService:
+    """FastAPI dependency constructing a request-scoped `NotificationService`."""
     return NotificationService(db=db)
 
 
@@ -104,6 +118,9 @@ async def get_confirmation_service(
     audit_logger: AuditLogger = Depends(get_audit_logger),
     notif_service: NotificationService = Depends(get_notif_service),
 ) -> ResultConfirmationService:
+    """FastAPI dependency constructing a request-scoped
+    `ResultConfirmationService`, wiring up its `SmartDiagnosisService`
+    collaborator."""
     smart_diag = SmartDiagnosisService(
         audit_logger=audit_logger,
         notif_service=notif_service,
@@ -120,12 +137,14 @@ async def get_override_service(
     db: AsyncSession = Depends(get_db),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> ManualOverrideService:
+    """FastAPI dependency constructing a request-scoped `ManualOverrideService`."""
     return ManualOverrideService(db=db, audit_logger=audit_logger)
 
 
 async def get_result_review_service(
     db: AsyncSession = Depends(get_db),
 ) -> ResultReviewService:
+    """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
     return ResultReviewService(db=db)
 
 
@@ -181,6 +200,8 @@ async def get_supervisor_stats(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> SupervisorStatsResponse:
+    """Dashboard counts for the supervisor's review queue; see
+    `ResultReviewService.get_supervisor_stats`."""
     return SupervisorStatsResponse(**await service.get_supervisor_stats())
 
 
@@ -191,6 +212,7 @@ async def list_approved_today(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ApprovedTodayListResponse:
+    """List results approved today; see `ResultReviewService.get_approved_today`."""
     return ApprovedTodayListResponse(**await service.get_approved_today(page=page, page_size=page_size))
 
 
@@ -201,6 +223,7 @@ async def list_escalated(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> EscalatedListResponse:
+    """List escalated results; see `ResultReviewService.get_escalated`."""
     return EscalatedListResponse(**await service.get_escalated(page=page, page_size=page_size))
 
 
@@ -211,6 +234,7 @@ async def list_pending_results(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> PendingResultListResponse:
+    """List results awaiting supervisor approval; see `ResultReviewService.get_pending`."""
     return PendingResultListResponse(**await service.get_pending(page=page, page_size=page_size))
 
 
@@ -221,6 +245,8 @@ async def annotate_result(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> AnnotationResponse:
+    """Save a supervisor's annotation on a result; see
+    `ResultReviewService.save_annotation`."""
     result = await service.save_annotation(
         result_id=result_id,
         user_id=uuid.UUID(current_user["user_id"]),
@@ -237,6 +263,7 @@ async def approve_result(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ApproveResponse:
+    """Approve a pending result; see `ResultReviewService.approve_result`."""
     result = await service.approve_result(
         result_id=result_id,
         user_id=uuid.UUID(current_user["user_id"]),
@@ -252,6 +279,7 @@ async def return_result(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ReturnResponse:
+    """Return a pending result for correction; see `ResultReviewService.return_result`."""
     result = await service.return_result(
         result_id=result_id,
         user_id=uuid.UUID(current_user["user_id"]),
@@ -267,6 +295,7 @@ async def escalate_result(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> EscalateResponse:
+    """Escalate a pending result; see `ResultReviewService.escalate_result`."""
     result = await service.escalate_result(
         result_id=result_id,
         user_id=uuid.UUID(current_user["user_id"]),
@@ -285,6 +314,8 @@ async def get_smart_diagnosis_route(
     result_id: str,
     current_user: dict = Depends(_supervisor),
 ) -> dict:
+    """Fetch a result's Smart Diagnosis output; see
+    `result_review_service.get_smart_diagnosis`."""
     return await get_smart_diagnosis(result_id=result_id)
 
 
@@ -294,4 +325,6 @@ async def get_full_result(
     current_user: dict = Depends(_supervisor),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> FullResultDetail:
+    """Fetch a result's full supervisor-review detail; see
+    `ResultReviewService.get_full_result`."""
     return FullResultDetail(**await service.get_full_result(result_id))

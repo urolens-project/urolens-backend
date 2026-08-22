@@ -1,3 +1,5 @@
+"""MedTech queue routes (receptionist-facing): pending specimens, workloads,
+and assignment."""
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
@@ -23,6 +25,7 @@ async def get_queue_service(
     supabase_client: AsyncClient = Depends(get_supabase),
     sqlalchemy_db: AsyncSession = Depends(get_db),
 ) -> QueueService:
+    """FastAPI dependency constructing a request-scoped `QueueService`."""
     notification_service = NotificationService(db=sqlalchemy_db)
     return QueueService(
         db=supabase_client,

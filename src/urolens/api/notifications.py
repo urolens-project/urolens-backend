@@ -1,3 +1,8 @@
+"""In-app notification routes and Expo push-token registration.
+
+`NotificationOut`/`PushTokenRequest` are defined inline here rather than in
+`schemas/`, which is a pre-existing rule-11 gap — not fixed as part of this
+documentation-only pass; see the flagged-findings changelog entry."""
 import uuid
 from datetime import datetime
 
@@ -16,6 +21,8 @@ router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
 
 class NotificationOut(BaseModel):
+    """Response shape for a single notification row."""
+
     notification_id: uuid.UUID
     message: str
     notification_type: str
@@ -27,6 +34,8 @@ class NotificationOut(BaseModel):
 
 
 class PushTokenRequest(BaseModel):
+    """Request body for registering a device's Expo push token."""
+
     token: str
 
 
@@ -37,6 +46,7 @@ async def list_notifications(
     current_user: dict = Depends(RequireRole([UserRole.MEDTECH])),
     db: AsyncSession = Depends(get_db),
 ):
+    """List the authenticated MedTech's 50 most recent notifications, newest first."""
     user_id = uuid.UUID(current_user["user_id"])
     stmt = (
         select(Notification)
@@ -54,6 +64,12 @@ async def mark_notification_read(
     current_user: dict = Depends(RequireRole([UserRole.MEDTECH])),
     db: AsyncSession = Depends(get_db),
 ):
+    """Mark one of the authenticated MedTech's own notifications read.
+
+    Raises:
+        HTTPException: 404, if `notification_id` doesn't exist or doesn't
+            belong to the caller.
+    """
     user_id = uuid.UUID(current_user["user_id"])
     stmt = (
         update(Notification)
@@ -75,6 +91,8 @@ async def register_push_token(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Register or update the authenticated user's Expo push token for
+    mobile push notifications."""
     user_id = uuid.UUID(current_user["user_id"])
     stmt = (
         update(User)
