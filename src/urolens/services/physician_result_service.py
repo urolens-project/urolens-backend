@@ -3,6 +3,7 @@ scoped to results for patients the requesting physician has an associated lab
 request for.
 """
 import asyncio
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -18,6 +19,7 @@ from src.urolens.schemas.physician import (
 )
 
 _PHT = timezone(timedelta(hours=8))
+logger = logging.getLogger(__name__)
 
 
 def _compute_age(dob_str: str | None) -> int | None:
@@ -253,6 +255,7 @@ async def get_result_detail(
             "ip_address": ip_address,
         }).execute()
     except Exception:
+        logger.exception("Failed to log result retrieval.")
         pass
 
     # Audit log (best-effort)
@@ -267,6 +270,7 @@ async def get_result_detail(
             "detail_json": {},
         }).execute()
     except Exception:
+        logger.exception("Failed to log audit entry.")
         pass
 
     return PhysicianResultDetail(

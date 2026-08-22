@@ -1,8 +1,40 @@
 [tool.ruff]
 target-version = "py313"
 
+[tool.pyright]
+extraPaths = ["."]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "D", "T20", "ANN", "B", "UP", "S"]
+ignore = [
+    "E501",
+    "D",
+    "ANN",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.File",
+    "fastapi.Form",
+    "src.urolens.core.rbac.RequireRole",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105"]
+"alembic/**" = ["E402"]
+"seed_*.py" = ["T201", "S101", "E402"]
+"test_image_upload.py" = ["S311", "T201", "S105"]
+"src/urolens/schemas/auth.py" = ["S105"]
+"main.py" = ["E402"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

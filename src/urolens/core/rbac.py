@@ -3,6 +3,7 @@ protected route should depend on `RequireRole` (which itself depends on
 `get_current_user`), never re-implement token decoding or role checks
 inline.
 """
+import logging
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,17 +12,19 @@ from . import audit_logger
 from .auth_service import decode_jwt, is_session_active
 
 security_scheme = HTTPBearer()
+logger = logging.getLogger(__name__)
 
-_UNAUTHORIZED = HTTPException(
-    status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="Authentication required.",
-)
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Insufficient permissions.",
+    )
 
-_FORBIDDEN = HTTPException(
-    status_code=status.HTTP_403_FORBIDDEN,
-    detail="Insufficient permissions.",
-)
-
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Insufficient permissions.",
+    )
 
 async def get_current_user(
     request: Request,
@@ -47,13 +50,14 @@ async def get_current_user(
     try:
         claims = decode_jwt(token)
     except Exception:
+        logger.warning("JWT decode failed from %s", ip_address, exc_info=True)
         await audit_logger.log_access_denied(ip_address)
-        raise _UNAUTHORIZED
+        raise _unauthorized() from None
 
     session_id = claims.get("session_id")
     if not session_id or not await is_session_active(session_id):
         await audit_logger.log_access_denied(ip_address, user_id=claims.get("user_id"))
-        raise _UNAUTHORIZED
+        raise _unauthorized() from None
 
     return claims
 
@@ -86,5 +90,5 @@ class RequireRole:
         """
         user_role = current_user.get("role", "").lower()
         if user_role not in {r.lower() for r in self.allowed_roles}:
-            raise _FORBIDDEN
+            raise _forbidden() from None
         return current_user

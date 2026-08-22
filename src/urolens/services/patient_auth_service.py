@@ -3,6 +3,7 @@ a password derived from their (decrypted) last name + date of birth, rather
 than a stored credential.
 """
 import asyncio
+import logging
 import unicodedata
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +23,7 @@ from src.urolens.core.supabase import supabase
 from src.urolens.schemas.auth import PatientLoginResponse
 
 _PATIENT_TOKEN_EXPIRE_MINUTES = 30
+logger = logging.getLogger(__name__)
 
 
 def _api_error(status_code: int, code: str, message: str) -> HTTPException:
@@ -111,8 +113,9 @@ async def patient_login(patient_uid: str, password: str, request: Request) -> Pa
         date_of_birth = decrypt_pii(patient["date_of_birth"])
         expected = _derive_patient_password(last_name, date_of_birth)
     except Exception:
+        logger.exception("PII decrypt failed for patiend %s", patient["patient_id"])
         await audit_logger.log_patient_login_failed(ip_address, patient_id=patient["patient_id"])
-        raise _invalid_creds()
+        raise _invalid_creds() from None
 
     # Case-insensitive so patients who type lowercase surnames still authenticate
     if password.upper() != expected.upper():
