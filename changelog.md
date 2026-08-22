@@ -906,3 +906,100 @@ flagged-findings entry below for those).
   `notification_service.py` 56%) confirmed their gaps are non-underscore
   `__init__`/private helper methods already carrying an explanatory comment
   per this task's rule, not missing documentation.
+
+## Fixing the docstring pass's flagged findings
+
+The seven items flagged (and deliberately not fixed) by the docstring pass
+above are closed out here — two rounds of read-only investigation
+identified which roles used each duplicate lab-request implementation and
+assessed the risk of touching the other six, then each was fixed
+individually and separately verified.
+
+### Fixed
+- **Duplicate lab-request creation implementations**: `physician_service.create_lab_request`
+  (Supabase REST, used by the physician-portal route) and
+  `lab_request_service.create_lab_request` (SQLAlchemy, used by the
+  receptionist/encoder route) consolidated into the latter, in three
+  chunked commits. The unified function takes explicit scalar args instead
+  of either router's request schema, so both routes call it directly:
+  patient-existence validation (previously physician-only) now applies to
+  both roles; the audit log write (`AuditLogger.record`) is now
+  unconditional for both roles; receptionist notification
+  (`NotificationService.notify_active_receptionists`, new) fires only when
+  the physician-facing route sets `notify_receptionists=True`, preserving
+  today's behavior rather than paging receptionists about their own
+  colleague's action. `NotificationService._get_supervisor_ids` generalized
+  to `_get_active_user_ids(role)`, shared by all three notification methods.
+  `schemas/lab_request.py::LabRequestCreateResponse` is now the one
+  response shape both routes return (built from the persisted row) —
+  deliberately unifying the two previously-divergent response bodies per
+  explicit request, which is a breaking change for the receptionist route's
+  response shape specifically (its old generic `success`/`message` envelope
+  is gone); flagged for whoever owns the receptionist-facing frontend.
+  `physician_service.create_lab_request`/`_generate_request_uid` and
+  `schemas/physician.py`'s duplicate `LabRequestCreateResponse` are deleted
+  (rule 14). Added characterization tests pinning both paths' pre-existing
+  behavior before refactoring, then rewrote them for the unified behavior
+  (`tests/test_lab_request_service.py`, `tests/test_notification_service.py`
+  new); the now-target-less `tests/test_physician_service.py` is deleted.
+- **Duplicate `VALID_ESCALATION_PATHS` constant**: `schemas/result_review.py`
+  and `services/result_review_service.py` each independently defined the
+  identical three-value set. Consolidated into one `EscalationPath` `Literal`
+  type in `schemas/result_review.py`, with `VALID_ESCALATION_PATHS` derived
+  from it via `typing.get_args()`; `EscalateRequest.escalation_path` is now
+  typed as `EscalationPath` instead of a bare `str`, so Pydantic rejects an
+  invalid value at the request boundary before the service's own check ever
+  runs (rule 10). The service imports the schema's constant instead of
+  redefining it. New tests in `tests/test_result_review_schemas.py` cover
+  both the accepted values and the newly-added schema-level rejection.
+- **Inline Pydantic schemas outside `schemas/`**: `api/notifications.py`'s
+  `NotificationOut`/`PushTokenRequest` moved to new `schemas/notifications.py`;
+  `api/results.py`'s `ConfirmResultResponse`/`OverrideRequest`/`OverrideResponse`
+  moved into the existing `schemas/result_review.py`. Pure relocation, no
+  field/validator changes — grep-confirmed neither router's classes had any
+  importer besides the router itself, and no naming collisions existed at
+  either destination. OpenAPI schema generation confirmed to still include
+  all five classes post-move.
+- **Two dead files deleted (rule 14)**: `domains/intake/service.py` (an
+  empty file, docstring only, zero importers anywhere in the repo) and
+  `models/result_release.py` (the `ResultRelease` ORM model was never
+  imported anywhere, including its own package's `models/__init__.py` —
+  unlike every other model — and `alembic/env.py` maintains a separate,
+  smaller hardcoded model list that never included it either, so it was
+  unreachable by Alembic autogenerate regardless). `alembic heads` still
+  resolves to a single head (`0034`) after the deletion.
+  **Deliberately not done**: porting `result_releasing_service.py` off
+  Supabase-REST onto a real `ResultRelease` SQLAlchemy model — a much larger
+  change touching the Tier-1 confirm→override→approve→release chain, with
+  its own `release_method` column-type mismatch (plain string vs. the DB's
+  native Postgres enum) to resolve first. Left as explicit future work, not
+  silently dropped.
+- **Stale `Image` model docstring**: corrected two false claims — it stated
+  binary storage is S3 (actual: Supabase Storage, confirmed via
+  `ai_integration_service.py`'s own docstring and the absence of any AWS
+  credentials anywhere in this project) and that EXIF metadata is stripped
+  before upload (no such code exists anywhere in the repo — removed rather
+  than replaced with another guess).
+
+### Investigated, not a real defect
+- **`schemas/__init__.py` has no public re-exports**: confirmed this is the
+  *consistent* pattern across `core/`, `services/`, `api/`, and `domains/`
+  `__init__.py` files (all docstring-only) — only `models/__init__.py`
+  re-exports, for a documented, mechanical reason (`Base.metadata` needs
+  every model imported somewhere for Alembic autogenerate to see it) that
+  doesn't apply to `schemas/`. Every real import site in the codebase
+  already imports schema classes from their submodule directly, never the
+  bare package. Adding re-exports would be purely cosmetic and would make
+  `schemas/` *inconsistent* with the rest of the tree — no code change made.
+
+### Verified
+- `python -c "import main"` and the full test suite (compared against the
+  20-failed/38-passed original baseline) after every commit in this effort;
+  no new failures introduced at any step.
+- Repo-wide greps after the relevant commits confirmed zero remaining
+  references to the deleted `physician_service` functions, the deleted
+  `schemas/physician.py::LabRequestCreateResponse`, the renamed
+  `NotificationService._get_supervisor_ids`, the deleted
+  `domains/intake/service.py`, and the deleted `ResultRelease` model.
+- `alembic heads` — single head (`0034`) — confirmed unaffected by the
+  `ResultRelease` model deletion.
