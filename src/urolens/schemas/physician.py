@@ -29,15 +29,10 @@ class LabRequestCreateRequest(BaseModel):
     clinical_notes: Optional[str] = None
 
 
-class LabRequestCreateResponse(BaseModel):
-    """Response body confirming a physician-created lab request."""
-
-    request_uid: str
-    patient_id: UUID
-    physician_name: str
-    test_type: str
-    status: str
-    created_at: str
+# The response schema for lab-request creation lives in schemas/lab_request.py
+# (LabRequestCreateResponse) — shared with the receptionist-facing route
+# since both now return the same shape (see changelog.md's "Duplicate
+# lab-request creation implementations" entry).
 
 
 class PhysicianResultSummary(BaseModel):
