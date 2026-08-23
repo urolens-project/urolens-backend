@@ -45,19 +45,19 @@ class ResultConfirmationService:
     def __init__(
         self,
         db: AsyncSession,
-        audit_logger: AuditLogger,
-        smart_diagnosis_service: SmartDiagnosisService,
-        notif_service: NotificationService,
+        auditLogger: AuditLogger,
+        _smartDiagnosisService: SmartDiagnosisService,
+        _notifService: NotificationService,
     ) -> None:
         self.db = db
-        self.audit_logger = audit_logger
-        self.smart_diagnosis = smart_diagnosis_service
-        self.notif_service = notif_service
+        self.auditLogger = auditLogger
+        self._smartDiagnosis = _smartDiagnosisService
+        self._notifService = _notifService
 
-    async def confirm_result(
+    async def confirmResult(
         self,
-        result_id: uuid.UUID,
-        medtech_id: uuid.UUID,
+        resultId: uuid.UUID,
+        medtechId: uuid.UUID,
         request: Request,
     ) -> ResultConfirmation:
         """Confirms an analysis result and triggers Smart Diagnosis.
@@ -75,7 +75,7 @@ class ResultConfirmationService:
                 double-submit hit the DB's unique constraint first.
             UnprocessableException: a pending image retake blocks confirmation.
         """
-        result = await self._get_result(result_id)
+        result = await self._getResult(resultId)
 
         # Guard: cannot re-confirm a result that has already passed medtech confirmation
         if result.status in _ALREADY_CONFIRMED_STATUSES:
@@ -85,14 +85,14 @@ class ResultConfirmationService:
             )
 
         # Guard: pending retake blocks confirmation
-        await self._validate_no_pending_retake(result)
+        await self._validateNoPendingRetake(result)
 
         # Create confirmation record
         now = datetime.now(UTC)
         confirmation = ResultConfirmation(
-            result_id=result_id,
-            medtech_id=medtech_id,
-            confirmed_at=now,
+            resultId=resultId,
+            medtechId=medtechId,
+            confirmedAt=now,
         )
         self.db.add(confirmation)
 
@@ -110,36 +110,36 @@ class ResultConfirmationService:
 
         # Settle particle_classes = ai_findings merged with any MedTech overrides.
         # If no overrides exist this is a straight copy of ai_findings.
-        overrides = {o.parameter_name: float(o.corrected_value) for o in result.manual_overrides}
-        result.particle_classes = {**result.ai_findings, **overrides}
+        overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
+        result.particleClasses = {**result.aiFindings, **overrides}
 
         # Transition result status
         result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
-        result.confirmed_by = medtech_id
-        result.confirmed_at = now
+        result.confirmedBy = medtechId
+        result.confirmedAt = now
 
         # Cache before SmartDiagnosis: savepoint rollbacks expire ORM object
         # attributes, and async SQLAlchemy cannot lazy-reload them outside a
         # greenlet context (raises MissingGreenlet).
-        specimen_id = result.specimen_id
+        specimenId = result.specimenId
 
         # Trigger Smart Diagnosis — failure MUST NOT break confirmation (ISP)
         # smart_diagnosis_service.run() catches all exceptions internally
-        await self.smart_diagnosis.run(result_id=result_id, db=self.db)
+        await self._smartDiagnosis.run(resultId=resultId, db=self.db)
 
         # Notify the Supervisor
-        await self.notif_service.notify_supervisor_result_ready(
-            result_id=result_id,
-            specimen_id=specimen_id,
+        await self._notifService.notifySupervisorResultReady(
+            resultId=resultId,
+            specimenId=specimenId,
         )
 
         # Audit — always the final write, same transaction (LSP: same pattern everywhere)
-        await self.audit_logger.record(
-            event_type="RESULT_CONFIRMED",
-            entity_type="analysis_result",
-            entity_id=result_id,
-            user_id=medtech_id,
-            detail_json={"specimen_id": str(specimen_id)},
+        await self.auditLogger.record(
+            eventType="RESULT_CONFIRMED",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=medtechId,
+            detailJson={"specimen_id": str(specimenId)},
             db=self.db,
             request=request,
         )
@@ -152,22 +152,22 @@ class ResultConfirmationService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
+    async def _getResult(self, resultId: uuid.UUID) -> AnalysisResult:
         # Loads the result with manual_overrides eagerly, or raises
         # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist.
         stmt = select(AnalysisResult).options(
-            selectinload(AnalysisResult.manual_overrides)
-        ).where(AnalysisResult.result_id == result_id)
+            selectinload(AnalysisResult.manualOverrides)
+        ).where(AnalysisResult.resultId == resultId)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
             raise NotFoundException(
                 code="RESULT_NOT_FOUND",
-                message=f"No analysis result found with id {result_id}.",
+                message=f"No analysis result found with id {resultId}.",
             )
         return result
 
-    async def _validate_no_pending_retake(self, result: AnalysisResult) -> None:
+    async def _validateNoPendingRetake(self, result: AnalysisResult) -> None:
         """A result with status IMAGE_RETAKE_REQUESTED cannot be confirmed."""
         if result.status == ResultStatus.IMAGE_RETAKE_REQUESTED:
             raise UnprocessableException(

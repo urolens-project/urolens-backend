@@ -24,31 +24,31 @@ class ResultView(Base):
 
     __tablename__ = "result_views"
 
-    view_id: Mapped[uuid.UUID] = mapped_column(
+    viewId: Mapped[uuid.UUID] = mapped_column("view_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="CASCADE"),
         nullable=False,
     )
-    patient_id: Mapped[uuid.UUID] = mapped_column(
+    patientId: Mapped[uuid.UUID] = mapped_column("patient_id", 
         UUID(as_uuid=True),
         ForeignKey("patients.patient_id", ondelete="CASCADE"),
         nullable=False,
     )
-    viewed_at: Mapped[datetime] = mapped_column(
+    viewedAt: Mapped[datetime] = mapped_column("viewed_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    analysis_result: Mapped[AnalysisResult] = relationship(
-        back_populates="result_views"
+    analysisResult: Mapped[AnalysisResult] = relationship(
+        back_populates="resultViews"
     )
     patient: Mapped[Patient] = relationship(
-        back_populates="result_views"
+        back_populates="resultViews"
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `view_id`, for callers expecting a generic `id` field."""
-        return self.view_id
+        return self.viewId

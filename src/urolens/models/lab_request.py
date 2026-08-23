@@ -21,36 +21,36 @@ class LabRequest(Base):
 
     __tablename__ = "lab_requests"
 
-    lab_request_id: Mapped[uuid.UUID] = mapped_column(
+    labRequestId: Mapped[uuid.UUID] = mapped_column("lab_request_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    request_uid: Mapped[str] = mapped_column(String(30), nullable=False, unique=True)
-    patient_id: Mapped[uuid.UUID] = mapped_column(
+    requestUid: Mapped[str] = mapped_column("request_uid", String(30), nullable=False, unique=True)
+    patientId: Mapped[uuid.UUID] = mapped_column("patient_id", 
         UUID(as_uuid=True),
         ForeignKey("patients.patient_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    physician_id: Mapped[uuid.UUID | None] = mapped_column(
+    physicianId: Mapped[uuid.UUID | None] = mapped_column("physician_id", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="SET NULL"),
         nullable=True,
     )
-    physician_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    test_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    clinical_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    physicianName: Mapped[str | None] = mapped_column("physician_name", String(255), nullable=True)
+    testType: Mapped[str] = mapped_column("test_type", String(50), nullable=False)
+    clinicalNotes: Mapped[str | None] = mapped_column("clinical_notes", Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="PENDING_SAMPLE"
     )
-    encoded_by: Mapped[uuid.UUID] = mapped_column(
+    encodedBy: Mapped[uuid.UUID] = mapped_column("encoded_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    created_at: Mapped[datetime] = mapped_column(
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", 
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -60,4 +60,4 @@ class LabRequest(Base):
     @property
     def id(self) -> uuid.UUID:
         """Alias for `lab_request_id`, for callers expecting a generic `id` field."""
-        return self.lab_request_id
+        return self.labRequestId

@@ -9,34 +9,34 @@ from pydantic import BaseModel
 class ReleaseResultRequest(BaseModel):
     """Request body for releasing an approved result."""
 
-    release_method: Literal["PHYSICAL", "DIGITAL"]
+    releaseMethod: Literal["PHYSICAL", "DIGITAL"]
 
 
 class ResultReleaseResponse(BaseModel):
     """Response body confirming a result release."""
 
-    release_id: UUID
-    result_id: UUID
-    released_by: UUID
-    release_method: str
-    released_at: datetime
+    releaseId: UUID
+    resultId: UUID
+    releasedBy: UUID
+    releaseMethod: str
+    releasedAt: datetime
 
 
 class ApprovedResultItem(BaseModel):
     """One approved-and-awaiting-release result, for the release queue list."""
 
-    result_id: UUID
-    patient_name: str
-    sample_uid: str | None
-    test_type: str | None
-    approved_at: datetime
+    resultId: UUID
+    patientName: str
+    sampleUid: str | None
+    testType: str | None
+    approvedAt: datetime
 
 
 class PaginationMeta(BaseModel):
     """Cursor-pagination metadata for a list response."""
 
-    next_cursor: str | None
-    has_more: bool
+    nextCursor: str | None
+    hasMore: bool
 
 
 class ApprovedResultsResponse(BaseModel):

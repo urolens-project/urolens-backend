@@ -12,23 +12,23 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     """Response body for a successful staff login."""
 
-    access_token: str
-    token_type: str = "Bearer"
+    accessToken: str
+    tokenType: str = "Bearer"
     role: str
-    user_id: str
+    userId: str
 
 
 class PatientLoginRequest(BaseModel):
     """Request body for patient-portal login."""
 
-    patient_uid: str
+    patientUid: str
     password: str
 
 
 class PatientLoginResponse(BaseModel):
     """Response body for a successful patient-portal login."""
 
-    access_token: str
-    token_type: str = "Bearer"
+    accessToken: str
+    tokenType: str = "Bearer"
     role: str
-    user_id: str
+    userId: str

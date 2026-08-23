@@ -22,35 +22,35 @@ class SampleLabel(Base):
 
     __tablename__ = "sample_labels"
 
-    label_id: Mapped[uuid.UUID] = mapped_column(
+    labelId: Mapped[uuid.UUID] = mapped_column("label_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    specimen_id: Mapped[uuid.UUID] = mapped_column(
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
         UUID(as_uuid=True),
         ForeignKey("specimens.specimen_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    sample_uid: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    label_content_json: Mapped[dict[str, Any]] = mapped_column(
+    sampleUid: Mapped[str | None] = mapped_column("sample_uid", String(30), nullable=True)
+    labelContentJson: Mapped[dict[str, Any]] = mapped_column("label_content_json", 
         JSONB, nullable=False, default=dict
     )
-    generated_by: Mapped[uuid.UUID] = mapped_column(
+    generatedBy: Mapped[uuid.UUID] = mapped_column("generated_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    affixed_confirmed: Mapped[bool] = mapped_column(
+    affixedConfirmed: Mapped[bool] = mapped_column("affixed_confirmed", 
         Boolean, nullable=False, default=False
     )
-    affixed_at: Mapped[datetime | None] = mapped_column(
+    affixedAt: Mapped[datetime | None] = mapped_column("affixed_at", 
         DateTime(timezone=True), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `label_id`, for callers expecting a generic `id` field."""
-        return self.label_id
+        return self.labelId

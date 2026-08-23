@@ -23,10 +23,10 @@ class NotificationService:
 
     async def notify(
         self,
-        user_id: uuid.UUID,
+        userId: uuid.UUID,
         message: str,
-        notification_type: str,
-        entity_id: uuid.UUID | None = None,
+        notificationType: str,
+        entityId: uuid.UUID | None = None,
     ) -> None:
         """Insert a notification row and attempt push delivery. Never raises —
         a DB failure is logged and swallowed; push delivery failures are
@@ -37,80 +37,80 @@ class NotificationService:
         """
         try:
             stmt = insert(Notification).values(
-                user_id=user_id,
+                user_id=userId,
                 message=message,
-                notification_type=notification_type,
-                entity_id=entity_id,
+                notification_type=notificationType,
+                entity_id=entityId,
             )
             await self.db.execute(stmt)
         except Exception:
-            logger.exception("Failed to create notification for user %s", user_id)
+            logger.exception("Failed to create notification for user %s", userId)
             return
 
         # Best-effort push delivery — never raises
-        await self._push(user_id, message, notification_type, entity_id)
+        await self._push(userId, message, notificationType, entityId)
 
-    async def notify_supervisor_result_ready(
+    async def notifySupervisorResultReady(
         self,
-        result_id: uuid.UUID,
-        specimen_id: uuid.UUID,
+        resultId: uuid.UUID,
+        specimenId: uuid.UUID,
     ) -> None:
         """Notify every active supervisor that a result is ready for their review."""
-        supervisor_ids = await self._get_active_user_ids(UserRole.SUPERVISOR)
-        for sup_id in supervisor_ids:
+        supervisorIds = await self._getActiveUserIds(UserRole.SUPERVISOR)
+        for supId in supervisorIds:
             await self.notify(
-                user_id=sup_id,
-                message=f"A result is ready for your review (specimen {specimen_id}).",
-                notification_type="RESULT_READY_FOR_REVIEW",
-                entity_id=result_id,
+                userId=supId,
+                message=f"A result is ready for your review (specimen {specimenId}).",
+                notificationType="RESULT_READY_FOR_REVIEW",
+                entityId=resultId,
             )
 
-    async def notify_supervisor_diagnosis_unavailable(
+    async def notifySupervisorDiagnosisUnavailable(
         self,
-        result_id: uuid.UUID,
+        resultId: uuid.UUID,
     ) -> None:
         """Notify every active supervisor that Smart Diagnosis failed for a
         confirmed result.
         """
-        supervisor_ids = await self._get_active_user_ids(UserRole.SUPERVISOR)
-        for sup_id in supervisor_ids:
+        supervisorIds = await self._getActiveUserIds(UserRole.SUPERVISOR)
+        for supId in supervisorIds:
             await self.notify(
-                user_id=sup_id,
+                userId=supId,
                 message="Smart Diagnosis is unavailable for a confirmed result due to an engine error.",
-                notification_type="SMART_DIAGNOSIS_UNAVAILABLE",
-                entity_id=result_id,
+                notificationType="SMART_DIAGNOSIS_UNAVAILABLE",
+                entityId=resultId,
             )
 
-    async def notify_active_receptionists(
+    async def notifyActiveReceptionists(
         self,
-        request_uid: str,
-        physician_name: str,
-        lab_request_id: uuid.UUID,
+        requestUid: str,
+        physicianName: str,
+        labRequestId: uuid.UUID,
     ) -> None:
         """Notify every active receptionist that a physician submitted a new
         lab request needing follow-up (e.g. specimen collection).
         """
-        receptionist_ids = await self._get_active_user_ids(UserRole.RECEPTIONIST)
-        for rec_id in receptionist_ids:
+        receptionistIds = await self._getActiveUserIds(UserRole.RECEPTIONIST)
+        for recId in receptionistIds:
             await self.notify(
-                user_id=rec_id,
-                message=f"New lab request {request_uid} submitted by Dr. {physician_name}.",
-                notification_type="LAB_REQUEST_SUBMITTED",
-                entity_id=lab_request_id,
+                userId=recId,
+                message=f"New lab request {requestUid} submitted by Dr. {physicianName}.",
+                notificationType="LAB_REQUEST_SUBMITTED",
+                entityId=labRequestId,
             )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     async def _push(
         self,
-        user_id: uuid.UUID,
+        userId: uuid.UUID,
         message: str,
-        notification_type: str,
-        entity_id: uuid.UUID | None,
+        notificationType: str,
+        entityId: uuid.UUID | None,
     ) -> None:
         # Best-effort Expo push delivery; no-ops if the user has no token, and
         # swallows any HTTP failure — push is never allowed to break notify().
-        token = await self._get_push_token(user_id)
+        token = await self._getPushToken(userId)
         if not token or not token.startswith("ExponentPushToken"):
             return
         payload = {
@@ -118,8 +118,8 @@ class NotificationService:
             "title": "UroLens",
             "body": message,
             "data": {
-                "notification_type": notification_type,
-                "entity_id": str(entity_id) if entity_id else None,
+                "notification_type": notificationType,
+                "entity_id": str(entityId) if entityId else None,
             },
             "sound": "default",
         }
@@ -127,23 +127,23 @@ class NotificationService:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(EXPO_PUSH_URL, json=payload)
         except Exception:
-            logger.warning("Expo push delivery failed for user %s", user_id)
+            logger.warning("Expo push delivery failed for user %s", userId)
 
-    async def _get_push_token(self, user_id: uuid.UUID) -> str | None:
+    async def _getPushToken(self, userId: uuid.UUID) -> str | None:
         # Returns None (rather than raising) on lookup failure or missing token.
         try:
-            stmt = select(User.expo_push_token).where(User.user_id == user_id)
+            stmt = select(User.expoPushToken).where(User.userId == userId)
             result = await self.db.execute(stmt)
             return result.scalar_one_or_none()
         except Exception:
             return None
 
-    async def _get_active_user_ids(self, role: UserRole) -> list[uuid.UUID]:
+    async def _getActiveUserIds(self, role: UserRole) -> list[uuid.UUID]:
         # Returns [] (rather than raising) on query failure.
         try:
-            stmt = select(User.user_id).where(
+            stmt = select(User.userId).where(
                 User.role == role,
-                User.is_active.is_(True),
+                User.isActive.is_(True),
             )
             rows = await self.db.execute(stmt)
             return list(rows.scalars().all())

@@ -52,39 +52,39 @@ class AnalysisResult(Base):
 
     __tablename__ = "analysis_results"
 
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    specimen_id: Mapped[uuid.UUID] = mapped_column(
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
         UUID(as_uuid=True),
         ForeignKey("specimens.specimen_id", ondelete="RESTRICT"),
         nullable=False,
         unique=True,
         index=True,
     )
-    image_id: Mapped[uuid.UUID | None] = mapped_column(
+    imageId: Mapped[uuid.UUID | None] = mapped_column("image_id", 
         UUID(as_uuid=True),
         ForeignKey("images.image_id", ondelete="RESTRICT"),
         nullable=True,
     )
 
     # ── AI Output ────────────────────────────────────────────────────────────
-    ai_findings: Mapped[dict[str, Any]] = mapped_column(
+    aiFindings: Mapped[dict[str, Any]] = mapped_column("ai_findings", 
         JSONB, nullable=False, default=dict
     )
-    flagged_anomalies: Mapped[dict[str, Any]] = mapped_column(
+    flaggedAnomalies: Mapped[dict[str, Any]] = mapped_column("flagged_anomalies", 
         JSONB, nullable=False, default=dict
     )
-    particle_classes: Mapped[dict[str, Any]] = mapped_column(
+    particleClasses: Mapped[dict[str, Any]] = mapped_column("particle_classes", 
         JSONB, nullable=False, default=dict
     )
-    model_version: Mapped[str] = mapped_column(
+    modelVersion: Mapped[str] = mapped_column("model_version", 
         String(30), nullable=False, default="mvp-v1.0"
     )
-    smart_diagnosis: Mapped[dict[str, Any] | None] = mapped_column(
+    smartDiagnosis: Mapped[dict[str, Any] | None] = mapped_column("smart_diagnosis", 
         JSONB, nullable=True
     )
-    smart_diagnosis_unavailable: Mapped[bool] = mapped_column(
+    smartDiagnosisUnavailable: Mapped[bool] = mapped_column("smart_diagnosis_unavailable", 
         Boolean, nullable=False, default=False
     )
 
@@ -92,50 +92,50 @@ class AnalysisResult(Base):
     status: Mapped[str] = mapped_column(
         String(48), nullable=False, default=ResultStatus.PENDING_CONFIRM
     )
-    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+    confirmedBy: Mapped[uuid.UUID | None] = mapped_column("confirmed_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=True,
     )
-    confirmed_at: Mapped[datetime | None] = mapped_column(
+    confirmedAt: Mapped[datetime | None] = mapped_column("confirmed_at", 
         DateTime(timezone=True), nullable=True
     )
 
     # ── Patient Portal ───────────────────────────────────────────────────────
-    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+    patientId: Mapped[uuid.UUID | None] = mapped_column("patient_id", 
         UUID(as_uuid=True),
         ForeignKey("patients.patient_id", ondelete="RESTRICT"),
         nullable=True,
     )
-    cell_counts: Mapped[dict | None] = mapped_column(
+    cellCounts: Mapped[dict | None] = mapped_column("cell_counts", 
         JSONB, nullable=True
     )
     interpretation: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
-    medtech_id: Mapped[uuid.UUID | None] = mapped_column(
+    medtechId: Mapped[uuid.UUID | None] = mapped_column("medtech_id", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=True,
     )
-    medtech_name: Mapped[str | None] = mapped_column(
+    medtechName: Mapped[str | None] = mapped_column("medtech_name", 
         String(255), nullable=True
     )
-    pathologist_name: Mapped[str | None] = mapped_column(
+    pathologistName: Mapped[str | None] = mapped_column("pathologist_name", 
         String(255), nullable=True
     )
-    pathologist_license: Mapped[str | None] = mapped_column(
+    pathologistLicense: Mapped[str | None] = mapped_column("pathologist_license", 
         String(100), nullable=True
     )
-    released_at: Mapped[datetime | None] = mapped_column(
+    releasedAt: Mapped[datetime | None] = mapped_column("released_at", 
         DateTime(timezone=True), nullable=True
     )
 
     # ── Timestamps ───────────────────────────────────────────────────────────
-    created_at: Mapped[datetime] = mapped_column(
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", 
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -143,37 +143,37 @@ class AnalysisResult(Base):
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    specimen: Mapped[Specimen] = relationship(back_populates="analysis_result")
-    image: Mapped[Image | None] = relationship(back_populates="analysis_result")
+    specimen: Mapped[Specimen] = relationship(back_populates="analysisResult")
+    image: Mapped[Image | None] = relationship(back_populates="analysisResult")
     confirmation: Mapped[ResultConfirmation | None] = relationship(
-        back_populates="analysis_result", uselist=False
+        back_populates="analysisResult", uselist=False
     )
-    manual_overrides: Mapped[list[ManualOverride]] = relationship(
-        back_populates="analysis_result"
+    manualOverrides: Mapped[list[ManualOverride]] = relationship(
+        back_populates="analysisResult"
     )
-    smart_diagnosis_output: Mapped[SmartDiagnosisOutput | None] = relationship(
-        back_populates="analysis_result", uselist=False
+    smartDiagnosisOutput: Mapped[SmartDiagnosisOutput | None] = relationship(
+        back_populates="analysisResult", uselist=False
     )
-    engine_error_logs: Mapped[list[EngineErrorLog]] = relationship(
-        back_populates="analysis_result"
+    engineErrorLogs: Mapped[list[EngineErrorLog]] = relationship(
+        back_populates="analysisResult"
     )
-    result_views: Mapped[list[ResultView]] = relationship(
-        back_populates="analysis_result"
+    resultViews: Mapped[list[ResultView]] = relationship(
+        back_populates="analysisResult"
     )
     patient: Mapped[Patient | None] = relationship(
-        back_populates="analysis_results"
+        back_populates="analysisResults"
     )
     medtech: Mapped[User | None] = relationship(
-        foreign_keys=[medtech_id]
+        foreign_keys=[medtechId]
     )
 
     # ── Helpers ──────────────────────────────────────────────────────────────
     @property
     def id(self) -> uuid.UUID:
         """Alias for `result_id`, for callers expecting a generic `id` field."""
-        return self.result_id
+        return self.resultId
 
     @property
-    def has_pending_retake(self) -> bool:
+    def hasPendingRetake(self) -> bool:
         """Whether this result's current image has been discarded and needs a retake."""
-        return self.image is not None and self.image.is_discarded
+        return self.image is not None and self.image.isDiscarded

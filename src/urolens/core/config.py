@@ -45,47 +45,47 @@ class Settings(BaseModel):
     """
 
     # ── Supabase ──────────────────────────────────────────────────────────
-    supabase_url: str
-    supabase_service_key: str
-    supabase_image_bucket: str = "microscopy"
+    supabaseUrl: str
+    supabaseServiceKey: str
+    supabaseImageBucket: str = "microscopy"
 
     # ── Database ──────────────────────────────────────────────────────────
-    database_url: str
+    databaseUrl: str
     """psycopg2-compatible sync URL — Alembic's migration runner."""
-    async_database_url: str
+    asyncDatabaseUrl: str
     """asyncpg-compatible async URL — the app's SQLAlchemy AsyncEngine."""
 
     # ── Auth / JWT ────────────────────────────────────────────────────────
-    jwt_signing_key: str
-    jwt_algorithm: str = "HS256"
-    jwt_expiry_hours: int = 8
-    access_token_expire_minutes: int = 60
-    max_failed_attempts: int = 5
+    jwtSigningKey: str
+    jwtAlgorithm: str = "HS256"
+    jwtExpiryHours: int = 8
+    accessTokenExpireMinutes: int = 60
+    maxFailedAttempts: int = 5
 
     # ── PHI encryption ────────────────────────────────────────────────────
-    encryption_key: str
+    encryptionKey: str
 
     # ── AI integration ────────────────────────────────────────────────────
-    ai_model_version: str = "mvp-v1.0"
+    aiModelVersion: str = "mvp-v1.0"
 
     # ── Misc ──────────────────────────────────────────────────────────────
-    zero_uuid: str = "00000000-0000-0000-0000-000000000000"
+    zeroUuid: str = "00000000-0000-0000-0000-000000000000"
 
 
-def _to_async_database_url(sync_url: str) -> str:
+def _toAsyncDatabaseUrl(syncUrl: str) -> str:
     # Rewrite a psycopg2-style DATABASE_URL to its asyncpg-driver equivalent
     # (postgresql:// / postgres:// -> postgresql+asyncpg://); left unchanged
     # if it's already in asyncpg form or uses some other scheme.
-    if sync_url.startswith("postgresql+asyncpg://"):
-        return sync_url
-    if sync_url.startswith("postgresql://"):
-        return sync_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if sync_url.startswith("postgres://"):
-        return sync_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    return sync_url
+    if syncUrl.startswith("postgresql+asyncpg://"):
+        return syncUrl
+    if syncUrl.startswith("postgresql://"):
+        return syncUrl.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if syncUrl.startswith("postgres://"):
+        return syncUrl.replace("postgres://", "postgresql+asyncpg://", 1)
+    return syncUrl
 
 
-def _load_settings() -> Settings:
+def _loadSettings() -> Settings:
     """Read every setting from the environment, validating secrets before
     the `Settings` object is even constructed.
 
@@ -95,59 +95,59 @@ def _load_settings() -> Settings:
             time — before the app finishes booting — not deferred to first
             use.
     """
-    database_url = os.getenv(
+    databaseUrl = os.getenv(
         "DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/urolens_db",
     )
-    if not database_url:
+    if not databaseUrl:
         raise RuntimeError(
             "DATABASE_URL is unset. Set a Postgres connection string in the "
             "environment before starting the app."
         )
 
-    jwt_signing_key = os.getenv("JWT_SIGNING_KEY") or ""
-    if not jwt_signing_key or jwt_signing_key == _PLACEHOLDER_JWT_SIGNING_KEY:
+    jwtSigningKey = os.getenv("JWT_SIGNING_KEY") or ""
+    if not jwtSigningKey or jwtSigningKey == _PLACEHOLDER_JWT_SIGNING_KEY:
         raise RuntimeError(
             "JWT_SIGNING_KEY is unset or using the placeholder default. "
             "Set a strong, random JWT_SIGNING_KEY in the environment before starting the app."
         )
 
-    supabase_url = os.getenv("SUPABASE_URL") or ""
-    if not supabase_url:
+    supabaseUrl = os.getenv("SUPABASE_URL") or ""
+    if not supabaseUrl:
         raise RuntimeError(
             "SUPABASE_URL is unset. Set your Supabase project URL in the environment "
             "before starting the app — several services still read/write via Supabase REST."
         )
 
-    supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY") or ""
-    if not supabase_service_key:
+    supabaseServiceKey = os.getenv("SUPABASE_SERVICE_KEY") or ""
+    if not supabaseServiceKey:
         raise RuntimeError(
             "SUPABASE_SERVICE_KEY is unset. Set your Supabase service-role key in the "
             "environment before starting the app — several services still read/write via Supabase REST."
         )
 
-    encryption_key = os.getenv("ENCRYPTION_KEY", "")
-    if not encryption_key:
+    encryptionKey = os.getenv("ENCRYPTION_KEY", "")
+    if not encryptionKey:
         raise RuntimeError(
             "ENCRYPTION_KEY is unset. Set a Fernet key (Fernet.generate_key()) in the "
             "environment before starting the app — PHI encryption cannot run without it."
         )
 
     return Settings(
-        supabase_url=supabase_url,
-        supabase_service_key=supabase_service_key,
-        supabase_image_bucket=os.getenv("SUPABASE_IMAGE_BUCKET", "microscopy"),
-        database_url=database_url,
-        async_database_url=_to_async_database_url(database_url),
-        jwt_signing_key=jwt_signing_key,
-        jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
-        jwt_expiry_hours=int(os.getenv("JWT_EXPIRY_HOURS", "8")),
-        access_token_expire_minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")),
-        max_failed_attempts=int(os.getenv("MAX_FAILED_ATTEMPTS", "5")),
-        encryption_key=encryption_key,
-        ai_model_version=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
+        supabaseUrl=supabaseUrl,
+        supabaseServiceKey=supabaseServiceKey,
+        supabaseImageBucket=os.getenv("SUPABASE_IMAGE_BUCKET", "microscopy"),
+        databaseUrl=databaseUrl,
+        asyncDatabaseUrl=_toAsyncDatabaseUrl(databaseUrl),
+        jwtSigningKey=jwtSigningKey,
+        jwtAlgorithm=os.getenv("JWT_ALGORITHM", "HS256"),
+        jwtExpiryHours=int(os.getenv("JWT_EXPIRY_HOURS", "8")),
+        accessTokenExpireMinutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")),
+        maxFailedAttempts=int(os.getenv("MAX_FAILED_ATTEMPTS", "5")),
+        encryptionKey=encryptionKey,
+        aiModelVersion=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
     )
 
 
 # Module-level singleton — import and use this, never call _load_settings() again.
-settings = _load_settings()
+settings = _loadSettings()

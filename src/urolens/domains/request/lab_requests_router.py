@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.database import get_db
+from src.urolens.core.database import getDb
 from src.urolens.core.enums import UserRole
 from src.urolens.core.rbac import RequireRole
 from src.urolens.schemas.lab_request import (
@@ -23,32 +23,32 @@ _receptionist = RequireRole([UserRole.RECEPTIONIST])
 
 
 @router.get("/physicians", response_model=list[PhysicianItem])
-async def get_physicians_endpoint(
-    current_user: dict = Depends(_receptionist),
-    db: AsyncSession = Depends(get_db),
+async def getPhysiciansEndpoint(
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
 ):
     """List active physicians; see `lab_request_service.get_physicians`."""
-    return await lab_request_service.get_physicians(db)
+    return await lab_request_service.getPhysicians(db)
 
 
 @router.post("", response_model=LabRequestCreateResponse, status_code=201)
-async def create_lab_request_endpoint(
+async def createLabRequestEndpoint(
     payload: LabRequestCreateRequest,
     request: Request,
-    current_user: dict = Depends(_receptionist),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
 ):
     """Create a lab request; see `lab_request_service.create_lab_request`."""
-    encoder_id = uuid.UUID(current_user["user_id"])
-    ip_address = request.client.host if request.client else None
-    return await lab_request_service.create_lab_request(
+    encoderId = uuid.UUID(currentUser["user_id"])
+    ipAddress = request.client.host if request.client else None
+    return await lab_request_service.createLabRequest(
         db,
-        encoded_by=encoder_id,
-        patient_id=payload.patient_id,
-        test_type=payload.test_type,
-        clinical_notes=payload.clinical_notes,
-        physician_id=payload.physician_id,
-        physician_name=payload.physician_name,
-        notify_receptionists=False,
-        ip_address=ip_address,
+        encodedBy=encoderId,
+        patientId=payload.patientId,
+        testType=payload.testType,
+        clinicalNotes=payload.clinicalNotes,
+        physicianId=payload.physicianId,
+        physicianName=payload.physicianName,
+        notifyReceptionists=False,
+        ipAddress=ipAddress,
     )

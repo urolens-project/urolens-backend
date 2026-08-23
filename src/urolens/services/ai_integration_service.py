@@ -68,16 +68,16 @@ class AIIntegrationService:
     into this one, per the plan's row 5 decision to keep it independent.
     """
 
-    def __init__(self, db: AsyncSession, audit_logger: AuditLogger) -> None:
+    def __init__(self, db: AsyncSession, auditLogger: AuditLogger) -> None:
         self.db = db
-        self.audit_logger = audit_logger
+        self.auditLogger = auditLogger
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    async def handle_upload(
+    async def handleUpload(
         self,
-        specimen_id: uuid.UUID,
-        uploader_id: uuid.UUID,
+        specimenId: uuid.UUID,
+        uploaderId: uuid.UUID,
         file: UploadFile,
         request: Any,
     ) -> AnalysisResult:
@@ -99,49 +99,49 @@ class AIIntegrationService:
             ImageFormatError: unsupported MIME type or unreadable file.
             ImageResolutionError: below the 640x480 minimum.
         """
-        raw_bytes = await file.read()
+        rawBytes = await file.read()
 
-        content_type = file.content_type or ""
-        self._validate_format(content_type)
-        width, height = await self._validate_resolution(raw_bytes)
+        contentType = file.content_type or ""
+        self._validateFormat(contentType)
+        width, height = await self._validateResolution(rawBytes)
 
-        await self._replace_previous_image(specimen_id)
+        await self._replacePreviousImage(specimenId)
 
-        image_id = uuid.uuid4()
-        storage_key = self._build_storage_key(specimen_id, image_id, content_type)
-        await self._upload_to_storage(raw_bytes, storage_key, content_type)
+        imageId = uuid.uuid4()
+        storageKey = self._buildStorageKey(specimenId, imageId, contentType)
+        await self._uploadToStorage(rawBytes, storageKey, contentType)
 
         image = Image(
-            image_id=image_id,
-            specimen_id=specimen_id,
-            uploaded_by=uploader_id,
-            storage_key=storage_key,
-            file_format=MIME_TO_FORMAT[content_type],
-            width_px=width,
-            height_px=height,
-            file_size_bytes=len(raw_bytes),
+            imageId=imageId,
+            specimenId=specimenId,
+            uploadedBy=uploaderId,
+            storageKey=storageKey,
+            fileFormat=MIME_TO_FORMAT[contentType],
+            widthPx=width,
+            heightPx=height,
+            fileSizeBytes=len(rawBytes),
             status=ImageStatus.ACTIVE,
         )
         self.db.add(image)
         await self.db.flush([image])
 
-        result = await self._get_or_create_result(specimen_id, image.image_id)
+        result = await self._getOrCreateResult(specimenId, image.imageId)
 
-        findings = await self._run_inference(result, raw_bytes)
+        findings = await self._runInference(result, rawBytes)
         if findings:
-            await self._run_smart_diagnosis(result, findings)
+            await self._runSmartDiagnosis(result, findings)
 
-        await self.audit_logger.record(
-            event_type="IMAGE_UPLOADED",
-            entity_type="image",
-            entity_id=image.image_id,
-            user_id=uploader_id,
-            detail_json={
-                "specimen_id": str(specimen_id),
-                "file_format": MIME_TO_FORMAT[content_type],
+        await self.auditLogger.record(
+            eventType="IMAGE_UPLOADED",
+            entityType="image",
+            entityId=image.imageId,
+            userId=uploaderId,
+            detailJson={
+                "specimen_id": str(specimenId),
+                "file_format": MIME_TO_FORMAT[contentType],
                 "width_px": width,
                 "height_px": height,
-                "file_size_bytes": len(raw_bytes),
+                "file_size_bytes": len(rawBytes),
             },
             request=request,
         )
@@ -152,27 +152,27 @@ class AIIntegrationService:
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    def _validate_format(self, content_type: str) -> None:
+    def _validateFormat(self, contentType: str) -> None:
         """Raise ImageFormatError if content_type isn't JPEG or PNG."""
-        if content_type not in ALLOWED_MIME_TYPES:
+        if contentType not in ALLOWED_MIME_TYPES:
             raise ImageFormatError(
-                f"Unsupported image format '{content_type}'. "
+                f"Unsupported image format '{contentType}'. "
                 f"Accepted: {', '.join(ALLOWED_MIME_TYPES)}"
             )
 
-    async def _validate_resolution(self, raw_bytes: bytes) -> tuple[int, int]:
+    async def _validateResolution(self, rawBytes: bytes) -> tuple[int, int]:
         """Return (width, height); raise ImageResolutionError if below minimum.
 
         PIL.Image.open is synchronous/blocking — run in a thread so a large
         image doesn't stall the event loop.
         """
 
-        def _read_dimensions() -> tuple[int, int]:
-            img = PILImage.open(io.BytesIO(raw_bytes))
+        def _readDimensions() -> tuple[int, int]:
+            img = PILImage.open(io.BytesIO(rawBytes))
             return img.size
 
         try:
-            width, height = await asyncio.to_thread(_read_dimensions)
+            width, height = await asyncio.to_thread(_readDimensions)
         except Exception as exc:
             raise ImageFormatError(f"Cannot read image file: {exc}") from exc
 
@@ -183,15 +183,15 @@ class AIIntegrationService:
             )
         return width, height
 
-    def _build_storage_key(
-        self, specimen_id: uuid.UUID, image_id: uuid.UUID, content_type: str
+    def _buildStorageKey(
+        self, specimenId: uuid.UUID, imageId: uuid.UUID, contentType: str
     ) -> str:
         # Builds the Supabase Storage object path for an uploaded image.
-        ext = MIME_TO_EXT[content_type]
-        return f"specimens/{specimen_id}/images/{image_id}.{ext}"
+        ext = MIME_TO_EXT[contentType]
+        return f"specimens/{specimenId}/images/{imageId}.{ext}"
 
-    async def _upload_to_storage(
-        self, raw_bytes: bytes, storage_key: str, content_type: str
+    async def _uploadToStorage(
+        self, rawBytes: bytes, storageKey: str, contentType: str
     ) -> None:
         """Upload to Supabase Storage.
 
@@ -201,29 +201,29 @@ class AIIntegrationService:
         on a storage-layer issue.
         """
         try:
-            await sb.storage.from_(settings.supabase_image_bucket).upload(
-                path=storage_key,
-                file=raw_bytes,
-                file_options={"content-type": content_type, "upsert": "true"},
+            await sb.storage.from_(settings.supabaseImageBucket).upload(
+                path=storageKey,
+                file=rawBytes,
+                file_options={"content-type": contentType, "upsert": "true"},
             )
-            log.info("Uploaded image to storage: %s/%s", settings.supabase_image_bucket, storage_key)
+            log.info("Uploaded image to storage: %s/%s", settings.supabaseImageBucket, storageKey)
         except Exception as exc:
             log.warning(
-                "Supabase Storage upload failed (bucket '%s'): %s", settings.supabase_image_bucket, exc
+                "Supabase Storage upload failed (bucket '%s'): %s", settings.supabaseImageBucket, exc
             )
 
-    async def _replace_previous_image(self, specimen_id: uuid.UUID) -> None:
+    async def _replacePreviousImage(self, specimenId: uuid.UUID) -> None:
         """Mark the previous ACTIVE image for this specimen, if any, REPLACED."""
         stmt = select(Image).where(
-            Image.specimen_id == specimen_id, Image.status == ImageStatus.ACTIVE
+            Image.specimenId == specimenId, Image.status == ImageStatus.ACTIVE
         )
         previous = (await self.db.execute(stmt)).scalar_one_or_none()
         if previous:
             previous.status = ImageStatus.REPLACED
             await self.db.flush([previous])
 
-    async def _get_or_create_result(
-        self, specimen_id: uuid.UUID, image_id: uuid.UUID
+    async def _getOrCreateResult(
+        self, specimenId: uuid.UUID, imageId: uuid.UUID
     ) -> AnalysisResult:
         """Attach the new image to the specimen's AnalysisResult, creating
         one if this is the first image for the specimen.
@@ -231,43 +231,43 @@ class AIIntegrationService:
         Resets `ai_findings`/`flagged_anomalies`/`particle_classes` since a
         new image means the prior findings no longer apply.
         """
-        spec_stmt = select(Specimen).where(Specimen.specimen_id == specimen_id)
-        specimen = (await self.db.execute(spec_stmt)).scalar_one_or_none()
+        specStmt = select(Specimen).where(Specimen.specimenId == specimenId)
+        specimen = (await self.db.execute(specStmt)).scalar_one_or_none()
 
-        patient_id = None
-        if specimen and specimen.lab_request_id:
-            lr_stmt = select(LabRequest.patient_id).where(
-                LabRequest.lab_request_id == specimen.lab_request_id
+        patientId = None
+        if specimen and specimen.labRequestId:
+            lrStmt = select(LabRequest.patientId).where(
+                LabRequest.labRequestId == specimen.labRequestId
             )
-            patient_id = (await self.db.execute(lr_stmt)).scalar_one_or_none()
+            patientId = (await self.db.execute(lrStmt)).scalar_one_or_none()
 
-        stmt = select(AnalysisResult).where(AnalysisResult.specimen_id == specimen_id)
+        stmt = select(AnalysisResult).where(AnalysisResult.specimenId == specimenId)
         result = (await self.db.execute(stmt)).scalar_one_or_none()
 
         if result:
-            result.image_id = image_id
+            result.imageId = imageId
             result.status = ResultStatus.PENDING_CONFIRM
-            result.ai_findings = {}
-            result.flagged_anomalies = {}
-            result.particle_classes = {}
-            if patient_id and not result.patient_id:
-                result.patient_id = patient_id
+            result.aiFindings = {}
+            result.flaggedAnomalies = {}
+            result.particleClasses = {}
+            if patientId and not result.patientId:
+                result.patientId = patientId
             await self.db.flush([result])
         else:
             result = AnalysisResult(
-                specimen_id=specimen_id,
-                image_id=image_id,
-                patient_id=patient_id,
+                specimenId=specimenId,
+                imageId=imageId,
+                patientId=patientId,
                 status=ResultStatus.PENDING_CONFIRM,
-                model_version=settings.ai_model_version,
+                modelVersion=settings.aiModelVersion,
             )
             self.db.add(result)
             await self.db.flush([result])
 
         return result
 
-    async def _run_inference(
-        self, result: AnalysisResult, raw_bytes: bytes
+    async def _runInference(
+        self, result: AnalysisResult, rawBytes: bytes
     ) -> dict | None:
         """Run YOLOv8 inference and persist findings onto the result row.
 
@@ -285,22 +285,22 @@ class AIIntegrationService:
             return None
 
         try:
-            inference_result = await asyncio.to_thread(infer, raw_bytes)
+            inferenceResult = await asyncio.to_thread(infer, rawBytes)
             # Model emits dashes (epithelial-cells); config.yaml and Smart
             # Diagnosis expect underscores (epithelial_cells).
             findings: dict = {
-                k.replace("-", "_"): v for k, v in inference_result.particles.items()
+                k.replace("-", "_"): v for k, v in inferenceResult.particles.items()
             }
         except Exception as exc:
-            log.warning("AI inference failed for result %s: %s", result.result_id, exc)
+            log.warning("AI inference failed for result %s: %s", result.resultId, exc)
             return None
 
-        result.ai_findings = findings
-        result.flagged_anomalies = {k: v for k, v in findings.items() if v > 0}
+        result.aiFindings = findings
+        result.flaggedAnomalies = {k: v for k, v in findings.items() if v > 0}
         await self.db.flush([result])
         return findings
 
-    async def _run_smart_diagnosis(
+    async def _runSmartDiagnosis(
         self, result: AnalysisResult, findings: dict
     ) -> dict | None:
         """Pre-compute Smart Diagnosis at upload time so both panels are
@@ -315,19 +315,19 @@ class AIIntegrationService:
         try:
             from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
 
-            from .smart_diagnosis_service import _build_evidence_map
+            from .smart_diagnosis_service import _buildEvidenceMap
 
-            engine_output = generate_smart_diagnosis(findings)
-            evidence_map = _build_evidence_map(engine_output)
-            smart_diagnosis = {
-                **evidence_map,
-                "no_significant_indicators": engine_output.no_significant_indicators,
+            engineOutput = generate_smart_diagnosis(findings)
+            evidenceMap = _buildEvidenceMap(engineOutput)
+            smartDiagnosis = {
+                **evidenceMap,
+                "no_significant_indicators": engineOutput.noSignificantIndicators,
             }
-            result.smart_diagnosis = smart_diagnosis
+            result.smartDiagnosis = smartDiagnosis
             await self.db.flush([result])
-            return smart_diagnosis
+            return smartDiagnosis
         except Exception as exc:
             log.warning(
-                "Smart Diagnosis failed at upload for result %s: %s", result.result_id, exc
+                "Smart Diagnosis failed at upload for result %s: %s", result.resultId, exc
             )
             return None
