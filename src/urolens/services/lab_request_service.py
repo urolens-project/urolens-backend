@@ -9,7 +9,7 @@ physician was specified on the intake form (if any) and
 """
 from __future__ import annotations
 
-import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 

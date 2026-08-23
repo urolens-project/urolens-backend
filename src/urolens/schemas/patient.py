@@ -1,12 +1,12 @@
 """Patient intake request/response shapes; see `services/patient_service.py`."""
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel
 
 
-class SexEnum(str, Enum):
+class SexEnum(StrEnum):
     """Patient sex, as recorded at intake."""
 
     MALE = "MALE"

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from .user import User
 
 
-class ResultStatus(str, enum.Enum):
+class ResultStatus(enum.StrEnum):
     """Lifecycle states for an `AnalysisResult`, spanning the confirm ->
     override -> approve -> release chain plus retake/escalation/failure exits.
     """

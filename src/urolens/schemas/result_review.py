@@ -5,7 +5,7 @@ lookup request/response shapes; see `services/result_confirmation_service.py`,
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Union, get_args
+from typing import Any, Literal, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -290,6 +290,6 @@ class SmartDiagnosisUnavailable(BaseModel):
     status: Literal["FLAGGED_UNAVAILABLE"]
 
 
-SmartDiagnosisResponse = Union[SmartDiagnosisAttached, SmartDiagnosisUnavailable]
+SmartDiagnosisResponse = SmartDiagnosisAttached | SmartDiagnosisUnavailable
 """Response model for `GET /{result_id}/smart-diagnosis` — one of the two
 shapes above, discriminated by `status`."""

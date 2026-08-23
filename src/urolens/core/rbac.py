@@ -3,6 +3,7 @@ protected route should depend on `RequireRole` (which itself depends on
 `get_current_user`), never re-implement token decoding or role checks
 inline.
 """
+import logging
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,17 +12,19 @@ from . import audit_logger
 from .auth_service import decodeJwt, isSessionActive
 
 securityScheme = HTTPBearer()
+logger = logging.getLogger(__name__)
 
-_UNAUTHORIZED = HTTPException(
-    status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="Authentication required.",
-)
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Insufficient permissions.",
+    )
 
-_FORBIDDEN = HTTPException(
-    status_code=status.HTTP_403_FORBIDDEN,
-    detail="Insufficient permissions.",
-)
-
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Insufficient permissions.",
+    )
 
 async def getCurrentUser(
     request: Request,
@@ -47,6 +50,7 @@ async def getCurrentUser(
     try:
         claims = decodeJwt(token)
     except Exception:
+        logger.warning("JWT decode failed from %s", ip_address, exc_info=True)
         await audit_logger.logAccessDenied(ipAddress)
         raise _UNAUTHORIZED
 
