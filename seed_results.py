@@ -139,57 +139,57 @@ RESULTS_SEED = [
 
 async def seed():
     # ── Look up medtech user ──────────────────────────────────────────────────
-    u_res = await supabase.table("users").select("user_id").eq("username", "medtech").maybe_single().execute()
-    if not u_res.data:
+    uRes = await supabase.table("users").select("user_id").eq("username", "medtech").maybe_single().execute()
+    if not uRes.data:
         print("ERROR: 'medtech' user not found. Run seed_users.py first.")
         return
-    medtech_id = u_res.data["user_id"]
-    print(f"Found medtech: {medtech_id}")
+    medtechId = uRes.data["user_id"]
+    print(f"Found medtech: {medtechId}")
 
     now = datetime.now(_PHT)
 
     for i, entry in enumerate(RESULTS_SEED):
-        sample_uid = entry["sample_uid"]
+        sampleUid = entry["sample_uid"]
 
         # ── Look up specimen ──────────────────────────────────────────────────
-        spec_res = await supabase.table("specimens").select("specimen_id").eq("sample_uid", sample_uid).maybe_single().execute()
-        if not spec_res.data:
-            print(f"  SKIP {sample_uid}: specimen not found — run seed_specimens.py first.")
+        specRes = await supabase.table("specimens").select("specimen_id").eq("sample_uid", sampleUid).maybe_single().execute()
+        if not specRes.data:
+            print(f"  SKIP {sampleUid}: specimen not found — run seed_specimens.py first.")
             continue
-        specimen_id = spec_res.data["specimen_id"]
+        specimenId = specRes.data["specimen_id"]
 
         # ── Skip if analysis_result already exists ────────────────────────────
-        existing = await supabase.table("analysis_results").select("result_id").eq("specimen_id", specimen_id).maybe_single().execute()
+        existing = await supabase.table("analysis_results").select("result_id").eq("specimen_id", specimenId).maybe_single().execute()
         if existing.data:
-            result_id = existing.data["result_id"]
-            print(f"  EXISTS {sample_uid} → result_id={result_id[:8]}…")
+            resultId = existing.data["result_id"]
+            print(f"  EXISTS {sampleUid} → result_id={resultId[:8]}…")
         else:
-            confirmed_at = (now - timedelta(hours=3 - i)).isoformat()
-            ar_res = await supabase.table("analysis_results").insert({
-                "specimen_id": specimen_id,
+            confirmedAt = (now - timedelta(hours=3 - i)).isoformat()
+            arRes = await supabase.table("analysis_results").insert({
+                "specimen_id": specimenId,
                 "ai_findings": entry["ai_findings"],
                 "flagged_anomalies": entry["flagged_anomalies"],
                 "particle_classes": entry["particle_classes"],
                 "model_version": entry["model_version"],
                 "status": "PENDING_SUPERVISOR_APPROVAL",
                 "smart_diagnosis_unavailable": False,
-                "confirmed_by": medtech_id,
-                "confirmed_at": confirmed_at,
+                "confirmed_by": medtechId,
+                "confirmed_at": confirmedAt,
                 "confirmation_notes": "Reviewed under microscope. Results verified.",
-                "updated_at": confirmed_at,
-                "created_at": confirmed_at,
+                "updated_at": confirmedAt,
+                "created_at": confirmedAt,
             }).execute()
-            result_id = ar_res.data[0]["result_id"]
-            print(f"  CREATED analysis_result for {sample_uid} → {result_id[:8]}…")
+            resultId = arRes.data[0]["result_id"]
+            print(f"  CREATED analysis_result for {sampleUid} → {resultId[:8]}…")
 
         # ── Smart diagnosis output ────────────────────────────────────────────
         sd = entry["smart_diagnosis"]
-        sd_existing = await supabase.table("smart_diagnosis_outputs").select("output_id").eq("result_id", result_id).maybe_single().execute()
-        if sd_existing.data:
+        sdExisting = await supabase.table("smart_diagnosis_outputs").select("output_id").eq("result_id", resultId).maybe_single().execute()
+        if sdExisting.data:
             print("    smart_diagnosis already exists — skipping")
         else:
             await supabase.table("smart_diagnosis_outputs").insert({
-                "result_id": result_id,
+                "result_id": resultId,
                 "gout_score": sd["gout_score"],
                 "uti_score": sd["uti_score"],
                 "tricho_score": sd["tricho_score"],
@@ -203,17 +203,17 @@ async def seed():
 
         # ── Manual overrides ──────────────────────────────────────────────────
         for override in entry["overrides"]:
-            ov_existing = await supabase.table("manual_overrides").select("override_id").eq("result_id", result_id).eq("parameter_name", override["parameter_name"]).maybe_single().execute()
-            if ov_existing.data:
+            ovExisting = await supabase.table("manual_overrides").select("override_id").eq("result_id", resultId).eq("parameter_name", override["parameter_name"]).maybe_single().execute()
+            if ovExisting.data:
                 print(f"    override '{override['parameter_name']}' already exists — skipping")
                 continue
             await supabase.table("manual_overrides").insert({
-                "result_id": result_id,
+                "result_id": resultId,
                 "parameter_name": override["parameter_name"],
                 "original_ai_value": override["original_ai_value"],
                 "corrected_value": override["corrected_value"],
                 "rationale": override["rationale"],
-                "medtech_id": medtech_id,
+                "medtech_id": medtechId,
                 "overridden_at": (now - timedelta(hours=3 - i, minutes=2)).isoformat(),
             }).execute()
             print(f"    override: {override['parameter_name']} {override['original_ai_value']} → {override['corrected_value']}")

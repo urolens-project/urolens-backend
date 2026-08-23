@@ -15,12 +15,12 @@ from pydantic import ValidationError
 from src.urolens.schemas.result_review import VALID_ESCALATION_PATHS, EscalateRequest
 
 
-def test_valid_escalation_paths_accepted():
+def test_validEscalationPathsAccepted():
     for path in VALID_ESCALATION_PATHS:
-        request = EscalateRequest(escalation_path=path, escalation_note=None)
-        assert request.escalation_path == path
+        request = EscalateRequest(escalationPath=path, escalationNote=None)
+        assert request.escalationPath == path
 
 
-def test_invalid_escalation_path_rejected_at_schema_level():
+def test_invalidEscalationPathRejectedAtSchemaLevel():
     with pytest.raises(ValidationError):
-        EscalateRequest(escalation_path="NOT_A_REAL_PATH", escalation_note=None)
+        EscalateRequest(escalationPath="NOT_A_REAL_PATH", escalationNote=None)

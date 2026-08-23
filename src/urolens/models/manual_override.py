@@ -24,44 +24,44 @@ class ManualOverride(Base):
 
     __tablename__ = "manual_overrides"
 
-    override_id: Mapped[uuid.UUID] = mapped_column(
+    overrideId: Mapped[uuid.UUID] = mapped_column("override_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    medtech_id: Mapped[uuid.UUID] = mapped_column(
+    medtechId: Mapped[uuid.UUID] = mapped_column("medtech_id", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    parameter_name: Mapped[str] = mapped_column(String(60), nullable=False)
-    original_ai_value: Mapped[str] = mapped_column(Text, nullable=False)
-    corrected_value: Mapped[str] = mapped_column(Text, nullable=False)
+    parameterName: Mapped[str] = mapped_column("parameter_name", String(60), nullable=False)
+    originalAiValue: Mapped[str] = mapped_column("original_ai_value", Text, nullable=False)
+    correctedValue: Mapped[str] = mapped_column("corrected_value", Text, nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
-    overridden_at: Mapped[datetime] = mapped_column(
+    overriddenAt: Mapped[datetime] = mapped_column("overridden_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    analysis_result: Mapped[AnalysisResult] = relationship(
-        back_populates="manual_overrides"
+    analysisResult: Mapped[AnalysisResult] = relationship(
+        back_populates="manualOverrides"
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `override_id`, for callers expecting a generic `id` field."""
-        return self.override_id
+        return self.overrideId
 
     @property
     def parameter(self) -> str:
         """Alias for `parameter_name`, matching the API-contract field name."""
-        return self.parameter_name
+        return self.parameterName
 
     @property
-    def overridden_by(self) -> uuid.UUID:
+    def overriddenBy(self) -> uuid.UUID:
         """Alias for `medtech_id`, matching the API-contract field name."""
-        return self.medtech_id
+        return self.medtechId

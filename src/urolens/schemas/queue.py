@@ -9,26 +9,26 @@ from pydantic import BaseModel
 class MedTechWorkload(BaseModel):
     """One MedTech's active queue-assignment count, for the workload list."""
 
-    medtech_id: UUID
+    medtechId: UUID
     username: str
-    queue_count: int
+    queueCount: int
 
 
 class QueueAssignRequest(BaseModel):
     """Request body for assigning a specimen to a MedTech."""
 
-    specimen_id: UUID
-    medtech_id: UUID
+    specimenId: UUID
+    medtechId: UUID
 
 
 class QueueAssignResponse(BaseModel):
     """Response body confirming a created queue assignment."""
 
-    assignment_id: UUID
-    specimen_id: UUID
-    medtech_id: UUID
-    assigned_by: UUID
-    assigned_at: datetime
+    assignmentId: UUID
+    specimenId: UUID
+    medtechId: UUID
+    assignedBy: UUID
+    assignedAt: datetime
     status: str
 
 
@@ -37,24 +37,24 @@ class QueueAssignResponse(BaseModel):
 class PendingSpecimenItem(BaseModel):
     """One `LABELED` specimen awaiting assignment, for the receptionist queue view."""
 
-    specimen_id: UUID
-    sample_uid: str
-    patient_name: str
-    test_type: str
-    received_at: datetime
+    specimenId: UUID
+    sampleUid: str
+    patientName: str
+    testType: str
+    receivedAt: datetime
     status: str
 
 
 class MedTechWorkloadItem(BaseModel):
     """One MedTech's active specimen count, for the receptionist workload view."""
 
-    user_id: UUID
-    full_name: str
-    active_count: int
+    userId: UUID
+    fullName: str
+    activeCount: int
 
 
 class AssignSpecimenRequest(BaseModel):
     """Request body for assigning a specimen to a MedTech (receptionist-facing)."""
 
-    specimen_id: UUID
-    medtech_id: UUID
+    specimenId: UUID
+    medtechId: UUID

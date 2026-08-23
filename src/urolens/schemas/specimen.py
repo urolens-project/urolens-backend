@@ -10,18 +10,18 @@ from pydantic import BaseModel
 class SpecimenReceiveRequest(BaseModel):
     """Request body for receiving a specimen against a lab request."""
 
-    lab_request_id: UUID
-    visual_check_passed: bool
-    rejection_reason: str | None = None
-    free_text_note: str | None = None
+    labRequestId: UUID
+    visualCheckPassed: bool
+    rejectionReason: str | None = None
+    freeTextNote: str | None = None
 
 
 class SpecimenReceiveResponse(BaseModel):
     """Response body confirming a received (or rejected) specimen."""
 
     success: bool
-    specimen_id: UUID
-    sample_uid: str | None = None
+    specimenId: UUID
+    sampleUid: str | None = None
     status: str
     message: str
 
@@ -29,37 +29,37 @@ class SpecimenReceiveResponse(BaseModel):
 class SpecimenListItem(BaseModel):
     """One specimen, for the specimen listing view."""
 
-    specimen_id: UUID
-    lab_request_id: UUID
-    sample_uid: str | None = None
+    specimenId: UUID
+    labRequestId: UUID
+    sampleUid: str | None = None
     status: str
-    patient_name: str | None = None
-    patient_uid: str | None = None
-    test_type: str | None = None
-    priority_level: str
-    received_at: datetime
+    patientName: str | None = None
+    patientUid: str | None = None
+    testType: str | None = None
+    priorityLevel: str
+    receivedAt: datetime
 
 
 class LabRequestSearchItem(BaseModel):
     """One `PENDING_SAMPLE` lab request, for the specimen-receiving search."""
 
-    lab_request_id: UUID
-    request_uid: str
-    test_type: str
-    physician_name: str | None = None
-    patient_id: UUID
+    labRequestId: UUID
+    requestUid: str
+    testType: str
+    physicianName: str | None = None
+    patientId: UUID
 
 
 class SpecimenRejectRequest(BaseModel):
     """Request body for a MedTech's post-assignment specimen rejection."""
 
-    reason_code: str
-    free_text_note: str | None = None
+    reasonCode: str
+    freeTextNote: str | None = None
 
 
 class SpecimenRejectResponse(BaseModel):
     """Response body confirming a specimen rejection."""
 
-    specimen_id: UUID
+    specimenId: UUID
     status: str
-    rejected_at: str
+    rejectedAt: str

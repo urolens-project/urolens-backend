@@ -12,18 +12,18 @@ class AnalysisResultResponse(BaseModel):
     """
 
     id: uuid.UUID
-    result_id: uuid.UUID
-    specimen_id: uuid.UUID
-    image_id: uuid.UUID | None = None
+    resultId: uuid.UUID
+    specimenId: uuid.UUID
+    imageId: uuid.UUID | None = None
     status: str
-    ai_findings: dict | None = None
-    flagged_anomalies: dict | None = None
-    smart_diagnosis: dict | None = None
+    aiFindings: dict | None = None
+    flaggedAnomalies: dict | None = None
+    smartDiagnosis: dict | None = None
 
 
 class ImageDiscardResponse(BaseModel):
     """Response body for a successful image discard (retake flow)."""
 
-    image_id: str
+    imageId: str
     status: str
-    discarded_at: str | None = None
+    discardedAt: str | None = None

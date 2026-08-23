@@ -6,13 +6,13 @@ SQLAlchemy version) — consolidated away; physicians now go through
 """
 import logging
 
-from src.urolens.core.encryption import decrypt_pii
+from src.urolens.core.encryption import decryptPii
 from src.urolens.core.supabase import supabase
 from src.urolens.schemas.physician import PhysicianPatientItem
 
 logger = logging.getLogger(__name__)
 
-async def search_patients(q: str) -> list[PhysicianPatientItem]:
+async def searchPatients(q: str) -> list[PhysicianPatientItem]:
     """Search patients by first/last name (case-insensitive substring match).
 
     Fetches up to 100 patient rows, decrypts each candidate's name fields in
@@ -29,28 +29,28 @@ async def search_patients(q: str) -> list[PhysicianPatientItem]:
         "patient_id, patient_uid, first_name, middle_name, last_name, date_of_birth, sex"
     ).limit(100).execute()
     rows = result.data or []
-    q_lower = q.lower()
+    qLower = q.lower()
 
     items: list[PhysicianPatientItem] = []
     for row in rows:
         try:
-            first = decrypt_pii(row["first_name"])
-            last = decrypt_pii(row["last_name"])
+            first = decryptPii(row["first_name"])
+            last = decryptPii(row["last_name"])
         except Exception:
             logger.exception("PII decrypt failed for patient row %s", row["patient_id"])
             continue
-        if q_lower in first.lower() or q_lower in last.lower():
+        if qLower in first.lower() or qLower in last.lower():
             try:
-                dob = decrypt_pii(row["date_of_birth"])
+                dob = decryptPii(row["date_of_birth"])
             except Exception:
                 dob = ""
             items.append(PhysicianPatientItem(
-                patient_id=row["patient_id"],
-                patient_uid=row["patient_uid"],
-                first_name=first,
-                middle_name=decrypt_pii(row["middle_name"]) if row.get("middle_name") else None,
-                last_name=last,
-                date_of_birth=dob,
+                patientId=row["patient_id"],
+                patientUid=row["patient_uid"],
+                firstName=first,
+                middleName=decryptPii(row["middle_name"]) if row.get("middle_name") else None,
+                lastName=last,
+                dateOfBirth=dob,
                 sex=row.get("sex", "OTHER"),
             ))
     return items

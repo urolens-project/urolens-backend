@@ -6,10 +6,10 @@ from cryptography.fernet import Fernet
 
 from .config import settings
 
-_fernet = Fernet(settings.encryption_key.encode("utf-8")) if settings.encryption_key else None
+_fernet = Fernet(settings.encryptionKey.encode("utf-8")) if settings.encryptionKey else None
 
 
-def encrypt_pii(plaintext: str) -> str:
+def encryptPii(plaintext: str) -> str:
     """Encrypt a PHI/PII value for storage.
 
     Returns:
@@ -23,7 +23,7 @@ def encrypt_pii(plaintext: str) -> str:
     return _fernet.encrypt(plaintext.encode("utf-8")).decode("utf-8")
 
 
-def decrypt_pii(ciphertext: str) -> str:
+def decryptPii(ciphertext: str) -> str:
     """Decrypt a value previously produced by `encrypt_pii`.
 
     Returns:

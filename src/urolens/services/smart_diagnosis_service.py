@@ -36,15 +36,15 @@ class SmartDiagnosisService:
 
     def __init__(
         self,
-        audit_logger: AuditLogger,
-        notif_service: NotificationService,
+        auditLogger: AuditLogger,
+        _notifService: NotificationService,
     ) -> None:
-        self.audit_logger = audit_logger
-        self.notif_service = notif_service
+        self.auditLogger = auditLogger
+        self._notifService = _notifService
 
     async def run(
         self,
-        result_id: uuid.UUID,
+        resultId: uuid.UUID,
         db: AsyncSession,
     ) -> SmartDiagnosisOutput | None:
         """Runs Smart Diagnosis for the given result.
@@ -67,42 +67,42 @@ class SmartDiagnosisService:
             # transaction — any SQL failure here rolls back to the savepoint
             # without aborting the parent transaction.
             async with db.begin_nested():
-                result = await self._load_result(result_id, db)
-                classification: dict = result.ai_findings or {}
+                result = await self._loadResult(resultId, db)
+                classification: dict = result.aiFindings or {}
 
                 # Call the AI Engineer's function — owned by urolens_ai package
                 from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
-                engine_output = generate_smart_diagnosis(classification)
+                engineOutput = generate_smart_diagnosis(classification)
 
-                db_record = await self._persist_output(engine_output, result_id, db)
+                dbRecord = await self._persistOutput(engineOutput, resultId, db)
 
-                await self.audit_logger.record(
-                    event_type="SMART_DIAGNOSIS_GENERATED",
-                    entity_type="analysis_result",
-                    entity_id=result_id,
-                    user_id=None,
-                    detail_json={
-                        "gout_score":   engine_output.gout.level.value,
-                        "gn_score":     engine_output.glomerulonephritis.level.value,
-                        "nephro_score": engine_output.nephrolithiasis.level.value,
-                        "no_significant_indicators": engine_output.no_significant_indicators,
+                await self.auditLogger.record(
+                    eventType="SMART_DIAGNOSIS_GENERATED",
+                    entityType="analysis_result",
+                    entityId=resultId,
+                    userId=None,
+                    detailJson={
+                        "gout_score":   engineOutput.gout.level.value,
+                        "gn_score":     engineOutput.glomerulonephritis.level.value,
+                        "nephro_score": engineOutput.nephrolithiasis.level.value,
+                        "no_significant_indicators": engineOutput.noSignificantIndicators,
                     },
                     db=db,
                     request=None,
                 )
-            return db_record
+            return dbRecord
 
         except Exception as exc:
             logger.exception(
-                "Smart Diagnosis engine failed for result_id=%s: %s", result_id, exc
+                "Smart Diagnosis engine failed for result_id=%s: %s", resultId, exc
             )
-            await self._handle_failure(result_id, exc, db)
+            await self._handleFailure(resultId, exc, db)
             return None
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    async def _load_result(
-        self, result_id: uuid.UUID, db: AsyncSession
+    async def _loadResult(
+        self, resultId: uuid.UUID, db: AsyncSession
     ) -> AnalysisResult:
         # Loads the AnalysisResult for `run()`; raises ValueError if it doesn't exist.
         # Eagerly load smart_diagnosis_output so the relationship is in a
@@ -113,50 +113,50 @@ class SmartDiagnosisService:
         # raises MissingGreenlet, which is caught as engine failure.
         stmt = (
             select(AnalysisResult)
-            .options(selectinload(AnalysisResult.smart_diagnosis_output))
-            .where(AnalysisResult.result_id == result_id)
+            .options(selectinload(AnalysisResult.smartDiagnosisOutput))
+            .where(AnalysisResult.resultId == resultId)
         )
         row = await db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
-            raise ValueError(f"AnalysisResult {result_id} not found")
+            raise ValueError(f"AnalysisResult {resultId} not found")
         return result
 
-    async def _persist_output(
-        self, engine_output, result_id: uuid.UUID, db: AsyncSession
+    async def _persistOutput(
+        self, engineOutput, resultId: uuid.UUID, db: AsyncSession
     ) -> SmartDiagnosisOutput:
         # Persists a SmartDiagnosisOutput row and denormalizes a summary onto
         # analysis_results.smart_diagnosis for the mobile sync path to read.
-        evidence_map = _build_evidence_map(engine_output)
+        evidenceMap = _buildEvidenceMap(engineOutput)
         record = SmartDiagnosisOutput(
-            result_id=result_id,
-            gout_score=engine_output.gout.level.value,
-            gn_score=engine_output.glomerulonephritis.level.value,
-            nephro_score=engine_output.nephrolithiasis.level.value,
-            no_significant_indicators=engine_output.no_significant_indicators,
-            evidence_map=evidence_map,
-            engine_version=engine_output.engine_version,
+            resultId=resultId,
+            goutScore=engineOutput.gout.level.value,
+            gnScore=engineOutput.glomerulonephritis.level.value,
+            nephroScore=engineOutput.nephrolithiasis.level.value,
+            noSignificantIndicators=engineOutput.noSignificantIndicators,
+            evidenceMap=evidenceMap,
+            engineVersion=engineOutput.engineVersion,
             status="ATTACHED",
         )
         db.add(record)
 
         # Denormalize into analysis_results.smart_diagnosis so that the
         # mobile sync (which queries analysis_results directly) can read it.
-        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
+        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
         row = await db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is not None:
-            result.smart_diagnosis = {
-                "gout":               evidence_map["gout"],
-                "glomerulonephritis": evidence_map["glomerulonephritis"],
-                "nephrolithiasis":    evidence_map["nephrolithiasis"],
-                "no_significant_indicators": engine_output.no_significant_indicators,
+            result.smartDiagnosis = {
+                "gout":               evidenceMap["gout"],
+                "glomerulonephritis": evidenceMap["glomerulonephritis"],
+                "nephrolithiasis":    evidenceMap["nephrolithiasis"],
+                "no_significant_indicators": engineOutput.noSignificantIndicators,
             }
 
         return record
 
-    async def _handle_failure(
-        self, result_id: uuid.UUID, exc: Exception, db: AsyncSession
+    async def _handleFailure(
+        self, resultId: uuid.UUID, exc: Exception, db: AsyncSession
     ) -> None:
         """Persists the engine error and marks the result as diagnosis-unavailable.
 
@@ -165,42 +165,42 @@ class SmartDiagnosisService:
         propagated — `run()` must still return `None` cleanly.
         """
         try:
-            error_code = _classify_error(exc)
+            errorCode = _classifyError(exc)
             async with db.begin_nested():
-                error_log = EngineErrorLog(
-                    result_id=result_id,
-                    error_code=error_code,
-                    error_message=str(exc),
-                    stack_trace=traceback.format_exc(),
+                errorLog = EngineErrorLog(
+                    resultId=resultId,
+                    errorCode=errorCode,
+                    errorMessage=str(exc),
+                    stackTrace=traceback.format_exc(),
                 )
-                db.add(error_log)
+                db.add(errorLog)
 
-                stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
+                stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
                 row = await db.execute(stmt)
                 result = row.scalar_one_or_none()
                 if result:
-                    result.smart_diagnosis_unavailable = True
+                    result.smartDiagnosisUnavailable = True
 
-                await self.audit_logger.record(
-                    event_type="ENGINE_FAILED",
-                    entity_type="analysis_result",
-                    entity_id=result_id,
-                    user_id=None,
-                    detail_json={"error_code": error_code, "error": str(exc)},
+                await self.auditLogger.record(
+                    eventType="ENGINE_FAILED",
+                    entityType="analysis_result",
+                    entityId=resultId,
+                    userId=None,
+                    detailJson={"error_code": errorCode, "error": str(exc)},
                     db=db,
                     request=None,
                 )
 
-            await self.notif_service.notify_supervisor_diagnosis_unavailable(
-                result_id=result_id,
+            await self._notifService.notifySupervisorDiagnosisUnavailable(
+                resultId=resultId,
             )
         except Exception:
             logger.exception(
-                "Failed to persist engine error for result_id=%s", result_id
+                "Failed to persist engine error for result_id=%s", resultId
             )
 
 
-def _classify_error(exc: Exception) -> str:
+def _classifyError(exc: Exception) -> str:
     """Maps an exception to the known engine error codes."""
     code = getattr(exc, "code", None)
     if code in _RULE_ENGINE_ERROR_CODES:
@@ -208,12 +208,12 @@ def _classify_error(exc: Exception) -> str:
     return "RULE_EVALUATION_FAILED"
 
 
-def _build_evidence_map(engine_output) -> dict:
+def _buildEvidenceMap(engineOutput) -> dict:
     """Serialises the per-condition evidence lists to a plain dict for JSONB storage."""
-    def _serialise_condition(cond_score) -> dict:
+    def _serialiseCondition(condScore) -> dict:
         return {
-            "level": cond_score.level.value,
-            "weighted_score": cond_score.weighted_score,
+            "level": condScore.level.value,
+            "weighted_score": condScore.weighted_score,
             "evidence": [
                 {
                     "particle_name": e.particle_name,
@@ -224,12 +224,12 @@ def _build_evidence_map(engine_output) -> dict:
                     "contribution_score": e.contribution_score,
                     "contribution_role": e.contribution_role,
                 }
-                for e in cond_score.evidence
+                for e in condScore.evidence
             ],
         }
 
     return {
-        "gout":               _serialise_condition(engine_output.gout),
-        "glomerulonephritis": _serialise_condition(engine_output.glomerulonephritis),
-        "nephrolithiasis":    _serialise_condition(engine_output.nephrolithiasis),
+        "gout":               _serialiseCondition(engineOutput.gout),
+        "glomerulonephritis": _serialiseCondition(engineOutput.glomerulonephritis),
+        "nephrolithiasis":    _serialiseCondition(engineOutput.nephrolithiasis),
     }

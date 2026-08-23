@@ -13,7 +13,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.encryption import decrypt_pii, encrypt_pii
+from ..core.encryption import decryptPii, encryptPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
@@ -37,23 +37,23 @@ _VALID_REJECTION_REASONS = {"INSUFFICIENT_VOLUME", "WRONG_CONTAINER", "UNLABELED
 _UID_GENERATION_ATTEMPTS = 5
 
 
-async def _generate_sample_uid(db: AsyncSession) -> str:
+async def _generateSampleUid(db: AsyncSession) -> str:
     """Retry-on-collision UID generation, matching physician_service.py's
     _generate_request_uid pattern — the correct existing example in this
     codebase (real-date-based, checked against the table before use).
     """
-    date_str = datetime.now(_PHT).strftime("%Y%m%d")
+    dateStr = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"SMP-{date_str}-{secrets.randbelow(90000) + 10000}"
-        existing = await db.execute(select(Specimen.specimen_id).where(Specimen.sample_uid == uid))
+        uid = f"SMP-{dateStr}-{random.randint(10000, 99999)}"
+        existing = await db.execute(select(Specimen.specimenId).where(Specimen.sampleUid == uid))
         if existing.scalar_one_or_none() is None:
             return uid
     raise HTTPException(status_code=500, detail="Failed to generate a unique sample UID.")
 
 
-async def receive_specimen(
+async def receiveSpecimen(
     db: AsyncSession,
-    receptionist_id: uuid.UUID,
+    receptionistId: uuid.UUID,
     payload: SpecimenReceiveRequest,
 ) -> SpecimenReceiveResponse:
     """Record a specimen against its parent lab request, either as
@@ -74,79 +74,79 @@ async def receive_specimen(
             `_VALID_REJECTION_REASONS`. 500, if unique sample UID generation
             fails (propagated from `_generate_sample_uid`).
     """
-    lab_request = await db.get(LabRequest, payload.lab_request_id)
-    if lab_request is None:
+    labRequest = await db.get(LabRequest, payload.labRequestId)
+    if labRequest is None:
         raise NotFoundException(
             code="LAB_REQUEST_NOT_FOUND", message="Parent laboratory request not found."
         )
 
-    patient = await db.get(Patient, lab_request.patient_id)
-    p_name_plain = "Unknown"
-    p_uid = "N/A"
+    patient = await db.get(Patient, labRequest.patientId)
+    pNamePlain = "Unknown"
+    pUid = "N/A"
     if patient is not None:
         try:
-            p_name_plain = f"{decrypt_pii(patient.first_name)} {decrypt_pii(patient.last_name)}"
+            pNamePlain = f"{decryptPii(patient.firstName)} {decryptPii(patient.lastName)}"
         except Exception:
             log.warning(
                 "Failed to decrypt patient name while receiving a specimen "
                 "(patient_id=%s) — falling back to 'Unknown'.",
-                patient.patient_id,
+                patient.patientId,
             )
-        p_uid = patient.patient_uid
+        pUid = patient.patientUid
 
-    initial_status = "RECEIVED" if payload.visual_check_passed else "REJECTED"
-    parent_update_status = "SAMPLE_RECEIVED" if payload.visual_check_passed else "PENDING_SAMPLE"
+    initialStatus = "RECEIVED" if payload.visualCheckPassed else "REJECTED"
+    parentUpdateStatus = "SAMPLE_RECEIVED" if payload.visualCheckPassed else "PENDING_SAMPLE"
 
-    sample_uid = await _generate_sample_uid(db) if payload.visual_check_passed else None
+    sampleUid = await _generateSampleUid(db) if payload.visualCheckPassed else None
 
     specimen = Specimen(
-        lab_request_id=payload.lab_request_id,
-        sample_uid=sample_uid,
-        status=initial_status,
-        visual_check_passed=payload.visual_check_passed,
-        received_by=receptionist_id,
-        patient_name=encrypt_pii(p_name_plain),
-        patient_uid=p_uid,
-        test_type=lab_request.test_type,
-        priority_level="ROUTINE",
+        labRequestId=payload.labRequestId,
+        sampleUid=sampleUid,
+        status=initialStatus,
+        visualCheckPassed=payload.visualCheckPassed,
+        receivedBy=receptionistId,
+        patientName=encryptPii(pNamePlain),
+        patientUid=pUid,
+        testType=labRequest.testType,
+        priorityLevel="ROUTINE",
     )
     db.add(specimen)
     await db.flush([specimen])
 
-    if not payload.visual_check_passed:
-        if not payload.rejection_reason:
+    if not payload.visualCheckPassed:
+        if not payload.rejectionReason:
             raise HTTPException(
                 status_code=400, detail="A rejection reason code is required."
             )
-        if payload.rejection_reason not in _VALID_REJECTION_REASONS:
+        if payload.rejectionReason not in _VALID_REJECTION_REASONS:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
             )
         db.add(
             SpecimenRejection(
-                specimen_id=specimen.specimen_id,
-                medtech_id=receptionist_id,
-                reason_code=payload.rejection_reason,
-                free_text_note=payload.free_text_note,
+                specimenId=specimen.specimenId,
+                medtechId=receptionistId,
+                reasonCode=payload.rejectionReason,
+                freeTextNote=payload.freeTextNote,
             )
         )
 
-    lab_request.status = parent_update_status
+    labRequest.status = parentUpdateStatus
 
     await db.commit()
     await db.refresh(specimen)
 
     return SpecimenReceiveResponse(
         success=True,
-        specimen_id=specimen.specimen_id,
-        sample_uid=sample_uid,
-        status=initial_status,
+        specimenId=specimen.specimenId,
+        sampleUid=sampleUid,
+        status=initialStatus,
         message="Specimen received and recorded successfully.",
     )
 
 
-async def list_specimens(db: AsyncSession, status_filter: str | None) -> list[SpecimenListItem]:
+async def listSpecimens(db: AsyncSession, statusFilter: str | None) -> list[SpecimenListItem]:
     """List specimens, optionally filtered by status, with decrypted patient names.
 
     Args:
@@ -158,45 +158,45 @@ async def list_specimens(db: AsyncSession, status_filter: str | None) -> list[Sp
         excluded rather than returned with ciphertext.
     """
     stmt = select(Specimen)
-    if status_filter:
-        stmt = stmt.where(Specimen.status == status_filter.upper())
+    if statusFilter:
+        stmt = stmt.where(Specimen.status == statusFilter.upper())
     rows = (await db.execute(stmt)).scalars().all()
 
     items: list[SpecimenListItem] = []
     for spec in rows:
-        patient_name = None
-        if spec.patient_name:
+        patientName = None
+        if spec.patientName:
             try:
-                patient_name = decrypt_pii(spec.patient_name)
+                patientName = decryptPii(spec.patientName)
             except Exception:
                 log.warning(
                     "Failed to decrypt patient_name for specimen_id=%s — excluding "
                     "from list results rather than returning ciphertext or a guess.",
-                    spec.specimen_id,
+                    spec.specimenId,
                 )
                 continue
         items.append(
             SpecimenListItem(
-                specimen_id=spec.specimen_id,
-                lab_request_id=spec.lab_request_id,
-                sample_uid=spec.sample_uid,
+                specimenId=spec.specimenId,
+                labRequestId=spec.labRequestId,
+                sampleUid=spec.sampleUid,
                 status=spec.status,
-                patient_name=patient_name,
-                patient_uid=spec.patient_uid,
-                test_type=spec.test_type,
-                priority_level=spec.priority_level,
-                received_at=spec.received_at,
+                patientName=patientName,
+                patientUid=spec.patientUid,
+                testType=spec.testType,
+                priorityLevel=spec.priorityLevel,
+                receivedAt=spec.receivedAt,
             )
         )
     return items
 
 
-async def reject_specimen(
+async def rejectSpecimen(
     db: AsyncSession,
-    specimen_id: uuid.UUID,
-    user_id: uuid.UUID,
-    reason_code: str,
-    free_text_note: str | None,
+    specimenId: uuid.UUID,
+    userId: uuid.UUID,
+    reasonCode: str,
+    freeTextNote: str | None,
 ) -> SpecimenRejectResponse:
     """Post-assignment MedTech rejection of an already-received specimen.
 
@@ -219,17 +219,17 @@ async def reject_specimen(
         SpecimenNotFoundError: `specimen_id` doesn't exist.
         ConflictException: the specimen is already rejected.
     """
-    if reason_code not in _VALID_REJECTION_REASONS:
+    if reasonCode not in _VALID_REJECTION_REASONS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid rejection reason: {reason_code}.",
+            detail=f"Invalid rejection reason: {reasonCode}.",
         )
 
-    specimen = await db.get(Specimen, specimen_id)
+    specimen = await db.get(Specimen, specimenId)
     if specimen is None:
-        raise SpecimenNotFoundError(str(specimen_id))
+        raise SpecimenNotFoundError(str(specimenId))
 
-    if specimen.medtech_id != user_id:
+    if specimen.medtechId != userId:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Specimen is not assigned to you.",
@@ -239,14 +239,14 @@ async def reject_specimen(
             code="SPECIMEN_ALREADY_REJECTED", message="Specimen is already rejected."
         )
 
-    rejected_at = datetime.now(_PHT)
+    rejectedAt = datetime.now(_PHT)
     specimen.status = "REJECTED"
-    specimen.rejection_reason = reason_code
-    specimen.rejection_note = free_text_note
-    specimen.rejected_at = rejected_at
+    specimen.rejectionReason = reasonCode
+    specimen.rejectionNote = freeTextNote
+    specimen.rejectedAt = rejectedAt
 
     await db.commit()
 
     return SpecimenRejectResponse(
-        specimen_id=specimen_id, status="REJECTED", rejected_at=rejected_at.isoformat()
+        specimenId=specimenId, status="REJECTED", rejectedAt=rejectedAt.isoformat()
     )

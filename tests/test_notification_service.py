@@ -19,65 +19,65 @@ LAB_REQUEST_ID = uuid.UUID("00000000-0000-0000-0000-000000000060")
 
 
 @pytest.mark.asyncio
-async def test_notify_active_receptionists_notifies_each_active_receptionist():
-    receptionist_ids = [uuid.uuid4(), uuid.uuid4()]
+async def test_notifyActiveReceptionistsNotifiesEachActiveReceptionist():
+    receptionistIds = [uuid.uuid4(), uuid.uuid4()]
     db = AsyncMock()
-    service = NotificationService(db=db)
-    service._get_active_user_ids = AsyncMock(return_value=receptionist_ids)
-    service.notify = AsyncMock()
+    _service = NotificationService(db=db)
+    _service._getActiveUserIds = AsyncMock(return_value=receptionistIds)
+    _service.notify = AsyncMock()
 
-    await service.notify_active_receptionists(
-        request_uid="REQ-20260822-00001",
-        physician_name="dr_santos",
-        lab_request_id=LAB_REQUEST_ID,
+    await _service.notifyActiveReceptionists(
+        requestUid="REQ-20260822-00001",
+        physicianName="dr_santos",
+        labRequestId=LAB_REQUEST_ID,
     )
 
-    service._get_active_user_ids.assert_awaited_once_with(UserRole.RECEPTIONIST)
-    assert service.notify.await_count == 2
-    for call in service.notify.call_args_list:
-        assert call.kwargs["notification_type"] == "LAB_REQUEST_SUBMITTED"
-        assert call.kwargs["entity_id"] == LAB_REQUEST_ID
+    _service._getActiveUserIds.assert_awaited_once_with(UserRole.RECEPTIONIST)
+    assert _service.notify.await_count == 2
+    for call in _service.notify.call_args_list:
+        assert call.kwargs["notificationType"] == "LAB_REQUEST_SUBMITTED"
+        assert call.kwargs["entityId"] == LAB_REQUEST_ID
         assert "REQ-20260822-00001" in call.kwargs["message"]
         assert "dr_santos" in call.kwargs["message"]
 
 
 @pytest.mark.asyncio
-async def test_notify_active_receptionists_no_recipients_sends_nothing():
+async def test_notifyActiveReceptionistsNoRecipientsSendsNothing():
     db = AsyncMock()
-    service = NotificationService(db=db)
-    service._get_active_user_ids = AsyncMock(return_value=[])
-    service.notify = AsyncMock()
+    _service = NotificationService(db=db)
+    _service._getActiveUserIds = AsyncMock(return_value=[])
+    _service.notify = AsyncMock()
 
-    await service.notify_active_receptionists(
-        request_uid="REQ-20260822-00002",
-        physician_name="dr_santos",
-        lab_request_id=LAB_REQUEST_ID,
+    await _service.notifyActiveReceptionists(
+        requestUid="REQ-20260822-00002",
+        physicianName="dr_santos",
+        labRequestId=LAB_REQUEST_ID,
     )
 
-    service.notify.assert_not_awaited()
+    _service.notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_get_active_user_ids_filters_by_role_and_active_status():
+async def test_getActiveUserIdsFiltersByRoleAndActiveStatus():
     db = AsyncMock()
-    execute_result = MagicMock()
+    executeResult = MagicMock()
     ids = [uuid.uuid4()]
-    execute_result.scalars.return_value.all.return_value = ids
-    db.execute = AsyncMock(return_value=execute_result)
+    executeResult.scalars.return_value.all.return_value = ids
+    db.execute = AsyncMock(return_value=executeResult)
 
-    service = NotificationService(db=db)
-    result = await service._get_active_user_ids(UserRole.SUPERVISOR)
+    _service = NotificationService(db=db)
+    result = await _service._getActiveUserIds(UserRole.SUPERVISOR)
 
     assert result == ids
     db.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_get_active_user_ids_returns_empty_list_on_query_failure():
+async def test_getActiveUserIdsReturnsEmptyListOnQueryFailure():
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=RuntimeError("db unreachable"))
 
-    service = NotificationService(db=db)
-    result = await service._get_active_user_ids(UserRole.RECEPTIONIST)
+    _service = NotificationService(db=db)
+    result = await _service._getActiveUserIds(UserRole.RECEPTIONIST)
 
     assert result == []

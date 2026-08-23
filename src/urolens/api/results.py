@@ -23,8 +23,8 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.audit_logger import AuditLogger, get_audit_logger
-from ..core.database import get_db
+from ..core.audit_logger import AuditLogger, getAuditLogger
+from ..core.database import getDb
 from ..core.enums import UserRole
 from ..core.rbac import RequireRole
 from ..schemas.result_review import (
@@ -49,7 +49,7 @@ from ..schemas.result_review import (
 from ..services.manual_override_service import ManualOverrideService
 from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
-from ..services.result_review_service import ResultReviewService, get_smart_diagnosis
+from ..services.result_review_service import ResultReviewService, getSmartDiagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
@@ -60,44 +60,44 @@ _REQUIRE_BOTH = RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])
 
 # ── Dependency factories (DIP) ────────────────────────────────────────────────
 
-async def get_notif_service(
-    db: AsyncSession = Depends(get_db),
+async def getNotifService(
+    db: AsyncSession = Depends(getDb),
 ) -> NotificationService:
     """FastAPI dependency constructing a request-scoped `NotificationService`."""
     return NotificationService(db=db)
 
 
-async def get_confirmation_service(
-    db: AsyncSession = Depends(get_db),
-    audit_logger: AuditLogger = Depends(get_audit_logger),
-    notif_service: NotificationService = Depends(get_notif_service),
+async def getConfirmationService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+    _notifService: NotificationService = Depends(getNotifService),
 ) -> ResultConfirmationService:
     """FastAPI dependency constructing a request-scoped
     `ResultConfirmationService`, wiring up its `SmartDiagnosisService`
     collaborator.
     """
-    smart_diag = SmartDiagnosisService(
-        audit_logger=audit_logger,
-        notif_service=notif_service,
+    _smartDiag = SmartDiagnosisService(
+        auditLogger=auditLogger,
+        _notifService=_notifService,
     )
     return ResultConfirmationService(
         db=db,
-        audit_logger=audit_logger,
-        smart_diagnosis_service=smart_diag,
-        notif_service=notif_service,
+        auditLogger=auditLogger,
+        _smartDiagnosisService=_smartDiag,
+        _notifService=_notifService,
     )
 
 
-async def get_override_service(
-    db: AsyncSession = Depends(get_db),
-    audit_logger: AuditLogger = Depends(get_audit_logger),
+async def getOverrideService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
 ) -> ManualOverrideService:
     """FastAPI dependency constructing a request-scoped `ManualOverrideService`."""
-    return ManualOverrideService(db=db, audit_logger=audit_logger)
+    return ManualOverrideService(db=db, auditLogger=auditLogger)
 
 
-async def get_result_review_service(
-    db: AsyncSession = Depends(get_db),
+async def getResultReviewService(
+    db: AsyncSession = Depends(getDb),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
     return ResultReviewService(db=db)
@@ -106,28 +106,28 @@ async def get_result_review_service(
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/{id}/confirm", response_model=ConfirmResultResponse, status_code=200)
-async def confirm_result(
+async def confirmResult(
     id: uuid.UUID,
     request: Request,
-    current_user: dict = Depends(_REQUIRE_MEDTECH),
-    service: ResultConfirmationService = Depends(get_confirmation_service),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH)),
+    _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
     """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
-    confirmation = await service.confirm_result(
-        result_id=id,
-        medtech_id=uuid.UUID(current_user["user_id"]),
+    confirmation = await _service.confirmResult(
+        resultId=id,
+        medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
     )
     return ConfirmResultResponse.model_validate(confirmation)
 
 
 @router.post("/{id}/override", response_model=OverrideResponse, status_code=200)
-async def override_parameter(
+async def overrideParameter(
     id: uuid.UUID,
     body: OverrideRequest,
     request: Request,
-    current_user: dict = Depends(_REQUIRE_BOTH),
-    service: ManualOverrideService = Depends(get_override_service),
+    currentUser: dict = Depends(_REQUIRE_BOTH),
+    _service: ManualOverrideService = Depends(getOverrideService),
 ) -> OverrideResponse:
     """Override a single AI-generated parameter value.
 
@@ -135,13 +135,13 @@ async def override_parameter(
     ignored — the service re-derives the original value from the stored
     `ai_findings` (source of truth), never trusting a client-supplied value.
     """
-    override = await service.override_parameter(
-        result_id=id,
+    override = await _service.overrideParameter(
+        resultId=id,
         parameter=body.parameter,
-        corrected_value=body.corrected_value,
+        correctedValue=body.correctedValue,
         rationale=body.rationale,
-        original_ai_value=body.original_ai_value,
-        medtech_id=uuid.UUID(current_user["user_id"]),
+        originalAiValue=body.originalAiValue,
+        medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
     )
     return OverrideResponse.model_validate(override)
@@ -151,113 +151,113 @@ async def override_parameter(
 # Literal paths first — see module docstring on why order matters here.
 
 @router.get("/supervisor/stats", response_model=SupervisorStatsResponse)
-async def get_supervisor_stats(
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+async def getSupervisorStats(
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> SupervisorStatsResponse:
     """Dashboard counts for the supervisor's review queue; see
     `ResultReviewService.get_supervisor_stats`.
     """
-    return SupervisorStatsResponse(**await service.get_supervisor_stats())
+    return SupervisorStatsResponse(**await _service.getSupervisorStats())
 
 
 @router.get("/approved-today", response_model=ApprovedTodayListResponse)
-async def list_approved_today(
+async def listApprovedToday(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ApprovedTodayListResponse:
     """List results approved today; see `ResultReviewService.get_approved_today`."""
-    return ApprovedTodayListResponse(**await service.get_approved_today(page=page, page_size=page_size))
+    return ApprovedTodayListResponse(**await _service.getApprovedToday(page=page, pageSize=pageSize))
 
 
 @router.get("/escalated", response_model=EscalatedListResponse)
-async def list_escalated(
+async def listEscalated(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> EscalatedListResponse:
     """List escalated results; see `ResultReviewService.get_escalated`."""
-    return EscalatedListResponse(**await service.get_escalated(page=page, page_size=page_size))
+    return EscalatedListResponse(**await _service.getEscalated(page=page, pageSize=pageSize))
 
 
 @router.get("/pending", response_model=PendingResultListResponse)
-async def list_pending_results(
+async def listPendingResults(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> PendingResultListResponse:
     """List results awaiting supervisor approval; see `ResultReviewService.get_pending`."""
-    return PendingResultListResponse(**await service.get_pending(page=page, page_size=page_size))
+    return PendingResultListResponse(**await _service.getPending(page=page, pageSize=pageSize))
 
 
 @router.patch("/{result_id}/annotate", response_model=AnnotationResponse)
-async def annotate_result(
+async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
     """Save a supervisor's annotation on a result; see
     `ResultReviewService.save_annotation`.
     """
-    result = await service.save_annotation(
-        result_id=result_id,
-        user_id=uuid.UUID(current_user["user_id"]),
-        annotation_notes=body.annotation_notes,
-        spatial_annotations=body.spatial_annotations,
+    result = await _service.saveAnnotation(
+        resultId=result_id,
+        userId=uuid.UUID(currentUser["user_id"]),
+        annotationNotes=body.annotationNotes,
+        spatialAnnotations=body.spatialAnnotations,
     )
     return AnnotationResponse(**result)
 
 
 @router.post("/{result_id}/approve", response_model=ApproveResponse)
-async def approve_result(
+async def approveResult(
     result_id: uuid.UUID,
     body: ApproveRequest,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ApproveResponse:
     """Approve a pending result; see `ResultReviewService.approve_result`."""
-    result = await service.approve_result(
-        result_id=result_id,
-        user_id=uuid.UUID(current_user["user_id"]),
+    result = await _service.approveResult(
+        resultId=result_id,
+        userId=uuid.UUID(currentUser["user_id"]),
         notes=body.notes,
     )
     return ApproveResponse(**result)
 
 
 @router.post("/{result_id}/return", response_model=ReturnResponse)
-async def return_result(
+async def returnResult(
     result_id: uuid.UUID,
     body: ReturnRequest,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ReturnResponse:
     """Return a pending result for correction; see `ResultReviewService.return_result`."""
-    result = await service.return_result(
-        result_id=result_id,
-        user_id=uuid.UUID(current_user["user_id"]),
+    result = await _service.returnResult(
+        resultId=result_id,
+        userId=uuid.UUID(currentUser["user_id"]),
         reason=body.reason,
     )
     return ReturnResponse(**result)
 
 
 @router.post("/{result_id}/escalate", response_model=EscalateResponse)
-async def escalate_result(
+async def escalateResult(
     result_id: uuid.UUID,
     body: EscalateRequest,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> EscalateResponse:
     """Escalate a pending result; see `ResultReviewService.escalate_result`."""
-    result = await service.escalate_result(
-        result_id=result_id,
-        user_id=uuid.UUID(current_user["user_id"]),
-        escalation_path=body.escalation_path,
-        escalation_note=body.escalation_note,
+    result = await _service.escalateResult(
+        resultId=result_id,
+        userId=uuid.UUID(currentUser["user_id"]),
+        escalationPath=body.escalationPath,
+        escalationNote=body.escalationNote,
     )
     return EscalateResponse(**result)
 
@@ -267,23 +267,23 @@ async def escalate_result(
     response_model=SmartDiagnosisResponse,
     summary="Get Smart Diagnosis output for a result",
 )
-async def get_smart_diagnosis_route(
+async def getSmartDiagnosisRoute(
     result_id: str,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output; see
     `result_review_service.get_smart_diagnosis`.
     """
-    return await get_smart_diagnosis(result_id=result_id)
+    return await getSmartDiagnosis(resultId=result_id)
 
 
 @router.get("/{result_id}", response_model=FullResultDetail)
-async def get_full_result(
+async def getFullResult(
     result_id: uuid.UUID,
-    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
-    service: ResultReviewService = Depends(get_result_review_service),
+    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    _service: ResultReviewService = Depends(getResultReviewService),
 ) -> FullResultDetail:
     """Fetch a result's full supervisor-review detail; see
     `ResultReviewService.get_full_result`.
     """
-    return FullResultDetail(**await service.get_full_result(result_id))
+    return FullResultDetail(**await _service.getFullResult(result_id))

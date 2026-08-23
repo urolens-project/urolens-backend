@@ -43,140 +43,140 @@ SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")
 SUPERVISOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000032")
 
 
-def _make_result(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
+def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
     result = MagicMock(spec=AnalysisResult)
-    result.result_id = RESULT_ID
-    result.specimen_id = SPECIMEN_ID
+    result.resultId = RESULT_ID
+    result.specimenId = SPECIMEN_ID
     result.status = status
     return result
 
 
-def _make_specimen() -> Specimen:
+def _makeSpecimen() -> Specimen:
     specimen = MagicMock(spec=Specimen)
-    specimen.specimen_id = SPECIMEN_ID
+    specimen.specimenId = SPECIMEN_ID
     specimen.status = "ASSIGNED"
-    specimen.completed_at = None
+    specimen.completedAt = None
     return specimen
 
 
-def _make_db_mock(get_side_effect: list) -> AsyncMock:
+def _makeDbMock(getSideEffect: list) -> AsyncMock:
     """db.get(Model, id) returns the next item in get_side_effect, in call order."""
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=get_side_effect)
+    db.get = AsyncMock(side_effect=getSideEffect)
     db.add = MagicMock()
     db.commit = AsyncMock()
     return db
 
 
 @pytest.mark.asyncio
-async def test_approve_result_transitions_status_and_completes_specimen():
+async def test_approveResultTransitionsStatusAndCompletesSpecimen():
     """Happy path: approving a pending result records the approval, moves the
     result to APPROVED, and marks its specimen COMPLETED so it leaves the
     medtech's active queue.
     """
-    result = _make_result()
-    specimen = _make_specimen()
-    db = _make_db_mock(get_side_effect=[result, specimen])
+    result = _makeResult()
+    specimen = _makeSpecimen()
+    db = _makeDbMock(getSideEffect=[result, specimen])
 
-    service = ResultReviewService(db=db)
-    response = await service.approve_result(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
+    _service = ResultReviewService(db=db)
+    response = await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
 
     assert result.status == ResultStatus.APPROVED
     assert specimen.status == "COMPLETED"
-    assert specimen.completed_at is not None
-    assert response["result_id"] == RESULT_ID
+    assert specimen.completedAt is not None
+    assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.APPROVED.value
 
     db.add.assert_called_once()
     added = db.add.call_args[0][0]
     assert isinstance(added, ResultApproval)
-    assert added.result_id == RESULT_ID
-    assert added.approved_by == SUPERVISOR_ID
+    assert added.resultId == RESULT_ID
+    assert added.approvedBy == SUPERVISOR_ID
     assert added.notes == "Looks good"
     db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_return_result_transitions_status_and_records_reason():
+async def test_returnResultTransitionsStatusAndRecordsReason():
     """Happy path: returning a pending result records the return reason and
     moves the result to RETURNED_FOR_CORRECTION.
     """
-    result = _make_result()
-    db = _make_db_mock(get_side_effect=[result])
+    result = _makeResult()
+    db = _makeDbMock(getSideEffect=[result])
 
-    service = ResultReviewService(db=db)
-    response = await service.return_result(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
+    _service = ResultReviewService(db=db)
+    response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
 
     assert result.status == ResultStatus.RETURNED_FOR_CORRECTION
-    assert response["result_id"] == RESULT_ID
+    assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
 
     db.add.assert_called_once()
     added = db.add.call_args[0][0]
     assert isinstance(added, ResultReturn)
-    assert added.result_id == RESULT_ID
-    assert added.returned_by == SUPERVISOR_ID
+    assert added.resultId == RESULT_ID
+    assert added.returnedBy == SUPERVISOR_ID
     assert added.reason == "Blurry image"
     db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_escalate_result_transitions_status_and_records_path():
+async def test_escalateResultTransitionsStatusAndRecordsPath():
     """Happy path: escalating a pending result records the escalation path
     and moves the result to CRITICAL_ESCALATED.
     """
-    result = _make_result()
-    db = _make_db_mock(get_side_effect=[result])
+    result = _makeResult()
+    db = _makeDbMock(getSideEffect=[result])
 
-    service = ResultReviewService(db=db)
-    response = await service.escalate_result(
-        RESULT_ID, SUPERVISOR_ID, escalation_path="MARK_CRITICAL", escalation_note="Urgent"
+    _service = ResultReviewService(db=db)
+    response = await _service.escalateResult(
+        RESULT_ID, SUPERVISOR_ID, escalationPath="MARK_CRITICAL", escalationNote="Urgent"
     )
 
     assert result.status == ResultStatus.CRITICAL_ESCALATED
-    assert response["result_id"] == RESULT_ID
+    assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.CRITICAL_ESCALATED.value
-    assert response["escalation_path"] == "MARK_CRITICAL"
+    assert response["escalationPath"] == "MARK_CRITICAL"
 
     db.add.assert_called_once()
     added = db.add.call_args[0][0]
     assert isinstance(added, Escalation)
-    assert added.result_id == RESULT_ID
-    assert added.escalated_by == SUPERVISOR_ID
-    assert added.escalation_path == "MARK_CRITICAL"
-    assert added.escalation_note == "Urgent"
+    assert added.resultId == RESULT_ID
+    assert added.escalatedBy == SUPERVISOR_ID
+    assert added.escalationPath == "MARK_CRITICAL"
+    assert added.escalationNote == "Urgent"
     db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_escalate_result_rejects_invalid_escalation_path():
+async def test_escalateResultRejectsInvalidEscalationPath():
     """An unrecognized escalation_path is rejected before any DB access —
     the same validation the pre-port Supabase service performed.
     """
-    db = _make_db_mock(get_side_effect=[])
+    db = _makeDbMock(getSideEffect=[])
 
-    service = ResultReviewService(db=db)
-    with pytest.raises(UnprocessableException) as exc_info:
-        await service.escalate_result(
-            RESULT_ID, SUPERVISOR_ID, escalation_path="NOT_A_REAL_PATH", escalation_note=None
+    _service = ResultReviewService(db=db)
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _service.escalateResult(
+            RESULT_ID, SUPERVISOR_ID, escalationPath="NOT_A_REAL_PATH", escalationNote=None
         )
-    assert exc_info.value.error_code == "INVALID_ESCALATION_PATH"
+    assert excInfo.value.errorCode == "INVALID_ESCALATION_PATH"
     db.get.assert_not_called()
     db.add.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_approve_result_rejects_result_not_pending():
+async def test_approveResultRejectsResultNotPending():
     """approve/return/escalate all share _require_pending — a result that
     isn't PENDING_SUPERVISOR_APPROVAL (e.g. already APPROVED) is rejected.
     """
-    result = _make_result(status=ResultStatus.APPROVED)
-    db = _make_db_mock(get_side_effect=[result])
+    result = _makeResult(status=ResultStatus.APPROVED)
+    db = _makeDbMock(getSideEffect=[result])
 
-    service = ResultReviewService(db=db)
-    with pytest.raises(ConflictException) as exc_info:
-        await service.approve_result(RESULT_ID, SUPERVISOR_ID, notes=None)
-    assert exc_info.value.error_code == "INVALID_RESULT_STATUS"
+    _service = ResultReviewService(db=db)
+    with pytest.raises(ConflictException) as excInfo:
+        await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes=None)
+    assert excInfo.value.errorCode == "INVALID_RESULT_STATUS"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
 
@@ -184,22 +184,22 @@ async def test_approve_result_rejects_result_not_pending():
 # ── Regression test: spatial_annotations write-then-drop bug ──────────────
 
 
-def _make_scalars_result(items: list) -> MagicMock:
+def _makeScalarsResult(items: list) -> MagicMock:
     """A db.execute() return value shaped for `.scalars().all()`."""
-    execute_result = MagicMock()
-    execute_result.scalars.return_value.all.return_value = items
-    return execute_result
+    executeResult = MagicMock()
+    executeResult.scalars.return_value.all.return_value = items
+    return executeResult
 
 
-def _make_scalar_one_result(item) -> MagicMock:
+def _makeScalarOneResult(item) -> MagicMock:
     """A db.execute() return value shaped for `.scalar_one_or_none()`."""
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = item
-    return execute_result
+    executeResult = MagicMock()
+    executeResult.scalar_one_or_none.return_value = item
+    return executeResult
 
 
 @pytest.mark.asyncio
-async def test_annotate_result_persists_and_round_trips_spatial_annotations():
+async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     """Regression test for the bug where save_annotation accepted
     spatial_annotations but never assigned it onto the ResultReview object
     it saved, so the value was silently dropped instead of persisted.
@@ -216,74 +216,74 @@ async def test_annotate_result_persists_and_round_trips_spatial_annotations():
     ]
 
     # ── Write path: no existing review row for this result/supervisor pair ──
-    ar_for_write = _make_result()
-    write_db = AsyncMock()
-    write_db.get = AsyncMock(return_value=ar_for_write)
-    write_db.execute = AsyncMock(return_value=_make_scalar_one_result(None))
-    write_db.add = MagicMock()
-    write_db.commit = AsyncMock()
+    arForWrite = _makeResult()
+    writeDb = AsyncMock()
+    writeDb.get = AsyncMock(return_value=arForWrite)
+    writeDb.execute = AsyncMock(return_value=_makeScalarOneResult(None))
+    writeDb.add = MagicMock()
+    writeDb.commit = AsyncMock()
 
-    write_service = ResultReviewService(db=write_db)
-    write_response = await write_service.save_annotation(
-        result_id=RESULT_ID,
-        user_id=SUPERVISOR_ID,
-        annotation_notes="Possible cast cluster, upper-left quadrant",
-        spatial_annotations=payload,
+    _writeService = ResultReviewService(db=writeDb)
+    writeResponse = await _writeService.saveAnnotation(
+        resultId=RESULT_ID,
+        userId=SUPERVISOR_ID,
+        annotationNotes="Possible cast cluster, upper-left quadrant",
+        spatialAnnotations=payload,
     )
 
-    write_db.add.assert_called_once()
-    saved_review = write_db.add.call_args[0][0]
-    assert isinstance(saved_review, ResultReview)
+    writeDb.add.assert_called_once()
+    savedReview = writeDb.add.call_args[0][0]
+    assert isinstance(savedReview, ResultReview)
     # The actual regression: this attribute was never set on the pre-fix code.
-    assert saved_review.spatial_annotations == payload
-    assert write_response["spatial_annotations"] == payload
+    assert savedReview.spatialAnnotations == payload
+    assert writeResponse["spatialAnnotations"] == payload
 
     # ── Read path: get_full_result must read the same saved object back ──
-    saved_review.updated_at = datetime.now(UTC)
+    savedReview.updatedAt = datetime.now(UTC)
 
-    ar_for_read = _make_result()
-    ar_for_read.image_id = None
-    read_db = AsyncMock()
-    read_db.get = AsyncMock(side_effect=[ar_for_read, None])  # AnalysisResult, then Specimen (none)
-    read_db.execute = AsyncMock(
+    arForRead = _makeResult()
+    arForRead.imageId = None
+    readDb = AsyncMock()
+    readDb.get = AsyncMock(side_effect=[arForRead, None])  # AnalysisResult, then Specimen (none)
+    readDb.execute = AsyncMock(
         side_effect=[
-            _make_scalars_result([]),  # manual_overrides
-            _make_scalar_one_result(saved_review),  # latest ResultReview
-            _make_scalar_one_result(None),  # smart_diagnosis_output
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarOneResult(savedReview),  # latest ResultReview
+            _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
 
-    read_service = ResultReviewService(db=read_db)
-    detail = await read_service.get_full_result(RESULT_ID)
+    _readService = ResultReviewService(db=readDb)
+    detail = await _readService.getFullResult(RESULT_ID)
 
-    assert detail["spatial_annotations"] == payload
-    assert detail["annotation_notes"] == "Possible cast cluster, upper-left quadrant"
+    assert detail["spatialAnnotations"] == payload
+    assert detail["annotationNotes"] == "Possible cast cluster, upper-left quadrant"
 
 
 @pytest.mark.asyncio
-async def test_annotate_result_omitting_spatial_annotations_preserves_existing_value():
+async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     """Matches the pre-port behavior: calling save_annotation again without
     spatial_annotations (e.g. to update just the notes) must not clear a
     previously-saved value.
     """
-    ar = _make_result()
-    existing_review = MagicMock(spec=ResultReview)
-    existing_review.spatial_annotations = [{"x": 1, "y": 2, "label": "prior"}]
-    existing_review.annotation_notes = "old notes"
+    ar = _makeResult()
+    existingReview = MagicMock(spec=ResultReview)
+    existingReview.spatialAnnotations = [{"x": 1, "y": 2, "label": "prior"}]
+    existingReview.annotationNotes = "old notes"
 
     db = AsyncMock()
     db.get = AsyncMock(return_value=ar)
-    db.execute = AsyncMock(return_value=_make_scalar_one_result(existing_review))
+    db.execute = AsyncMock(return_value=_makeScalarOneResult(existingReview))
     db.commit = AsyncMock()
 
-    service = ResultReviewService(db=db)
-    await service.save_annotation(
-        result_id=RESULT_ID,
-        user_id=SUPERVISOR_ID,
-        annotation_notes="updated notes only",
-        spatial_annotations=None,
+    _service = ResultReviewService(db=db)
+    await _service.saveAnnotation(
+        resultId=RESULT_ID,
+        userId=SUPERVISOR_ID,
+        annotationNotes="updated notes only",
+        spatialAnnotations=None,
     )
 
-    assert existing_review.annotation_notes == "updated notes only"
+    assert existingReview.annotationNotes == "updated notes only"
     # Not overwritten with None just because this call didn't supply a value.
-    assert existing_review.spatial_annotations == [{"x": 1, "y": 2, "label": "prior"}]
+    assert existingReview.spatialAnnotations == [{"x": 1, "y": 2, "label": "prior"}]

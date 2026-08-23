@@ -31,34 +31,34 @@ _UID_GENERATION_ATTEMPTS = 5
 _MAX_SEARCH_RESULTS = 5
 
 
-async def _generate_request_uid(db: AsyncSession) -> str:
+async def _generateRequestUid(db: AsyncSession) -> str:
     """Retry-on-collision UID generation — same pattern as
     app/services/physician_service.py's _generate_request_uid, the correct
     existing example in this codebase (real-date-based, checked before use).
     """
-    date_str = datetime.now(_PHT).strftime("%Y%m%d")
+    dateStr = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"REQ-{date_str}-{secrets.randbelow(90000) + 10000}"
+        uid = f"REQ-{dateStr}-{random.randint(10000, 99999)}"
         existing = await db.execute(
-            select(LabRequest.lab_request_id).where(LabRequest.request_uid == uid)
+            select(LabRequest.labRequestId).where(LabRequest.requestUid == uid)
         )
         if existing.scalar_one_or_none() is None:
             return uid
     raise HTTPException(status_code=500, detail="Failed to generate a unique request UID.")
 
 
-async def get_physicians(db: AsyncSession) -> list[PhysicianItem]:
+async def getPhysicians(db: AsyncSession) -> list[PhysicianItem]:
     """List all active physicians, for populating a lab request's physician picker.
 
     Returns:
         One `PhysicianItem` per active physician user.
     """
-    stmt = select(User).where(User.role == "PHYSICIAN", User.is_active.is_(True))
+    stmt = select(User).where(User.role == "PHYSICIAN", User.isActive.is_(True))
     rows = (await db.execute(stmt)).scalars().all()
-    return [PhysicianItem(user_id=u.user_id, username=u.username) for u in rows]
+    return [PhysicianItem(userId=u.userId, username=u.username) for u in rows]
 
 
-async def search_pending_lab_requests(db: AsyncSession, q: str) -> list[LabRequestSearchItem]:
+async def searchPendingLabRequests(db: AsyncSession, q: str) -> list[LabRequestSearchItem]:
     """Search `PENDING_SAMPLE` lab requests by request UID or physician name.
 
     Args:
@@ -69,18 +69,18 @@ async def search_pending_lab_requests(db: AsyncSession, q: str) -> list[LabReque
     Returns:
         Up to `_MAX_SEARCH_RESULTS` matching lab requests.
     """
-    clean_q = q.strip()
-    if clean_q.lower().startswith("dr."):
-        clean_q = clean_q[3:].strip()
-    pattern = f"%{clean_q}%"
+    cleanQ = q.strip()
+    if cleanQ.lower().startswith("dr."):
+        cleanQ = cleanQ[3:].strip()
+    pattern = f"%{cleanQ}%"
 
     stmt = (
         select(LabRequest)
         .where(
             LabRequest.status == "PENDING_SAMPLE",
             or_(
-                LabRequest.request_uid.ilike(pattern),
-                LabRequest.physician_name.ilike(pattern),
+                LabRequest.requestUid.ilike(pattern),
+                LabRequest.physicianName.ilike(pattern),
             ),
         )
         .limit(_MAX_SEARCH_RESULTS)
@@ -88,27 +88,27 @@ async def search_pending_lab_requests(db: AsyncSession, q: str) -> list[LabReque
     rows = (await db.execute(stmt)).scalars().all()
     return [
         LabRequestSearchItem(
-            lab_request_id=r.lab_request_id,
-            request_uid=r.request_uid,
-            test_type=r.test_type,
-            physician_name=r.physician_name,
-            patient_id=r.patient_id,
+            labRequestId=r.labRequestId,
+            requestUid=r.requestUid,
+            testType=r.testType,
+            physicianName=r.physicianName,
+            patientId=r.patientId,
         )
         for r in rows
     ]
 
 
-async def create_lab_request(
+async def createLabRequest(
     db: AsyncSession,
     *,
-    encoded_by: uuid.UUID,
-    patient_id: uuid.UUID,
-    test_type: str,
-    clinical_notes: str | None,
-    physician_id: uuid.UUID | None,
-    physician_name: str | None,
-    notify_receptionists: bool = False,
-    ip_address: str | None = None,
+    encodedBy: uuid.UUID,
+    patientId: uuid.UUID,
+    testType: str,
+    clinicalNotes: str | None,
+    physicianId: uuid.UUID | None,
+    physicianName: str | None,
+    notifyReceptionists: bool = False,
+    ipAddress: str | None = None,
 ) -> LabRequestCreateResponse:
     """Create a new lab request in `PENDING_SAMPLE` status — the single
     implementation backing both the receptionist and physician creation
@@ -138,59 +138,59 @@ async def create_lab_request(
             after `_UID_GENERATION_ATTEMPTS` retries (propagated from
             `_generate_request_uid`).
     """
-    patient = await db.get(Patient, patient_id)
+    patient = await db.get(Patient, patientId)
     if patient is None:
         raise NotFoundException(code="PATIENT_NOT_FOUND", message="Patient not found.")
 
-    request_uid = await _generate_request_uid(db)
+    requestUid = await _generateRequestUid(db)
 
-    computed_id = physician_id
-    computed_name = physician_name
-    if computed_id and not computed_name:
-        physician = await db.get(User, computed_id)
+    computedId = physicianId
+    computedName = physicianName
+    if computedId and not computedName:
+        physician = await db.get(User, computedId)
         if physician is not None:
-            computed_name = physician.username
+            computedName = physician.username
 
-    lab_request = LabRequest(
-        request_uid=request_uid,
-        patient_id=patient_id,
-        physician_id=computed_id,
-        physician_name=computed_name,
-        test_type=test_type.upper().replace(" ", "_"),
-        clinical_notes=clinical_notes,
+    labRequest = LabRequest(
+        requestUid=requestUid,
+        patientId=patientId,
+        physicianId=computedId,
+        physicianName=computedName,
+        testType=testType.upper().replace(" ", "_"),
+        clinicalNotes=clinicalNotes,
         status="PENDING_SAMPLE",
-        encoded_by=encoded_by,
+        encodedBy=encodedBy,
     )
-    db.add(lab_request)
-    await db.flush([lab_request])
+    db.add(labRequest)
+    await db.flush([labRequest])
 
-    if notify_receptionists:
-        await NotificationService(db).notify_active_receptionists(
-            request_uid=lab_request.request_uid,
-            physician_name=computed_name or "",
-            lab_request_id=lab_request.lab_request_id,
+    if notifyReceptionists:
+        await NotificationService(db).notifyActiveReceptionists(
+            requestUid=labRequest.requestUid,
+            physicianName=computedName or "",
+            labRequestId=labRequest.labRequestId,
         )
 
     await AuditLogger().record(
-        event_type="REQUEST_SUBMITTED",
-        entity_type="lab_request",
-        entity_id=lab_request.lab_request_id,
-        user_id=encoded_by,
-        ip_address=ip_address,
-        detail_json={"request_uid": request_uid, "patient_id": str(patient_id)},
+        eventType="REQUEST_SUBMITTED",
+        entityType="lab_request",
+        entityId=labRequest.labRequestId,
+        userId=encodedBy,
+        ipAddress=ipAddress,
+        detailJson={"request_uid": requestUid, "patient_id": str(patientId)},
     )
 
     await db.commit()
-    await db.refresh(lab_request)
+    await db.refresh(labRequest)
 
     return LabRequestCreateResponse(
-        lab_request_id=lab_request.lab_request_id,
-        request_uid=lab_request.request_uid,
-        patient_id=lab_request.patient_id,
-        physician_id=lab_request.physician_id,
-        physician_name=lab_request.physician_name,
-        test_type=lab_request.test_type,
-        clinical_notes=lab_request.clinical_notes,
-        status=lab_request.status,
-        created_at=lab_request.created_at,
+        labRequestId=labRequest.labRequestId,
+        requestUid=labRequest.requestUid,
+        patientId=labRequest.patientId,
+        physicianId=labRequest.physicianId,
+        physicianName=labRequest.physicianName,
+        testType=labRequest.testType,
+        clinicalNotes=labRequest.clinicalNotes,
+        status=labRequest.status,
+        createdAt=labRequest.createdAt,
     )
