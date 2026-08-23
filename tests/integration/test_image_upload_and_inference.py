@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import io
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from PIL import Image as PILImage
 
+from main import app
+from src.urolens.core.database import getDb
+from src.urolens.models.analysis_result import AnalysisResult
 from tests.integration.conftest import (
     TEST_IMAGE_ID,
     TEST_SPECIMEN_ID,
@@ -49,6 +52,50 @@ FAKE_AI_FINDINGS = {
 }
 
 
+# ── SQLAlchemy AsyncSession mock (for the upload endpoint's Depends(getDb)) ────
+#
+# handleUpload() queries for a previous image/specimen/existing result (all
+# absent on a first upload -- every .scalar_one_or_none() returns None to
+# take the "create new" path), then constructs a real AnalysisResult(...)
+# instance itself (not mocked) and flushes it. Unlike a real session, flush()
+# on a mock never runs SQLAlchemy's column-default machinery, so `resultId`
+# (mapped_column(..., default=uuid.uuid4)) is assigned by hand here, mirroring
+# what a real flush would do.
+
+def _makeSqlDbMock() -> AsyncMock:
+    db = AsyncMock()
+    db.add = MagicMock()  # real AsyncSession.add() is synchronous, not a coroutine
+    executeResult = MagicMock()
+    executeResult.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=executeResult)
+
+    async def _flush(objs):
+        for obj in objs:
+            if isinstance(obj, AnalysisResult) and obj.resultId is None:
+                obj.resultId = uuid.uuid4()
+
+    db.flush = AsyncMock(side_effect=_flush)
+    return db
+
+
+@pytest.fixture
+def mockSqlDb():
+    """Overrides Depends(getDb) app-wide for the duration of one test, so the
+    upload endpoint's SQLAlchemy calls hit this mock instead of a real
+    Postgres connection.
+    """
+    db = _makeSqlDbMock()
+
+    async def _override():
+        yield db
+
+    app.dependency_overrides[getDb] = _override
+    try:
+        yield db
+    finally:
+        app.dependency_overrides.pop(getDb, None)
+
+
 # ── Upload tests ──────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -56,6 +103,7 @@ async def test_uploadValidImageReturns201(
     asyncClient,
     medtechToken: str,
     testSpecimen: uuid.UUID,
+    mockSqlDb,
 ) -> None:
     """Valid 800×600 JPEG → 201 with PENDING_CONFIRM status."""
     sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
@@ -125,6 +173,7 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
     asyncClient,
     medtechToken: str,
     testSpecimen: uuid.UUID,
+    mockSqlDb,
 ) -> None:
     """When urolens_ai is installed, _try_run_inference is called and the findings
     are included in the response (ai_findings populated).
@@ -133,8 +182,9 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
     jpegBytes = _makeJpeg()
 
     # `infer` is the callable; `infer(raw_bytes)` returns the inference object
+    # _runInference() reads `inferenceResult.particles` (a dict), not `.to_dict()`.
     mockInferFn = MagicMock()
-    mockInferFn.return_value.to_dict.return_value = FAKE_AI_FINDINGS
+    mockInferFn.return_value.particles = FAKE_AI_FINDINGS
 
     with (
         patch("src.urolens.services.ai_integration_service.sb", sbMock),
@@ -160,6 +210,7 @@ async def test_uploadSucceedsWhenAiInferenceFails(
     asyncClient,
     medtechToken: str,
     testSpecimen: uuid.UUID,
+    mockSqlDb,
 ) -> None:
     """AI failure must not break the upload. The endpoint returns 201 and
     ai_findings is None (the result row stays PENDING_CONFIRM with empty findings).

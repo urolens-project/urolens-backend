@@ -38,7 +38,7 @@ async def _generateRequestUid(db: AsyncSession) -> str:
     """
     dateStr = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"REQ-{dateStr}-{random.randint(10000, 99999)}"
+        uid = f"REQ-{dateStr}-{secrets.randbelow(90000) + 10000}"
         existing = await db.execute(
             select(LabRequest.labRequestId).where(LabRequest.requestUid == uid)
         )
