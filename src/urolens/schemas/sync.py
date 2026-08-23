@@ -17,8 +17,8 @@ class SyncChanges(BaseModel):
     """Per-table `TableChanges` for the tables the mobile client syncs."""
 
     specimens: TableChanges
-    queue_assignments: TableChanges
-    analysis_results: TableChanges
+    queueAssignments: TableChanges
+    analysisResults: TableChanges
 
 
 class SyncPullResponse(BaseModel):

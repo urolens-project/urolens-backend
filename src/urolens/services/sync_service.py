@@ -21,22 +21,22 @@ _RESULT_COLS = (
 )
 
 
-def _remap(row: dict, pk_col: str) -> dict:
+def _remap(row: dict, pkCol: str) -> dict:
     """Rename the DB primary key column to 'id' for the mobile client."""
     out = dict(row)
-    if pk_col in out:
-        out["id"] = out.pop(pk_col)
+    if pkCol in out:
+        out["id"] = out.pop(pkCol)
     return out
 
 
-def _to_str(val) -> str | None:
+def _toStr(val) -> str | None:
     """Coerce timestamps/enums to strings safely."""
     if val is None:
         return None
     return str(val)
 
 
-async def pull(user_id: str, last_synced_at: datetime | None) -> dict:
+async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
     """Build a sync payload for one MedTech: their specimens, queue
     assignments, and the analysis results for those specimens.
 
@@ -53,56 +53,56 @@ async def pull(user_id: str, last_synced_at: datetime | None) -> dict:
         `analysis_results`), each holding `{"created": [...], "updated": [...]}`
         with the DB primary key column remapped to `"id"`.
     """
-    is_delta = last_synced_at is not None
-    ts = last_synced_at.isoformat() if is_delta else None
+    isDelta = lastSyncedAt is not None
+    ts = lastSyncedAt.isoformat() if isDelta else None
 
     # ── 1 + 2. Specimens and queue_assignments in parallel ────────────────────
     # specimens must be fetched in full (not delta-filtered) to build the
     # specimen_ids list used for analysis_results filtering.
-    qa_query = supabase.table("queue_assignments").select(_QUEUE_COLS).eq("medtech_id", user_id)
-    if is_delta:
-        qa_query = qa_query.gt("updated_at", ts)
+    qaQuery = supabase.table("queue_assignments").select(_QUEUE_COLS).eq("medtech_id", userId)
+    if isDelta:
+        qaQuery = qaQuery.gt("updated_at", ts)
 
-    spec_result, qa_result = await asyncio.gather(
-        supabase.table("specimens").select(_SPECIMEN_COLS).eq("medtech_id", user_id).execute(),
-        qa_query.execute(),
+    specResult, qaResult = await asyncio.gather(
+        supabase.table("specimens").select(_SPECIMEN_COLS).eq("medtech_id", userId).execute(),
+        qaQuery.execute(),
     )
 
-    all_spec_rows = spec_result.data or []
-    all_specimen_ids = [r["specimen_id"] for r in all_spec_rows]
-    queue_assignments = [_remap(r, "assignment_id") for r in (qa_result.data or [])]
+    allSpecRows = specResult.data or []
+    allSpecimenIds = [r["specimen_id"] for r in allSpecRows]
+    queueAssignments = [_remap(r, "assignment_id") for r in (qaResult.data or [])]
 
     # For delta: filter changed specimen rows in Python
-    spec_rows = (
-        [r for r in all_spec_rows if r.get("updated_at") and r["updated_at"] > ts]
-        if is_delta
-        else all_spec_rows
+    specRows = (
+        [r for r in allSpecRows if r.get("updated_at") and r["updated_at"] > ts]
+        if isDelta
+        else allSpecRows
     )
-    specimens = [_remap(r, "specimen_id") for r in spec_rows]
+    specimens = [_remap(r, "specimen_id") for r in specRows]
 
     # ── 3. Analysis results ───────────────────────────────────────────────────
-    if all_specimen_ids:
-        ar_query = supabase.table("analysis_results").select(_RESULT_COLS).in_("specimen_id", all_specimen_ids)
-        if is_delta:
-            ar_query = ar_query.gt("updated_at", ts)
-        ar_result = await ar_query.execute()
-        analysis_results = [_remap(r, "result_id") for r in (ar_result.data or [])]
+    if allSpecimenIds:
+        arQuery = supabase.table("analysis_results").select(_RESULT_COLS).in_("specimen_id", allSpecimenIds)
+        if isDelta:
+            arQuery = arQuery.gt("updated_at", ts)
+        arResult = await arQuery.execute()
+        analysisResults = [_remap(r, "result_id") for r in (arResult.data or [])]
     else:
-        analysis_results = []
+        analysisResults = []
 
     # ── Build response ─────────────────────────────────────────────────────────
     # Full sync  → all records in created, updated = []
     # Delta sync → changed records in updated, created = []
-    def make_changes(records: list) -> dict:
-        if is_delta:
+    def makeChanges(records: list) -> dict:
+        if isDelta:
             return {"created": [], "updated": records}
         return {"created": records, "updated": []}
 
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "changes": {
-            "specimens":         make_changes(specimens),
-            "queue_assignments": make_changes(queue_assignments),
-            "analysis_results":  make_changes(analysis_results),
+            "specimens":         makeChanges(specimens),
+            "queue_assignments": makeChanges(queueAssignments),
+            "analysis_results":  makeChanges(analysisResults),
         },
     }

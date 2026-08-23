@@ -16,11 +16,11 @@ class LabRequestCreateRequest(BaseModel):
     given without a name, the name is looked up server-side.
     """
 
-    patient_id: UUID
-    physician_id: UUID | None = None
-    physician_name: str | None = None
-    test_type: str
-    clinical_notes: str | None = None
+    patientId: UUID
+    physicianId: UUID | None = None
+    physicianName: str | None = None
+    testType: str
+    clinicalNotes: str | None = None
 
 
 class LabRequestCreateResponse(BaseModel):
@@ -30,19 +30,19 @@ class LabRequestCreateResponse(BaseModel):
     `api/physician.py`), built directly from the persisted `LabRequest` row.
     """
 
-    lab_request_id: UUID
-    request_uid: str
-    patient_id: UUID
-    physician_id: UUID | None = None
-    physician_name: str | None = None
-    test_type: str
-    clinical_notes: str | None = None
+    labRequestId: UUID
+    requestUid: str
+    patientId: UUID
+    physicianId: UUID | None = None
+    physicianName: str | None = None
+    testType: str
+    clinicalNotes: str | None = None
     status: str
-    created_at: datetime
+    createdAt: datetime
 
 
 class PhysicianItem(BaseModel):
     """One physician, for populating a physician picker."""
 
-    user_id: UUID
+    userId: UUID
     username: str

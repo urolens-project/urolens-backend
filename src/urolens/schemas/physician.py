@@ -11,12 +11,12 @@ from pydantic import BaseModel
 class PhysicianPatientItem(BaseModel):
     """One patient, for the physician's patient-search results (decrypted)."""
 
-    patient_id: UUID
-    patient_uid: str
-    first_name: str
-    middle_name: str | None = None
-    last_name: str
-    date_of_birth: str
+    patientId: UUID
+    patientUid: str
+    firstName: str
+    middleName: str | None = None
+    lastName: str
+    dateOfBirth: str
     sex: str
 
 
@@ -26,9 +26,9 @@ class LabRequestCreateRequest(BaseModel):
     (from the authenticated caller), so there's no `physician_id` field.
     """
 
-    patient_id: UUID
-    test_type: str
-    clinical_notes: str | None = None
+    patientId: UUID
+    testType: str
+    clinicalNotes: str | None = None
 
 
 # The response schema for lab-request creation lives in schemas/lab_request.py
@@ -40,15 +40,15 @@ class LabRequestCreateRequest(BaseModel):
 class PhysicianResultSummary(BaseModel):
     """One result, for the physician's result list."""
 
-    result_id: str
-    specimen_id: str
-    patient_name: str
-    patient_uid: str
-    patient_age: int | None
-    patient_sex: str | None
+    resultId: str
+    specimenId: str
+    patientName: str
+    patientUid: str
+    patientAge: int | None
+    patientSex: str | None
     status: str
-    confirmed_at: str | None
-    created_at: str
+    confirmedAt: str | None
+    createdAt: str
 
 
 class PhysicianResultListResponse(BaseModel):
@@ -57,38 +57,38 @@ class PhysicianResultListResponse(BaseModel):
     items: list[PhysicianResultSummary]
     total: int
     page: int
-    page_size: int
+    pageSize: int
 
 
 class SmartDiagnosisDetail(BaseModel):
     """Smart Diagnosis output, as shown in the physician result-detail view."""
 
-    gout_score: str
-    gn_score: str
-    nephro_score: str
-    uti_score: str
-    tricho_score: str
-    evidence_map: dict[str, Any]
-    no_significant_indicators: bool
-    engine_version: str
+    goutScore: str
+    gnScore: str
+    nephroScore: str
+    utiScore: str
+    trichoScore: str
+    evidenceMap: dict[str, Any]
+    noSignificantIndicators: bool
+    engineVersion: str
 
 
 class PhysicianResultDetail(BaseModel):
     """Response body for the physician's single-result detail view."""
 
-    result_id: str
-    specimen_id: str
-    patient_name: str
-    patient_uid: str
-    patient_age: int | None
-    patient_sex: str | None
-    medtech_name: str | None
-    confirmed_at: str | None
-    ai_findings: dict[str, Any]
-    flagged_anomalies: dict[str, Any]
-    particle_classes: dict[str, Any]
-    model_version: str
-    smart_diagnosis: SmartDiagnosisDetail | None
-    image_url: str | None
+    resultId: str
+    specimenId: str
+    patientName: str
+    patientUid: str
+    patientAge: int | None
+    patientSex: str | None
+    medtechName: str | None
+    confirmedAt: str | None
+    aiFindings: dict[str, Any]
+    flaggedAnomalies: dict[str, Any]
+    particleClasses: dict[str, Any]
+    modelVersion: str
+    smartDiagnosis: SmartDiagnosisDetail | None
+    imageUrl: str | None
     status: str
-    annotation_notes: str | None
+    annotationNotes: str | None

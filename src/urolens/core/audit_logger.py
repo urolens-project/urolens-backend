@@ -19,14 +19,14 @@ class AuditLogger:
 
     async def record(
         self,
-        event_type: str,
-        entity_type: str,
-        entity_id: uuid.UUID | str,
-        user_id: uuid.UUID | str | None,
+        eventType: str,
+        entityType: str,
+        entityId: uuid.UUID | str,
+        userId: uuid.UUID | str | None,
         db: Any = None,          # kept for backward compatibility, ignored
-        detail_json: dict[str, Any] | None = None,
+        detailJson: dict[str, Any] | None = None,
         request: Any = None,
-        ip_address: str | None = None,
+        ipAddress: str | None = None,
     ) -> None:
         """Insert one audit_logs row. Never raises — a failure to write the
         audit entry must not break whatever the caller was actually doing.
@@ -39,25 +39,25 @@ class AuditLogger:
             ip_address: takes precedence over `request` — for callers that
                 already have a raw IP string rather than a Request object.
         """
-        if ip_address is None and request and hasattr(request, "client") and request.client:
-            ip_address = request.client.host
+        if ipAddress is None and request and hasattr(request, "client") and request.client:
+            ipAddress = request.client.host
 
         try:
             await supabase.table("audit_logs").insert({
                 "log_id": str(uuid.uuid4()),
-                "event_type": event_type,
-                "entity_type": entity_type,
-                "entity_id": str(entity_id),
-                "user_id": str(user_id) if user_id else None,
-                "detail_json": detail_json or {},
-                "ip_address": ip_address,
+                "event_type": eventType,
+                "entity_type": entityType,
+                "entity_id": str(entityId),
+                "user_id": str(userId) if userId else None,
+                "detail_json": detailJson or {},
+                "ip_address": ipAddress,
             }).execute()
         except Exception:
             # Audit must never break the main transaction
             pass
 
 
-def get_audit_logger() -> AuditLogger:
+def getAuditLogger() -> AuditLogger:
     """Return a new `AuditLogger` instance.
 
     Returns:
@@ -88,22 +88,22 @@ def get_audit_logger() -> AuditLogger:
 #     "audit must never break the main transaction" design that every other
 #     caller in this app already relies on.
 
-_audit_logger = AuditLogger()
+_auditLogger = AuditLogger()
 
 
-async def log_login_success(user_id, session_id, ip_address: str) -> None:
+async def logLoginSuccess(userId, sessionId, ipAddress: str) -> None:
     """Record a successful staff login as a `LOGIN_SUCCESS` audit entry."""
-    await _audit_logger.record(
-        event_type="LOGIN_SUCCESS",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        detail_json={"session_id": str(session_id)} if session_id else None,
-        ip_address=ip_address,
+    await _auditLogger.record(
+        eventType="LOGIN_SUCCESS",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={"session_id": str(sessionId)} if sessionId else None,
+        ipAddress=ipAddress,
     )
 
 
-async def log_login_failed(ip_address: str, user_id=None) -> None:
+async def logLoginFailed(ipAddress: str, userId=None) -> None:
     """Record a failed staff login as a `LOGIN_FAILED` audit entry.
 
     Args:
@@ -112,29 +112,29 @@ async def log_login_failed(ip_address: str, user_id=None) -> None:
             user. Either way the entry's `reason` detail reflects which case
             occurred.
     """
-    await _audit_logger.record(
-        event_type="LOGIN_FAILED",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        detail_json={"reason": "invalid_password" if user_id else "user_not_found"},
-        ip_address=ip_address,
+    await _auditLogger.record(
+        eventType="LOGIN_FAILED",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={"reason": "invalid_password" if userId else "user_not_found"},
+        ipAddress=ipAddress,
     )
 
 
-async def log_logout(user_id, session_id, ip_address: str) -> None:
+async def logLogout(userId, sessionId, ipAddress: str) -> None:
     """Record a staff logout as a `LOGOUT` audit entry."""
-    await _audit_logger.record(
-        event_type="LOGOUT",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        detail_json={"session_id": str(session_id)} if session_id else None,
-        ip_address=ip_address,
+    await _auditLogger.record(
+        eventType="LOGOUT",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={"session_id": str(sessionId)} if sessionId else None,
+        ipAddress=ipAddress,
     )
 
 
-async def log_access_denied(ip_address: str, user_id=None) -> None:
+async def logAccessDenied(ipAddress: str, userId=None) -> None:
     """Record a rejected auth attempt as an `ACCESS_DENIED` audit entry.
 
     Args:
@@ -142,32 +142,32 @@ async def log_access_denied(ip_address: str, user_id=None) -> None:
             session-revocation checks); `None` when the request never
             resolved to a user at all (e.g. an invalid/expired token).
     """
-    await _audit_logger.record(
-        event_type="ACCESS_DENIED",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        ip_address=ip_address,
+    await _auditLogger.record(
+        eventType="ACCESS_DENIED",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        ipAddress=ipAddress,
     )
 
 
-async def log_patient_login_success(user_id, patient_id, session_id, ip_address: str) -> None:
+async def logPatientLoginSuccess(userId, patientId, sessionId, ipAddress: str) -> None:
     """Record a successful patient-portal login as a `PATIENT_LOGIN` audit entry."""
-    await _audit_logger.record(
-        event_type="PATIENT_LOGIN",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        detail_json={
+    await _auditLogger.record(
+        eventType="PATIENT_LOGIN",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={
             "role": "PATIENT",
-            "patient_id": str(patient_id),
-            **({"session_id": str(session_id)} if session_id else {}),
+            "patient_id": str(patientId),
+            **({"session_id": str(sessionId)} if sessionId else {}),
         },
-        ip_address=ip_address,
+        ipAddress=ipAddress,
     )
 
 
-async def log_patient_login_failed(ip_address: str, patient_id=None) -> None:
+async def logPatientLoginFailed(ipAddress: str, patientId=None) -> None:
     """Record a failed patient-portal login as a `PATIENT_LOGIN_FAILED` audit entry.
 
     Args:
@@ -176,25 +176,25 @@ async def log_patient_login_failed(ip_address: str, patient_id=None) -> None:
             payload when unknown.
     """
     detail: dict = {}
-    if patient_id:
-        detail["patient_id"] = str(patient_id)
-    await _audit_logger.record(
-        event_type="PATIENT_LOGIN_FAILED",
-        entity_type="auth",
-        entity_id=settings.zero_uuid,
-        user_id=None,
-        detail_json=detail if detail else None,
-        ip_address=ip_address,
+    if patientId:
+        detail["patient_id"] = str(patientId)
+    await _auditLogger.record(
+        eventType="PATIENT_LOGIN_FAILED",
+        entityType="auth",
+        entityId=settings.zeroUuid,
+        userId=None,
+        detailJson=detail if detail else None,
+        ipAddress=ipAddress,
     )
 
 
-async def log_patient_logout(user_id, session_id, ip_address: str) -> None:
+async def logPatientLogout(userId, sessionId, ipAddress: str) -> None:
     """Record a patient-portal logout as a `PATIENT_LOGOUT` audit entry."""
-    await _audit_logger.record(
-        event_type="PATIENT_LOGOUT",
-        entity_type="auth",
-        entity_id=user_id or settings.zero_uuid,
-        user_id=user_id,
-        detail_json={"session_id": str(session_id)} if session_id else None,
-        ip_address=ip_address,
+    await _auditLogger.record(
+        eventType="PATIENT_LOGOUT",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={"session_id": str(sessionId)} if sessionId else None,
+        ipAddress=ipAddress,
     )

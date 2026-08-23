@@ -42,44 +42,44 @@ class Image(Base):
 
     __tablename__ = "images"
 
-    image_id: Mapped[uuid.UUID] = mapped_column(
+    imageId: Mapped[uuid.UUID] = mapped_column("image_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    specimen_id: Mapped[uuid.UUID] = mapped_column(
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
         UUID(as_uuid=True),
         ForeignKey("specimens.specimen_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    uploaded_by: Mapped[uuid.UUID] = mapped_column(
+    uploadedBy: Mapped[uuid.UUID] = mapped_column("uploaded_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
 
     # ── S3 storage ────────────────────────────────────────────────────────────
-    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
-    file_format: Mapped[str] = mapped_column(String(10), nullable=False)
+    storageKey: Mapped[str] = mapped_column("storage_key", Text, nullable=False)
+    fileFormat: Mapped[str] = mapped_column("file_format", String(10), nullable=False)
 
     # ── Validated dimensions ─────────────────────────────────────────────────
-    width_px: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    height_px: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    widthPx: Mapped[int] = mapped_column("width_px", SmallInteger, nullable=False)
+    heightPx: Mapped[int] = mapped_column("height_px", SmallInteger, nullable=False)
+    fileSizeBytes: Mapped[int] = mapped_column("file_size_bytes", Integer, nullable=False)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=ImageStatus.ACTIVE
     )
-    uploaded_at: Mapped[datetime] = mapped_column(
+    uploadedAt: Mapped[datetime] = mapped_column("uploaded_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    discarded_at: Mapped[datetime | None] = mapped_column(
+    discardedAt: Mapped[datetime | None] = mapped_column("discarded_at", 
         DateTime(timezone=True), nullable=True
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
     specimen: Mapped[Specimen] = relationship(back_populates="images")
-    analysis_result: Mapped[AnalysisResult | None] = relationship(
+    analysisResult: Mapped[AnalysisResult | None] = relationship(
         back_populates="image", uselist=False
     )
 
@@ -87,14 +87,14 @@ class Image(Base):
     @property
     def id(self) -> uuid.UUID:
         """Alias for `image_id`, for callers expecting a generic `id` field."""
-        return self.image_id
+        return self.imageId
 
     @property
-    def is_discarded(self) -> bool:
+    def isDiscarded(self) -> bool:
         """Whether this image has been discarded (retake flow)."""
         return self.status == ImageStatus.DISCARDED
 
     @property
-    def meets_minimum_resolution(self) -> bool:
+    def meetsMinimumResolution(self) -> bool:
         """Whether this image meets the 640×480 minimum required for AI analysis."""
-        return self.width_px >= 640 and self.height_px >= 480
+        return self.widthPx >= 640 and self.heightPx >= 480

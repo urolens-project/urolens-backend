@@ -5,12 +5,12 @@ from supabase import AsyncClient
 
 from .config import settings
 
-supabase = AsyncClient(settings.supabase_url, settings.supabase_service_key)
+supabase = AsyncClient(settings.supabaseUrl, settings.supabaseServiceKey)
 """Module-level singleton Supabase client. Import and use directly, or via
 `get_supabase` as a FastAPI dependency."""
 
 
-async def get_supabase() -> AsyncClient:
+async def getSupabase() -> AsyncClient:
     """FastAPI dependency returning the shared Supabase client.
 
     Returns:

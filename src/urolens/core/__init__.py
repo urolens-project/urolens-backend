@@ -10,30 +10,30 @@ entry.
 """
 from .audit_logger import (  # noqa: F401
     AuditLogger,
-    get_audit_logger,
-    log_access_denied,
-    log_login_failed,
-    log_login_success,
-    log_logout,
-    log_patient_login_failed,
-    log_patient_login_success,
-    log_patient_logout,
+    getAuditLogger,
+    logAccessDenied,
+    logLoginFailed,
+    logLoginSuccess,
+    logLogout,
+    logPatientLoginFailed,
+    logPatientLoginSuccess,
+    logPatientLogout,
 )
 from .auth_service import (  # noqa: F401
-    close_session,
-    create_session,
-    decode_jwt,
-    get_user_by_username,
-    hash_password,
-    increment_failed_attempts,
-    is_session_active,
-    issue_jwt,
-    reset_failed_attempts,
-    verify_password,
+    closeSession,
+    createSession,
+    decodeJwt,
+    getUserByUsername,
+    hashPassword,
+    incrementFailedAttempts,
+    isSessionActive,
+    issueJwt,
+    resetFailedAttempts,
+    verifyPassword,
 )
 from .config import Settings, settings  # noqa: F401
-from .database import AsyncSessionLocal, engine, get_db  # noqa: F401
-from .encryption import decrypt_pii, encrypt_pii  # noqa: F401
+from .database import AsyncSessionLocal, engine, getDb  # noqa: F401
+from .encryption import decryptPii, encryptPii  # noqa: F401
 from .enums import UserRole  # noqa: F401
 from .exceptions import (  # noqa: F401
     ConflictError,
@@ -46,5 +46,5 @@ from .exceptions import (  # noqa: F401
     StorageError,
     UnprocessableException,
 )
-from .rbac import RequireRole, get_current_user, security_scheme  # noqa: F401
-from .supabase import get_supabase, supabase  # noqa: F401
+from .rbac import RequireRole, getCurrentUser, securityScheme  # noqa: F401
+from .supabase import getSupabase, supabase  # noqa: F401

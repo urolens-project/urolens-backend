@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.database import get_db
+from src.urolens.core.database import getDb
 from src.urolens.core.enums import UserRole
 from src.urolens.core.rbac import RequireRole
 from src.urolens.schemas.specimen import (
@@ -30,48 +30,48 @@ _medtech = RequireRole([UserRole.MEDTECH])
 
 
 @router.get("", response_model=list[SpecimenListItem])
-async def list_specimens_endpoint(
-    specimen_status: str | None = Query(default=None, alias="status"),
-    current_user: dict = Depends(_receptionist),
-    db: AsyncSession = Depends(get_db),
+async def listSpecimensEndpoint(
+    specimenStatus: str | None = Query(default=None, alias="status"),
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
 ):
     """List specimens, optionally filtered by status; see
     `specimen_service.list_specimens`.
     """
-    return await specimen_service.list_specimens(db, specimen_status)
+    return await specimen_service.listSpecimens(db, specimenStatus)
 
 
 @router.get("/search-request", response_model=list[LabRequestSearchItem])
-async def search_pending_lab_requests(
+async def searchPendingLabRequests(
     q: str,
-    current_user: dict = Depends(_receptionist),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
 ):
     """Search `PENDING_SAMPLE` lab requests; see
     `lab_request_service.search_pending_lab_requests`.
     """
-    return await lab_request_service.search_pending_lab_requests(db, q)
+    return await lab_request_service.searchPendingLabRequests(db, q)
 
 
 @router.post("/receive", response_model=SpecimenReceiveResponse, status_code=201)
-async def receive_specimen_endpoint(
+async def receiveSpecimenEndpoint(
     payload: SpecimenReceiveRequest,
-    current_user: dict = Depends(_receptionist),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
 ):
     """Receive a specimen against a lab request; see
     `specimen_service.receive_specimen`.
     """
-    receptionist_id = uuid.UUID(current_user["user_id"])
-    return await specimen_service.receive_specimen(db, receptionist_id, payload)
+    receptionistId = uuid.UUID(currentUser["user_id"])
+    return await specimen_service.receiveSpecimen(db, receptionistId, payload)
 
 
 @router.post("/{specimen_id}/reject", response_model=SpecimenRejectResponse)
-async def reject_specimen_endpoint(
+async def rejectSpecimenEndpoint(
     specimen_id: UUID,
     body: SpecimenRejectRequest,
-    current_user: dict = Depends(_medtech),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(_medtech),
+    db: AsyncSession = Depends(getDb),
 ):
     """Ported from app/api/specimens.py + app/services/specimen_service.py
     (consolidation plan row 9 / Track A2 reconciliation). Originally had no
@@ -79,7 +79,7 @@ async def reject_specimen_endpoint(
     which the standards skill's rule 2 forbids. Now gated at the route (rule
     2) in addition to the ownership check the service still performs.
     """
-    user_id = uuid.UUID(current_user["user_id"])
-    return await specimen_service.reject_specimen(
-        db, specimen_id, user_id, body.reason_code, body.free_text_note
+    userId = uuid.UUID(currentUser["user_id"])
+    return await specimen_service.rejectSpecimen(
+        db, specimen_id, userId, body.reasonCode, body.freeTextNote
     )

@@ -34,28 +34,28 @@ class ResultReview(Base):
 
     __tablename__ = "result_reviews"
 
-    review_id: Mapped[uuid.UUID] = mapped_column(
+    reviewId: Mapped[uuid.UUID] = mapped_column("review_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    reviewed_by: Mapped[uuid.UUID] = mapped_column(
+    reviewedBy: Mapped[uuid.UUID] = mapped_column("reviewed_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    annotation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    spatial_annotations: Mapped[list[dict[str, Any]] | None] = mapped_column(
+    annotationNotes: Mapped[str | None] = mapped_column("annotation_notes", Text, nullable=True)
+    spatialAnnotations: Mapped[list[dict[str, Any]] | None] = mapped_column("spatial_annotations", 
         JSONB, nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", 
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -65,4 +65,4 @@ class ResultReview(Base):
     @property
     def id(self) -> uuid.UUID:
         """Alias for `review_id`, for callers expecting a generic `id` field."""
-        return self.review_id
+        return self.reviewId

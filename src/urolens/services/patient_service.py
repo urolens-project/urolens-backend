@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.auth_service import hash_password
-from src.urolens.core.encryption import decrypt_pii, encrypt_pii
+from src.urolens.core.auth_service import hashPassword
+from src.urolens.core.encryption import decryptPii, encryptPii
 from src.urolens.models.consent import Consent
 from src.urolens.models.patient import Patient
 from src.urolens.models.user import User
@@ -33,12 +33,12 @@ class PatientService:
     is committed unless every step succeeds.
     """
 
-    def __init__(self, db: AsyncSession, audit_logger: AuditLogger) -> None:
+    def __init__(self, db: AsyncSession, auditLogger: AuditLogger) -> None:
         self.db = db
-        self.audit_logger = audit_logger
+        self.auditLogger = auditLogger
 
-    async def create_patient(
-        self, data: PatientCreateRequest, created_by: str, request: Request
+    async def createPatient(
+        self, data: PatientCreateRequest, createdBy: str, request: Request
     ) -> PatientResponse:
         """Create a patient record, portal account, and consent record.
 
@@ -59,58 +59,58 @@ class PatientService:
                 birth already exists; 500 if the portal account could not be
                 created or a unique patient UID could not be generated.
         """
-        await self._reject_if_duplicate(data)
+        await self._rejectIfDuplicate(data)
 
-        patient_uid = await self._generate_patient_uid()
+        patientUid = await self._generatePatientUid()
 
-        dob = data.date_of_birth
-        portal_password = f"{data.last_name.upper()}{dob.day:02d}{dob.month:02d}{dob.year:04d}"
-        hashed_pw = await asyncio.to_thread(hash_password, portal_password)
+        dob = data.dateOfBirth
+        portalPassword = f"{data.lastName.upper()}{dob.day:02d}{dob.month:02d}{dob.year:04d}"
+        hashedPw = await asyncio.to_thread(hashPassword, portalPassword)
 
-        portal_user = User(
-            username=patient_uid,
-            hashed_password=hashed_pw,
+        portalUser = User(
+            username=patientUid,
+            hashedPassword=hashedPw,
             role="PATIENT",
-            is_active=True,
+            isActive=True,
         )
-        self.db.add(portal_user)
-        await self.db.flush([portal_user])
+        self.db.add(portalUser)
+        await self.db.flush([portalUser])
 
-        creator_id = uuid.UUID(str(created_by))
+        creatorId = uuid.UUID(str(createdBy))
         patient = Patient(
-            patient_uid=patient_uid,
-            first_name=encrypt_pii(data.first_name),
-            middle_name=encrypt_pii(data.middle_name) if data.middle_name else None,
-            last_name=encrypt_pii(data.last_name),
-            date_of_birth=encrypt_pii(str(data.date_of_birth)),
+            patientUid=patientUid,
+            firstName=encryptPii(data.firstName),
+            middleName=encryptPii(data.middleName) if data.middleName else None,
+            lastName=encryptPii(data.lastName),
+            dateOfBirth=encryptPii(str(data.dateOfBirth)),
             sex=data.sex.value,
-            contact_no=encrypt_pii(data.contact_no) if data.contact_no else None,
-            address=encrypt_pii(data.address) if data.address else None,
-            clinical_history=data.clinical_history,
-            is_walkin=data.is_walkin,
-            record_flag="COMPLETE",
-            created_by=creator_id,
-            user_id=portal_user.user_id,
+            contactNo=encryptPii(data.contactNo) if data.contactNo else None,
+            address=encryptPii(data.address) if data.address else None,
+            clinicalHistory=data.clinicalHistory,
+            isWalkin=data.isWalkin,
+            recordFlag="COMPLETE",
+            createdBy=creatorId,
+            userId=portalUser.userId,
         )
         self.db.add(patient)
         await self.db.flush([patient])
 
         self.db.add(
             Consent(
-                patient_id=patient.patient_id,
-                consent_process=data.consent.consent_given,
-                consent_storage=data.consent.consent_storage,
-                consent_research=data.consent.consent_research,
-                recorded_by=creator_id,
+                patientId=patient.patientId,
+                consentProcess=data.consent.consentGiven,
+                consentStorage=data.consent.consentStorage,
+                consentResearch=data.consent.consentResearch,
+                recordedBy=creatorId,
             )
         )
 
-        await self.audit_logger.record(
+        await self.auditLogger.record(
             "PATIENT_CREATED",
-            entity_type="patient",
-            entity_id=patient.patient_id,
-            user_id=created_by,
-            detail_json={"patient_uid": patient_uid},
+            entityType="patient",
+            entityId=patient.patientId,
+            userId=createdBy,
+            detailJson={"patient_uid": patientUid},
             request=request,
         )
 
@@ -118,25 +118,25 @@ class PatientService:
         await self.db.refresh(patient)
 
         return PatientResponse(
-            patient_id=patient.patient_id,
-            patient_uid=patient_uid,
-            first_name=data.first_name,
-            middle_name=data.middle_name,
-            last_name=data.last_name,
-            date_of_birth=str(data.date_of_birth),
+            patientId=patient.patientId,
+            patientUid=patientUid,
+            firstName=data.firstName,
+            middleName=data.middleName,
+            lastName=data.lastName,
+            dateOfBirth=str(data.dateOfBirth),
             sex=data.sex.value,
-            contact_no=data.contact_no,
+            contactNo=data.contactNo,
             address=data.address,
-            clinical_history=data.clinical_history,
-            is_walkin=data.is_walkin,
-            record_flag="COMPLETE",
-            created_at=patient.created_at,
-            user_id=portal_user.user_id,
-            portal_username=patient_uid,
-            portal_password=portal_password,
+            clinicalHistory=data.clinicalHistory,
+            isWalkin=data.isWalkin,
+            recordFlag="COMPLETE",
+            createdAt=patient.createdAt,
+            userId=portalUser.userId,
+            portalUsername=patientUid,
+            portalPassword=portalPassword,
         )
 
-    async def search_patients(self, q: str) -> list[PatientResponse]:
+    async def searchPatients(self, q: str) -> list[PatientResponse]:
         """Search patients by decrypted first/last name substring match.
 
         Args:
@@ -147,37 +147,37 @@ class PatientService:
             (same unordered-scan behavior as the prior implementation).
         """
         rows = (await self.db.execute(select(Patient).limit(_SEARCH_LIMIT))).scalars().all()
-        q_lower = q.lower()
+        qLower = q.lower()
 
         responses: list[PatientResponse] = []
         for row in rows:
             try:
-                first = decrypt_pii(row.first_name)
-                last = decrypt_pii(row.last_name)
+                first = decryptPii(row.firstName)
+                last = decryptPii(row.lastName)
             except Exception:
                 continue
 
-            if q_lower in first.lower() or q_lower in last.lower():
+            if qLower in first.lower() or qLower in last.lower():
                 responses.append(
                     PatientResponse(
-                        patient_id=row.patient_id,
-                        patient_uid=row.patient_uid,
-                        first_name=first,
-                        middle_name=decrypt_pii(row.middle_name) if row.middle_name else None,
-                        last_name=last,
-                        date_of_birth=decrypt_pii(row.date_of_birth),
+                        patientId=row.patientId,
+                        patientUid=row.patientUid,
+                        firstName=first,
+                        middleName=decryptPii(row.middleName) if row.middleName else None,
+                        lastName=last,
+                        dateOfBirth=decryptPii(row.dateOfBirth),
                         sex=row.sex,
-                        contact_no=decrypt_pii(row.contact_no) if row.contact_no else None,
-                        address=decrypt_pii(row.address) if row.address else None,
-                        clinical_history=row.clinical_history,
-                        is_walkin=row.is_walkin,
-                        record_flag=row.record_flag,
-                        created_at=row.created_at,
+                        contactNo=decryptPii(row.contactNo) if row.contactNo else None,
+                        address=decryptPii(row.address) if row.address else None,
+                        clinicalHistory=row.clinicalHistory,
+                        isWalkin=row.isWalkin,
+                        recordFlag=row.recordFlag,
+                        createdAt=row.createdAt,
                     )
                 )
         return responses
 
-    async def get_patient_by_user_id(self, user_id: str) -> PatientResponse:
+    async def getPatientByUserId(self, userId: str) -> PatientResponse:
         """Look up the patient record linked to a portal account.
 
         Args:
@@ -190,7 +190,7 @@ class PatientService:
         Raises:
             HTTPException: 404 if no patient record is linked to this account.
         """
-        stmt = select(Patient).where(Patient.user_id == uuid.UUID(str(user_id)))
+        stmt = select(Patient).where(Patient.userId == uuid.UUID(str(userId)))
         row = (await self.db.execute(stmt)).scalar_one_or_none()
         if row is None:
             raise HTTPException(
@@ -199,22 +199,22 @@ class PatientService:
             )
 
         return PatientResponse(
-            patient_id=row.patient_id,
-            patient_uid=row.patient_uid,
-            first_name=decrypt_pii(row.first_name),
-            middle_name=decrypt_pii(row.middle_name) if row.middle_name else None,
-            last_name=decrypt_pii(row.last_name),
-            date_of_birth=decrypt_pii(row.date_of_birth),
+            patientId=row.patientId,
+            patientUid=row.patientUid,
+            firstName=decryptPii(row.firstName),
+            middleName=decryptPii(row.middleName) if row.middleName else None,
+            lastName=decryptPii(row.lastName),
+            dateOfBirth=decryptPii(row.dateOfBirth),
             sex=row.sex,
-            contact_no=decrypt_pii(row.contact_no) if row.contact_no else None,
-            address=decrypt_pii(row.address) if row.address else None,
-            clinical_history=row.clinical_history,
-            is_walkin=row.is_walkin,
-            record_flag=row.record_flag,
-            created_at=row.created_at,
+            contactNo=decryptPii(row.contactNo) if row.contactNo else None,
+            address=decryptPii(row.address) if row.address else None,
+            clinicalHistory=row.clinicalHistory,
+            isWalkin=row.isWalkin,
+            recordFlag=row.recordFlag,
+            createdAt=row.createdAt,
         )
 
-    async def _reject_if_duplicate(self, data: PatientCreateRequest) -> None:
+    async def _rejectIfDuplicate(self, data: PatientCreateRequest) -> None:
         """Raise 409 if an existing patient matches on name + date of birth.
 
         PII is Fernet-encrypted with a random IV, so it can't be matched with
@@ -226,15 +226,15 @@ class PatientService:
             HTTPException: 409 if a match is found.
         """
         stmt = select(
-            Patient.first_name, Patient.last_name, Patient.date_of_birth
+            Patient.firstName, Patient.lastName, Patient.dateOfBirth
         ).limit(_DUPLICATE_CHECK_LIMIT)
         rows = (await self.db.execute(stmt)).all()
-        for first_enc, last_enc, dob_enc in rows:
+        for firstEnc, lastEnc, dobEnc in rows:
             try:
                 if (
-                    decrypt_pii(first_enc).lower() == data.first_name.lower()
-                    and decrypt_pii(last_enc).lower() == data.last_name.lower()
-                    and decrypt_pii(dob_enc) == str(data.date_of_birth)
+                    decryptPii(firstEnc).lower() == data.firstName.lower()
+                    and decryptPii(lastEnc).lower() == data.lastName.lower()
+                    and decryptPii(dobEnc) == str(data.dateOfBirth)
                 ):
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -245,7 +245,7 @@ class PatientService:
             except Exception:
                 continue
 
-    async def _generate_patient_uid(self) -> str:
+    async def _generatePatientUid(self) -> str:
         """Generate a sequential `PAT-NNNNNN` patient UID, safe under
         concurrent inserts.
 
@@ -267,19 +267,19 @@ class PatientService:
                 `_UID_GENERATION_ATTEMPTS` attempts.
         """
         for _ in range(_UID_GENERATION_ATTEMPTS):
-            rows = (await self.db.execute(select(Patient.patient_uid))).scalars().all()
-            max_num = 0
+            rows = (await self.db.execute(select(Patient.patientUid))).scalars().all()
+            maxNum = 0
             for uid in rows:
                 try:
                     num = int(uid.split("-")[-1])
-                    if num > max_num:
-                        max_num = num
+                    if num > maxNum:
+                        maxNum = num
                 except (ValueError, AttributeError):
                     continue
-            candidate = f"PAT-{max_num + 1:06d}"
+            candidate = f"PAT-{maxNum + 1:06d}"
 
             existing = await self.db.execute(
-                select(Patient.patient_id).where(Patient.patient_uid == candidate)
+                select(Patient.patientId).where(Patient.patientUid == candidate)
             )
             if existing.scalar_one_or_none() is None:
                 return candidate

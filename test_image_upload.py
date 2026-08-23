@@ -23,7 +23,7 @@ MEDTECH_USERNAME = "medtech"
 MEDTECH_PASSWORD = "password123"
 
 
-def _make_synthetic_microscopy_image() -> bytes:
+def _makeSyntheticMicroscopyImage() -> bytes:
     """Generate a 640x480 grayscale image that loosely resembles a urine microscopy field."""
     random.seed(42)
     img = Image.new("RGB", (640, 480), color=(20, 20, 30))
@@ -66,41 +66,41 @@ async def main():
         print(f"ERROR: result_id {RESULT_ID!r} not found in analysis_results.")
         sys.exit(1)
 
-    specimen_id = res.data[0]["specimen_id"]
-    print(f"Found specimen_id: {specimen_id}")
+    specimenId = res.data[0]["specimen_id"]
+    print(f"Found specimen_id: {specimenId}")
 
     # 2. Login as medtech to get JWT
     print(f"\nLogging in as {MEDTECH_USERNAME!r} ...")
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=30) as client:
-        login_resp = await client.post("/auth/login", json={"username": MEDTECH_USERNAME, "password": MEDTECH_PASSWORD})
-        if login_resp.status_code != 200:
-            print(f"ERROR: Login failed {login_resp.status_code}: {login_resp.text}")
+        loginResp = await client.post("/auth/login", json={"username": MEDTECH_USERNAME, "password": MEDTECH_PASSWORD})
+        if loginResp.status_code != 200:
+            print(f"ERROR: Login failed {loginResp.status_code}: {loginResp.text}")
             sys.exit(1)
 
-        token = login_resp.json().get("access_token")
+        token = loginResp.json().get("access_token")
         if not token:
-            print(f"ERROR: No access_token in response: {login_resp.json()}")
+            print(f"ERROR: No access_token in response: {loginResp.json()}")
             sys.exit(1)
 
         print(f"Got JWT (first 40 chars): {token[:40]}...")
 
         # 3. Generate synthetic image
         print("\nGenerating synthetic 640x480 microscopy image ...")
-        image_bytes = _make_synthetic_microscopy_image()
-        print(f"Image size: {len(image_bytes):,} bytes")
+        imageBytes = _makeSyntheticMicroscopyImage()
+        print(f"Image size: {len(imageBytes):,} bytes")
 
         # 4. Upload
         print(f"\nUploading to POST {BASE_URL}/images/upload ...")
-        upload_resp = await client.post(
+        uploadResp = await client.post(
             "/images/upload",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("microscopy_test.jpg", image_bytes, "image/jpeg")},
-            data={"specimen_id": specimen_id},
+            files={"file": ("microscopy_test.jpg", imageBytes, "image/jpeg")},
+            data={"specimen_id": specimenId},
         )
 
-        print(f"Response status: {upload_resp.status_code}")
-        if upload_resp.status_code in (200, 201):
-            data = upload_resp.json()
+        print(f"Response status: {uploadResp.status_code}")
+        if uploadResp.status_code in (200, 201):
+            data = uploadResp.json()
             print("SUCCESS!")
             print(f"  result_id:  {data.get('result_id')}")
             print(f"  image_id:   {data.get('image_id')}")
@@ -108,7 +108,7 @@ async def main():
             print(f"  ai_findings:{data.get('ai_findings')}")
             print("\nRefresh the supervisor result review page — the image should now appear.")
         else:
-            print(f"ERROR: {upload_resp.text}")
+            print(f"ERROR: {uploadResp.text}")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ class ImageFormatError(HTTPException):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=message,
         )
-        self.error_code = "INVALID_IMAGE_FORMAT"
+        self.errorCode = "INVALID_IMAGE_FORMAT"
 
 
 class ImageResolutionError(HTTPException):
@@ -31,7 +31,7 @@ class ImageResolutionError(HTTPException):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=message,
         )
-        self.error_code = "INVALID_IMAGE_RESOLUTION"
+        self.errorCode = "INVALID_IMAGE_RESOLUTION"
 
 
 class StorageError(HTTPException):
@@ -44,7 +44,7 @@ class StorageError(HTTPException):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=message,
         )
-        self.error_code = "STORAGE_ERROR"
+        self.errorCode = "STORAGE_ERROR"
 
 
 class NotFoundError(HTTPException):
@@ -55,7 +55,7 @@ class NotFoundError(HTTPException):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=message,
         )
-        self.error_code = "NOT_FOUND"
+        self.errorCode = "NOT_FOUND"
 
 
 class ConflictError(HTTPException):
@@ -68,7 +68,7 @@ class ConflictError(HTTPException):
             status_code=status.HTTP_409_CONFLICT,
             detail=message,
         )
-        self.error_code = "CONFLICT"
+        self.errorCode = "CONFLICT"
 
 
 class SpecimenNotFoundError(NotFoundError):
@@ -80,10 +80,10 @@ class SpecimenNotFoundError(NotFoundError):
             falls back to a generic "not found" if omitted.
     """
 
-    def __init__(self, specimen_id: str | None = None):
-        msg = f"Specimen {specimen_id} not found." if specimen_id else "Specimen not found."
+    def __init__(self, specimenId: str | None = None):
+        msg = f"Specimen {specimenId} not found." if specimenId else "Specimen not found."
         super().__init__(message=msg)
-        self.error_code = "SPECIMEN_NOT_FOUND"
+        self.errorCode = "SPECIMEN_NOT_FOUND"
 
 
 # ── Service-layer exceptions (used by service classes, not raised as HTTP directly) ──
@@ -99,7 +99,7 @@ class NotFoundException(HTTPException):
 
     def __init__(self, code: str = "NOT_FOUND", message: str = "Resource not found."):
         super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=message)
-        self.error_code = code
+        self.errorCode = code
 
 
 class ConflictException(HTTPException):
@@ -113,7 +113,7 @@ class ConflictException(HTTPException):
 
     def __init__(self, code: str = "CONFLICT", message: str = "Resource state conflict."):
         super().__init__(status_code=status.HTTP_409_CONFLICT, detail=message)
-        self.error_code = code
+        self.errorCode = code
 
 
 class UnprocessableException(HTTPException):
@@ -126,4 +126,4 @@ class UnprocessableException(HTTPException):
 
     def __init__(self, code: str = "UNPROCESSABLE", message: str = "Request cannot be processed."):
         super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
-        self.error_code = code
+        self.errorCode = code

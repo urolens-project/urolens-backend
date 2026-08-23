@@ -9,21 +9,21 @@ from pydantic import BaseModel
 class ReceivedSpecimenSearchItem(BaseModel):
     """One `RECEIVED`-status specimen, for the label-generation search."""
 
-    specimen_id: UUID
-    sample_uid: str | None = None
-    patient_name: str
-    patient_uid: str | None = None
-    test_type: str | None = None
+    specimenId: UUID
+    sampleUid: str | None = None
+    patientName: str
+    patientUid: str | None = None
+    testType: str | None = None
     status: str
 
 
 class LabelPreviewData(BaseModel):
     """The printable content of a generated specimen label."""
 
-    patient_name: str
-    patient_uid: str | None = None
-    sample_uid: str | None = None
-    test_type: str | None = None
+    patientName: str
+    patientUid: str | None = None
+    sampleUid: str | None = None
+    testType: str | None = None
     date: str
 
 
@@ -31,15 +31,15 @@ class PrintLabelResponse(BaseModel):
     """Response body confirming a generated label and its print job."""
 
     success: bool
-    label_id: UUID
-    print_job_id: UUID
+    labelId: UUID
+    printJobId: UUID
     preview: LabelPreviewData
 
 
 class LabelConfirmRequest(BaseModel):
     """Request body for confirming a label has been physically affixed."""
 
-    offline_override: bool = False
+    offlineOverride: bool = False
 
 
 class LabelConfirmResponse(BaseModel):
@@ -47,5 +47,5 @@ class LabelConfirmResponse(BaseModel):
 
     success: bool
     message: str
-    updated_status: str
-    offline_override_used: bool
+    updatedStatus: str
+    offlineOverrideUsed: bool

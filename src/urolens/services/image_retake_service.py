@@ -30,10 +30,10 @@ class ImageRetakeService:
     can be uploaded, per the module docstring above.
     """
 
-    async def discard_and_retake(
+    async def discardAndRetake(
         self,
-        image_id: uuid.UUID,
-        medtech_id: uuid.UUID,
+        imageId: uuid.UUID,
+        medtechId: uuid.UUID,
         request: Any = None,
     ) -> dict:
         """Mark the image DISCARDED so the MedTech can submit a new one.
@@ -49,13 +49,13 @@ class ImageRetakeService:
         result = await (
             sb.table("images")
             .select("image_id, specimen_id, status")
-            .eq("image_id", str(image_id))
+            .eq("image_id", str(imageId))
             .execute()
         )
         rows = result.data or []
 
         if not rows:
-            raise NotFoundError(f"Image {image_id} not found.")
+            raise NotFoundError(f"Image {imageId} not found.")
 
         image = rows[0]
 
@@ -69,39 +69,39 @@ class ImageRetakeService:
             )
 
         # ── 2. Mark image DISCARDED ───────────────────────────────────────────
-        now_iso = datetime.now(UTC).isoformat()
+        nowIso = datetime.now(UTC).isoformat()
         try:
             await (
                 sb.table("images")
-                .update({"status": "DISCARDED", "discarded_at": now_iso, "updated_at": now_iso})
-                .eq("image_id", str(image_id))
+                .update({"status": "DISCARDED", "discarded_at": nowIso, "updated_at": nowIso})
+                .eq("image_id", str(imageId))
                 .execute()
             )
         except Exception:
             # Retry without updated_at if that column doesn't exist
             await (
                 sb.table("images")
-                .update({"status": "DISCARDED", "discarded_at": now_iso})
-                .eq("image_id", str(image_id))
+                .update({"status": "DISCARDED", "discarded_at": nowIso})
+                .eq("image_id", str(imageId))
                 .execute()
             )
 
         # ── 3. Write audit log (non-fatal) ────────────────────────────────────
         try:
-            ip_address: str | None = None
+            ipAddress: str | None = None
             if request and hasattr(request, "client") and request.client:
-                ip_address = request.client.host
+                ipAddress = request.client.host
 
             await sb.table("audit_logs").insert({
                 "event_type": "IMAGE_DISCARDED",
                 "entity_type": "image",
-                "entity_id": str(image_id),
-                "user_id": str(medtech_id),
-                "ip_address": ip_address,
+                "entity_id": str(imageId),
+                "user_id": str(medtechId),
+                "ip_address": ipAddress,
                 "detail_json": json.dumps({"specimen_id": image["specimen_id"]}),
-                "occurred_at": now_iso,
+                "occurred_at": nowIso,
             }).execute()
         except Exception as exc:
             log.warning("Could not write IMAGE_DISCARDED audit log: %s", exc)
 
-        return {"image_id": str(image_id), "status": "DISCARDED", "discarded_at": now_iso}
+        return {"imageId": str(imageId), "status": "DISCARDED", "discardedAt": nowIso}

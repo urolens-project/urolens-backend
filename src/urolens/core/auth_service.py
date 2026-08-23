@@ -12,7 +12,7 @@ from .config import settings
 from .supabase import supabase
 
 
-async def verify_password(plain_password: str, hashed_password: str) -> bool:
+async def verifyPassword(plainPassword: str, hashedPassword: str) -> bool:
     """Check a plaintext password against a stored bcrypt hash.
 
     Args:
@@ -30,25 +30,25 @@ async def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return await asyncio.to_thread(
             bcrypt.checkpw,
-            plain_password.encode("utf-8"),
-            hashed_password.encode("utf-8"),
+            plainPassword.encode("utf-8"),
+            hashedPassword.encode("utf-8"),
         )
     except ValueError:
         return False
 
 
-def hash_password(plain_password: str) -> str:
+def hashPassword(plainPassword: str) -> str:
     """Hash a plaintext password with bcrypt (a fresh random salt per call).
 
     Returns:
         The bcrypt hash, encoded as a UTF-8 string suitable for storage.
     """
     return bcrypt.hashpw(
-        plain_password.encode("utf-8"), bcrypt.gensalt()
+        plainPassword.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
 
 
-async def get_user_by_username(username: str) -> dict | None:
+async def getUserByUsername(username: str) -> dict | None:
     """Look up a user row by username.
 
     Returns:
@@ -60,34 +60,34 @@ async def get_user_by_username(username: str) -> dict | None:
     return result.data if result is not None else None
 
 
-async def increment_failed_attempts(user_id) -> None:
+async def incrementFailedAttempts(userId) -> None:
     """Increment a user's `failed_attempts` counter after a failed login,
     locking the account (setting `locked_at`) once the count reaches
     `settings.max_failed_attempts`. No-op if the user no longer exists.
     """
-    user = await _get_user_by_id(user_id)
+    user = await _getUserById(userId)
     if not user:
         return
-    new_count = user["failed_attempts"] + 1
-    update_data = {"failed_attempts": new_count}
-    if new_count >= settings.max_failed_attempts:
-        update_data["locked_at"] = datetime.now(UTC).isoformat()
-    await supabase.table("users").update(update_data).eq(
-        "user_id", str(user_id)
+    newCount = user["failed_attempts"] + 1
+    updateData = {"failed_attempts": newCount}
+    if newCount >= settings.maxFailedAttempts:
+        updateData["locked_at"] = datetime.now(UTC).isoformat()
+    await supabase.table("users").update(updateData).eq(
+        "user_id", str(userId)
     ).execute()
 
 
-async def reset_failed_attempts(user_id) -> None:
+async def resetFailedAttempts(userId) -> None:
     """Clear a user's `failed_attempts` counter and any account lock,
     typically after a successful login.
     """
     await supabase.table("users").update(
         {"failed_attempts": 0, "locked_at": None}
-    ).eq("user_id", str(user_id)).execute()
+    ).eq("user_id", str(userId)).execute()
 
 
-async def create_session(
-    user_id, role: str, ip_address: str | None = None, user_agent: str | None = None
+async def createSession(
+    userId, role: str, ipAddress: str | None = None, userAgent: str | None = None
 ) -> dict:
     """Insert a new active row into the `sessions` table for a login.
 
@@ -95,32 +95,32 @@ async def create_session(
         The inserted session row (including its generated `session_id`), or
         `None` if the insert returned no data.
     """
-    session_data = {
-        "user_id": str(user_id),
+    sessionData = {
+        "user_id": str(userId),
         "user_role": role,
         "login_at": datetime.now(UTC).isoformat(),
         "is_active": True,
     }
-    if ip_address:
-        session_data["ip_address"] = ip_address
-    if user_agent:
-        session_data["user_agent"] = user_agent
+    if ipAddress:
+        sessionData["ip_address"] = ipAddress
+    if userAgent:
+        sessionData["user_agent"] = userAgent
 
-    result = await supabase.table("sessions").insert(session_data).execute()
+    result = await supabase.table("sessions").insert(sessionData).execute()
     return result.data[0] if result.data else None
 
 
-async def close_session(session_id) -> None:
+async def closeSession(sessionId) -> None:
     """Mark a session inactive and stamp its `logout_at`, on logout."""
     await supabase.table("sessions").update(
         {
             "is_active": False,
             "logout_at": datetime.now(UTC).isoformat(),
         }
-    ).eq("session_id", str(session_id)).execute()
+    ).eq("session_id", str(sessionId)).execute()
 
 
-def issue_jwt(user_id, username: str, role: str, session_id) -> str:
+def issueJwt(userId, username: str, role: str, sessionId) -> str:
     """Encode and sign an access token carrying identity/role/session claims.
 
     Returns:
@@ -129,17 +129,17 @@ def issue_jwt(user_id, username: str, role: str, session_id) -> str:
     """
     now = datetime.now(UTC)
     payload = {
-        "user_id": str(user_id),
+        "user_id": str(userId),
         "username": username,
         "role": role,
-        "session_id": str(session_id),
+        "session_id": str(sessionId),
         "iat": now,
-        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+        "exp": now + timedelta(minutes=settings.accessTokenExpireMinutes),
     }
-    return jwt.encode(payload, settings.jwt_signing_key, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, settings.jwtSigningKey, algorithm=settings.jwtAlgorithm)
 
 
-def decode_jwt(token: str) -> dict:
+def decodeJwt(token: str) -> dict:
     """Verify and decode an access token issued by `issue_jwt`.
 
     Returns:
@@ -150,10 +150,10 @@ def decode_jwt(token: str) -> dict:
             `InvalidSignatureError`) if the token is malformed, expired, or
             fails signature verification.
     """
-    return jwt.decode(token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm])
+    return jwt.decode(token, settings.jwtSigningKey, algorithms=[settings.jwtAlgorithm])
 
 
-async def is_session_active(session_id) -> bool:
+async def isSessionActive(sessionId) -> bool:
     """Check whether a session is still active (i.e. not logged out/revoked).
 
     Returns:
@@ -161,16 +161,16 @@ async def is_session_active(session_id) -> bool:
         set; `False` for a missing session or an inactive one.
     """
     result = await supabase.table("sessions").select("is_active").eq(
-        "session_id", str(session_id)
+        "session_id", str(sessionId)
     ).maybe_single().execute()
     if result is None or not result.data:
         return False
     return result.data.get("is_active", False)
 
 
-async def _get_user_by_id(user_id) -> dict | None:
+async def _getUserById(userId) -> dict | None:
     # Look up a user row by primary key; returns None if it doesn't exist.
     result = await supabase.table("users").select("*").eq(
-        "user_id", str(user_id)
+        "user_id", str(userId)
     ).maybe_single().execute()
     return result.data if result is not None else None
