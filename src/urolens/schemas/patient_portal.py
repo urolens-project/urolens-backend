@@ -30,24 +30,24 @@ class ParticleCount(BaseModel):
 class PatientResultItem(BaseModel):
     """One result summary, for the patient's result list."""
 
-    result_id: UUID
-    test_type: str
+    resultId: UUID
+    testType: str
     status: str
-    released_at: datetime | None
+    releasedAt: datetime | None
 
 
 class PatientResultDetailResponse(BaseModel):
     """Response body for a patient's single-result detail view."""
 
     status: str
-    confirmed_at: datetime | None
-    confirmation_notes: str | None
-    analyzed_by: str | None
-    particle_counts: list[ParticleCount]
-    particle_classes: list[str]
-    smart_diagnosis_unavailable: bool
-    test_type: str
-    released_at: datetime | None
+    confirmedAt: datetime | None
+    confirmationNotes: str | None
+    analyzedBy: str | None
+    particleCounts: list[ParticleCount]
+    particleClasses: list[str]
+    smartDiagnosisUnavailable: bool
+    testType: str
+    releasedAt: datetime | None
 
 
 # Legacy alias kept for the PDF service which builds its own view of the data.

@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.database import get_db
+from ..core.database import getDb
 from ..core.enums import UserRole
-from ..core.rbac import RequireRole, get_current_user
+from ..core.rbac import RequireRole, getCurrentUser
 from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.notifications import NotificationOut, PushTokenRequest
@@ -19,16 +19,16 @@ router = APIRouter(prefix="/api/v1", tags=["notifications"])
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/notifications", response_model=list[NotificationOut])
-async def list_notifications(
-    current_user: dict = Depends(_REQUIRE_MEDTECH),
-    db: AsyncSession = Depends(get_db),
+async def listNotifications(
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    db: AsyncSession = Depends(getDb),
 ):
     """List the authenticated MedTech's 50 most recent notifications, newest first."""
-    user_id = uuid.UUID(current_user["user_id"])
+    userId = uuid.UUID(currentUser["user_id"])
     stmt = (
         select(Notification)
-        .where(Notification.user_id == user_id)
-        .order_by(Notification.created_at.desc())
+        .where(Notification.userId == userId)
+        .order_by(Notification.createdAt.desc())
         .limit(50)
     )
     result = await db.execute(stmt)
@@ -36,10 +36,10 @@ async def list_notifications(
 
 
 @router.patch("/notifications/{notification_id}/read", status_code=204)
-async def mark_notification_read(
+async def markNotificationRead(
     notification_id: uuid.UUID,
-    current_user: dict = Depends(_REQUIRE_MEDTECH),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    db: AsyncSession = Depends(getDb),
 ):
     """Mark one of the authenticated MedTech's own notifications read.
 
@@ -47,12 +47,12 @@ async def mark_notification_read(
         HTTPException: 404, if `notification_id` doesn't exist or doesn't
             belong to the caller.
     """
-    user_id = uuid.UUID(current_user["user_id"])
+    userId = uuid.UUID(currentUser["user_id"])
     stmt = (
         update(Notification)
         .where(
-            Notification.notification_id == notification_id,
-            Notification.user_id == user_id,
+            Notification.notificationId == notification_id,
+            Notification.userId == userId,
         )
         .values(is_read=True)
     )
@@ -63,18 +63,18 @@ async def mark_notification_read(
 
 
 @router.post("/users/push-token", status_code=204)
-async def register_push_token(
+async def registerPushToken(
     body: PushTokenRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    currentUser: dict = Depends(getCurrentUser),
+    db: AsyncSession = Depends(getDb),
 ):
     """Register or update the authenticated user's Expo push token for
     mobile push notifications.
     """
-    user_id = uuid.UUID(current_user["user_id"])
+    userId = uuid.UUID(currentUser["user_id"])
     stmt = (
         update(User)
-        .where(User.user_id == user_id)
+        .where(User.userId == userId)
         .values(expo_push_token=body.token)
     )
     await db.execute(stmt)

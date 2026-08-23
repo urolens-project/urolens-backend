@@ -25,19 +25,19 @@ class ManualOverrideService:
     def __init__(
         self,
         db: AsyncSession,
-        audit_logger: AuditLogger,
+        auditLogger: AuditLogger,
     ) -> None:
         self.db = db
-        self.audit_logger = audit_logger
+        self.auditLogger = auditLogger
 
-    async def override_parameter(
+    async def overrideParameter(
         self,
-        result_id: uuid.UUID,
+        resultId: uuid.UUID,
         parameter: str,
-        corrected_value: float,
+        correctedValue: float,
         rationale: str,
-        original_ai_value: float,  # Accepted here to match your router argument contract
-        medtech_id: uuid.UUID,
+        originalAiValue: float,  # Accepted here to match your router argument contract
+        medtechId: uuid.UUID,
         request: Request,
     ) -> ManualOverride:
         """Records a MedTech correction for a single AI-generated parameter.
@@ -58,7 +58,7 @@ class ManualOverrideService:
                 (`APPROVED`/`RETURNED_FOR_CORRECTION`), or `parameter` isn't
                 present in the result's AI findings.
         """
-        result = await self._get_result(result_id)
+        result = await self._getResult(resultId)
 
         # Guard: overrides only allowed before Supervisor approval
         if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED_FOR_CORRECTION):
@@ -68,29 +68,29 @@ class ManualOverrideService:
             )
 
         # Read original AI value safely from the db findings (Source of Truth)
-        db_original_value = await self._extract_original_value(result, parameter)
+        dbOriginalValue = await self._extractOriginalValue(result, parameter)
 
         override = ManualOverride(
-            result_id=result_id,
-            parameter_name=parameter,
-            original_ai_value=str(db_original_value),
-            corrected_value=str(corrected_value),
+            resultId=resultId,
+            parameterName=parameter,
+            originalAiValue=str(dbOriginalValue),
+            correctedValue=str(correctedValue),
             rationale=rationale,
-            medtech_id=medtech_id,
+            medtechId=medtechId,
         )
         self.db.add(override)
 
         # Audit logging entry block
-        await self.audit_logger.record(
-            event_type="RESULT_OVERRIDDEN",
-            entity_type="analysis_result",
-            entity_id=result_id,
-            user_id=medtech_id,
-            detail_json={
+        await self.auditLogger.record(
+            eventType="RESULT_OVERRIDDEN",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=medtechId,
+            detailJson={
                 "parameter":         parameter,
-                "original_ai_value": db_original_value,
-                "corrected_value":   corrected_value,
-                "specimen_id":       str(result.specimen_id),
+                "original_ai_value": dbOriginalValue,
+                "corrected_value":   correctedValue,
+                "specimen_id":       str(result.specimenId),
             },
             db=self.db,
             request=request,
@@ -104,27 +104,27 @@ class ManualOverrideService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _get_result(self, result_id: uuid.UUID) -> AnalysisResult:
-        stmt = select(AnalysisResult).where(AnalysisResult.result_id == result_id)
+    async def _getResult(self, resultId: uuid.UUID) -> AnalysisResult:
+        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
             raise NotFoundException(
                 code="RESULT_NOT_FOUND",
-                message=f"No analysis result found with id {result_id}.",
+                message=f"No analysis result found with id {resultId}.",
             )
         return result
 
-    async def _extract_original_value(
+    async def _extractOriginalValue(
         self, result: AnalysisResult, parameter: str
     ) -> float:
         """Reads the AI-generated value for the given parameter from ai_findings.
         Raises UnprocessableException if the parameter is not present.
         """
-        ai_findings: dict = result.ai_findings or {}
-        if parameter not in ai_findings:
+        aiFindings: dict = result.aiFindings or {}
+        if parameter not in aiFindings:
             raise UnprocessableException(
                 code="PARAMETER_NOT_FOUND",
                 message=f"Parameter '{parameter}' not found in AI findings for this result.",
             )
-        return float(ai_findings[parameter])
+        return float(aiFindings[parameter])

@@ -4,17 +4,17 @@ from datetime import UTC, datetime
 from src.urolens.schemas.patient_portal import PatientResultDetail
 
 
-def _safe_str(value: str | None, fallback: str = "Pending") -> str:
+def _safeStr(value: str | None, fallback: str = "Pending") -> str:
     # Placeholder text for an unset signature/label field in the PDF.
     return value if value else fallback
 
 
-def _safe_val(value: int | None, fallback: int = 0) -> int:
+def _safeVal(value: int | None, fallback: int = 0) -> int:
     # Placeholder count (0) for an unset cell-count field in the PDF.
     return value if value is not None else fallback
 
 
-def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes:
+def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
     """Render a one-page A4 PDF lab report for a patient result.
 
     Args:
@@ -52,26 +52,26 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
     )
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
+    titleStyle = ParagraphStyle(
         "CustomTitle", parent=styles["Title"], fontSize=16, spaceAfter=8
     )
-    subtitle_style = ParagraphStyle(
+    subtitleStyle = ParagraphStyle(
         "CustomSubtitle", parent=styles["Normal"], fontSize=10, textColor=colors.grey
     )
-    heading_style = ParagraphStyle(
+    headingStyle = ParagraphStyle(
         "CustomHeading",
         parent=styles["Heading2"],
         fontSize=12,
         spaceBefore=16,
         spaceAfter=6,
     )
-    body_style = ParagraphStyle(
+    bodyStyle = ParagraphStyle(
         "CustomBody",
         parent=styles["Normal"],
         fontSize=10,
         leading=14,
     )
-    footer_style = ParagraphStyle(
+    footerStyle = ParagraphStyle(
         "CustomFooter",
         parent=styles["Normal"],
         fontSize=7,
@@ -79,7 +79,7 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
         alignment=TA_CENTER,
         leading=10,
     )
-    sig_label_style = ParagraphStyle(
+    sigLabelStyle = ParagraphStyle(
         "SigLabel",
         parent=styles["Normal"],
         fontSize=9,
@@ -89,25 +89,25 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
 
     elements = []
 
-    elements.append(Paragraph("UroLens Laboratory", title_style))
-    elements.append(Paragraph("Urine Sediment Analysis Report", subtitle_style))
+    elements.append(Paragraph("UroLens Laboratory", titleStyle))
+    elements.append(Paragraph("Urine Sediment Analysis Report", subtitleStyle))
     elements.append(Spacer(1, 6 * mm))
     elements.append(
-        Paragraph(f"Date Generated: {datetime.now(UTC).strftime('%B %d, %Y')}", body_style)
+        Paragraph(f"Date Generated: {datetime.now(UTC).strftime('%B %d, %Y')}", bodyStyle)
     )
     elements.append(Spacer(1, 6 * mm))
 
     # ── Patient Information ──────────────────────────────────────────────────
-    elements.append(Paragraph("Patient Information", heading_style))
-    test_date = result.confirmed_at or result.created_at
-    info_data = [
-        ["Patient Name:", patient_name],
-        ["Result ID:", str(result.result_id)],
-        ["Date of Test:", test_date.strftime("%B %d, %Y") if test_date else "N/A"],
+    elements.append(Paragraph("Patient Information", headingStyle))
+    testDate = result.confirmedAt or result.createdAt
+    infoData = [
+        ["Patient Name:", patientName],
+        ["Result ID:", str(result.resultId)],
+        ["Date of Test:", testDate.strftime("%B %d, %Y") if testDate else "N/A"],
         ["Status:", result.status],
     ]
-    info_table = Table(info_data, colWidths=[40 * mm, 100 * mm])
-    info_table.setStyle(
+    infoTable = Table(infoData, colWidths=[40 * mm, 100 * mm])
+    infoTable.setStyle(
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
@@ -118,26 +118,26 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
             ]
         )
     )
-    elements.append(info_table)
+    elements.append(infoTable)
     elements.append(Spacer(1, 6 * mm))
 
     # ── Cell Count Results ───────────────────────────────────────────────────
-    elements.append(Paragraph("Cell Count Results", heading_style))
-    cc = result.cell_counts
+    elements.append(Paragraph("Cell Count Results", headingStyle))
+    cc = result.cellCounts
     params = [
-        ("Red Blood Cells (RBC)", _safe_val(cc.rbc if cc else None)),
-        ("White Blood Cells (WBC)", _safe_val(cc.wbc if cc else None)),
-        ("Epithelial Cells", _safe_val(cc.epithelial_cells if cc else None)),
-        ("Casts", _safe_val(cc.casts if cc else None)),
-        ("Bacteria", _safe_val(cc.bacteria if cc else None)),
-        ("Crystals", _safe_val(cc.crystals if cc else None)),
-        ("Mucus Threads", _safe_val(cc.mucus_threads if cc else None)),
+        ("Red Blood Cells (RBC)", _safeVal(cc.rbc if cc else None)),
+        ("White Blood Cells (WBC)", _safeVal(cc.wbc if cc else None)),
+        ("Epithelial Cells", _safeVal(cc.epithelial_cells if cc else None)),
+        ("Casts", _safeVal(cc.casts if cc else None)),
+        ("Bacteria", _safeVal(cc.bacteria if cc else None)),
+        ("Crystals", _safeVal(cc.crystals if cc else None)),
+        ("Mucus Threads", _safeVal(cc.mucus_threads if cc else None)),
     ]
-    cell_data = [["Parameter", "Count"]]
+    cellData = [["Parameter", "Count"]]
     for param, count in params:
-        cell_data.append([param, str(count)])
-    cell_table = Table(cell_data, colWidths=[100 * mm, 40 * mm])
-    cell_table.setStyle(
+        cellData.append([param, str(count)])
+    cellTable = Table(cellData, colWidths=[100 * mm, 40 * mm])
+    cellTable.setStyle(
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
@@ -153,45 +153,45 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
             ]
         )
     )
-    elements.append(cell_table)
+    elements.append(cellTable)
     elements.append(Spacer(1, 6 * mm))
 
     # ── Interpretation ───────────────────────────────────────────────────────
-    elements.append(Paragraph("Interpretation", heading_style))
-    interpretation_text = result.interpretation or "Pending review"
-    elements.append(Paragraph(interpretation_text, body_style))
+    elements.append(Paragraph("Interpretation", headingStyle))
+    interpretationText = result.interpretation or "Pending review"
+    elements.append(Paragraph(interpretationText, bodyStyle))
     elements.append(Spacer(1, 10 * mm))
 
     # ── Signatures ───────────────────────────────────────────────────────────
-    sig_table = Table(
+    sigTable = Table(
         [
             [
-                Paragraph("Examined by:", sig_label_style),
-                Paragraph("Reviewed by:", sig_label_style),
+                Paragraph("Examined by:", sigLabelStyle),
+                Paragraph("Reviewed by:", sigLabelStyle),
             ],
             [
-                Paragraph("______________________", sig_label_style),
-                Paragraph("______________________", sig_label_style),
+                Paragraph("______________________", sigLabelStyle),
+                Paragraph("______________________", sigLabelStyle),
             ],
             [
-                Paragraph(_safe_str(result.medtech_name), sig_label_style),
-                Paragraph(_safe_str(result.pathologist_name), sig_label_style),
+                Paragraph(_safeStr(result.medtechName), sigLabelStyle),
+                Paragraph(_safeStr(result.pathologistName), sigLabelStyle),
             ],
             [
-                Paragraph("Medical Technologist", sig_label_style),
-                Paragraph("Pathologist", sig_label_style),
+                Paragraph("Medical Technologist", sigLabelStyle),
+                Paragraph("Pathologist", sigLabelStyle),
             ],
             [
-                Paragraph("", sig_label_style),
+                Paragraph("", sigLabelStyle),
                 Paragraph(
-                    f"License No: {_safe_str(result.pathologist_license)}",
-                    sig_label_style,
+                    f"License No: {_safeStr(result.pathologistLicense)}",
+                    sigLabelStyle,
                 ),
             ],
         ],
         colWidths=[75 * mm, 75 * mm],
     )
-    sig_table.setStyle(
+    sigTable.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -201,7 +201,7 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
             ]
         )
     )
-    elements.append(sig_table)
+    elements.append(sigTable)
     elements.append(Spacer(1, 10 * mm))
 
     # ── Footer ───────────────────────────────────────────────────────────────
@@ -209,12 +209,12 @@ def generate_result_pdf(result: PatientResultDetail, patient_name: str) -> bytes
     elements.append(
         Paragraph(
             "This report is generated by UroLens. For clinical decisions, consult your physician.",
-            footer_style,
+            footerStyle,
         )
     )
-    elements.append(Paragraph("CONFIDENTIAL — For patient use only", footer_style))
+    elements.append(Paragraph("CONFIDENTIAL — For patient use only", footerStyle))
 
     doc.build(elements)
-    pdf_bytes = buffer.getvalue()
+    pdfBytes = buffer.getvalue()
     buffer.close()
-    return pdf_bytes
+    return pdfBytes

@@ -15,9 +15,9 @@ class ConfirmResultResponse(BaseModel):
     """Response shape for a successful result confirmation."""
 
     id: UUID
-    result_id: UUID
-    confirmed_by: UUID
-    confirmed_at: datetime
+    resultId: UUID
+    confirmedBy: UUID
+    confirmedAt: datetime
 
     model_config = {"from_attributes": True}
 
@@ -26,17 +26,17 @@ class OverrideRequest(BaseModel):
     """Request body for overriding a single AI-generated result parameter."""
 
     parameter: str = Field(..., min_length=1, max_length=100)
-    corrected_value: float = Field(..., ge=0)
+    correctedValue: float = Field(..., ge=0)
     rationale: str = Field("No rationale provided", max_length=2000)
     """Not Optional despite having a default: `ManualOverride.rationale` is a
     NOT NULL column, so an explicit `"rationale": null` in the request must
     be rejected by Pydantic (a clean 422) rather than reach the service and
     fail as an unhandled IntegrityError."""
-    original_ai_value: float = Field(..., ge=0)
+    originalAiValue: float = Field(..., ge=0)
 
     @field_validator("parameter")
     @classmethod
-    def parameter_no_whitespace_only(cls, v: str) -> str:
+    def parameterNoWhitespaceOnly(cls, v: str) -> str:
         """Reject a `parameter` that is blank or whitespace-only; strips
         surrounding whitespace otherwise.
         """
@@ -49,13 +49,13 @@ class OverrideResponse(BaseModel):
     """Response shape for a successful parameter override."""
 
     id: UUID
-    result_id: UUID
+    resultId: UUID
     parameter: str
-    original_ai_value: float
-    corrected_value: float
+    originalAiValue: float
+    correctedValue: float
     rationale: str
-    overridden_by: UUID
-    overridden_at: datetime
+    overriddenBy: UUID
+    overriddenAt: datetime
 
     model_config = {"from_attributes": True}
 
@@ -71,13 +71,13 @@ class SupervisorStatsResponse(BaseModel):
 class PendingResultItem(BaseModel):
     """One result awaiting supervisor approval, for the pending queue list."""
 
-    result_id: UUID
-    specimen_id: UUID
-    patient_name: str
-    patient_age: int | None = None
-    patient_sex: str | None = None
-    medtech_name: str
-    confirmed_at: datetime | None = None
+    resultId: UUID
+    specimenId: UUID
+    patientName: str
+    patientAge: int | None = None
+    patientSex: str | None = None
+    medtechName: str
+    confirmedAt: datetime | None = None
     status: str
 
 
@@ -87,7 +87,7 @@ class PendingResultListResponse(BaseModel):
     items: list[PendingResultItem]
     total: int
     page: int
-    page_size: int
+    pageSize: int
 
 
 class ApprovedResultItem(BaseModel):
@@ -96,13 +96,13 @@ class ApprovedResultItem(BaseModel):
     the receptionist release queue.
     """
 
-    result_id: UUID
-    specimen_id: UUID
-    patient_name: str
-    patient_age: int | None = None
-    patient_sex: str | None = None
-    medtech_name: str
-    approved_at: datetime
+    resultId: UUID
+    specimenId: UUID
+    patientName: str
+    patientAge: int | None = None
+    patientSex: str | None = None
+    medtechName: str
+    approvedAt: datetime
     status: str
 
 
@@ -112,20 +112,20 @@ class ApprovedTodayListResponse(BaseModel):
     items: list[ApprovedResultItem]
     total: int
     page: int
-    page_size: int
+    pageSize: int
 
 
 class EscalatedResultItem(BaseModel):
     """One escalated result, for the supervisor's escalated-results list."""
 
-    result_id: UUID
-    specimen_id: UUID
-    patient_name: str
-    patient_age: int | None = None
-    patient_sex: str | None = None
-    medtech_name: str
-    escalated_at: datetime | None = None
-    escalation_path: str
+    resultId: UUID
+    specimenId: UUID
+    patientName: str
+    patientAge: int | None = None
+    patientSex: str | None = None
+    medtechName: str
+    escalatedAt: datetime | None = None
+    escalationPath: str
     status: str
 
 
@@ -135,44 +135,44 @@ class EscalatedListResponse(BaseModel):
     items: list[EscalatedResultItem]
     total: int
     page: int
-    page_size: int
+    pageSize: int
 
 
 class ManualOverrideItem(BaseModel):
     """One MedTech parameter override, as shown in a result's full detail view."""
 
-    override_id: UUID
-    parameter_name: str
-    original_ai_value: str
-    corrected_value: str
+    overrideId: UUID
+    parameterName: str
+    originalAiValue: str
+    correctedValue: str
     rationale: str
-    overridden_at: datetime
+    overriddenAt: datetime
 
 
 class FullResultDetail(BaseModel):
     """Response body for the supervisor's full single-result review/detail view."""
 
-    result_id: UUID
-    specimen_id: UUID
-    patient_name: str
-    patient_age: int | None = None
-    patient_sex: str | None = None
-    medtech_name: str
-    confirmed_at: datetime | None = None
-    confirmation_notes: str | None = None
+    resultId: UUID
+    specimenId: UUID
+    patientName: str
+    patientAge: int | None = None
+    patientSex: str | None = None
+    medtechName: str
+    confirmedAt: datetime | None = None
+    confirmationNotes: str | None = None
     """Always None in the ported service — analysis_results.confirmation_notes
     has no Alembic history (schema-drift finding, not modeled). Kept in the
     response shape for API-contract compatibility."""
-    ai_findings: dict[str, Any]
-    flagged_anomalies: dict[str, Any]
-    particle_classes: dict[str, Any]
-    model_version: str
-    manual_overrides: list[ManualOverrideItem]
-    image_url: str | None = None
-    smart_diagnosis_unavailable: bool
+    aiFindings: dict[str, Any]
+    flaggedAnomalies: dict[str, Any]
+    particleClasses: dict[str, Any]
+    modelVersion: str
+    manualOverrides: list[ManualOverrideItem]
+    imageUrl: str | None = None
+    smartDiagnosisUnavailable: bool
     status: str
-    annotation_notes: str | None = None
-    spatial_annotations: list[dict[str, Any]] | None = None
+    annotationNotes: str | None = None
+    spatialAnnotations: list[dict[str, Any]] | None = None
     """Persisted as of migration 0034 (JSONB) — type inferred from pre-port
     code, not yet verified against a live database. See the ResultReview
     model's docstring."""
@@ -181,16 +181,16 @@ class FullResultDetail(BaseModel):
 class AnnotationRequest(BaseModel):
     """Request body for saving a supervisor's annotation on a result."""
 
-    annotation_notes: str
-    spatial_annotations: list[dict[str, Any]] | None = None
+    annotationNotes: str
+    spatialAnnotations: list[dict[str, Any]] | None = None
 
 
 class AnnotationResponse(BaseModel):
     """Response body confirming a saved annotation."""
 
-    result_id: UUID
-    annotation_notes: str
-    spatial_annotations: list[dict[str, Any]] | None = None
+    resultId: UUID
+    annotationNotes: str
+    spatialAnnotations: list[dict[str, Any]] | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -202,9 +202,9 @@ class ApproveRequest(BaseModel):
 class ApproveResponse(BaseModel):
     """Response body confirming a result approval."""
 
-    result_id: UUID
+    resultId: UUID
     status: str
-    approved_at: datetime
+    approvedAt: datetime
 
 
 class ReturnRequest(BaseModel):
@@ -216,9 +216,9 @@ class ReturnRequest(BaseModel):
 class ReturnResponse(BaseModel):
     """Response body confirming a result return."""
 
-    result_id: UUID
+    resultId: UUID
     status: str
-    returned_at: datetime
+    returnedAt: datetime
 
 
 EscalationPath = Literal["NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"]
@@ -235,17 +235,17 @@ VALID_ESCALATION_PATHS = set(get_args(EscalationPath))
 class EscalateRequest(BaseModel):
     """Request body for escalating a pending result."""
 
-    escalation_path: EscalationPath
-    escalation_note: str | None = None
+    escalationPath: EscalationPath
+    escalationNote: str | None = None
 
 
 class EscalateResponse(BaseModel):
     """Response body confirming a result escalation."""
 
-    result_id: UUID
+    resultId: UUID
     status: str
-    escalation_path: str
-    escalated_at: datetime
+    escalationPath: str
+    escalatedAt: datetime
 
 
 # ── Smart Diagnosis lookup (plan: neither row 6 nor row 7) ─────────────────────
@@ -271,22 +271,22 @@ class EvidenceMap(BaseModel):
 class SmartDiagnosisAttached(BaseModel):
     """Response shape for a result with an attached Smart Diagnosis output."""
 
-    output_id: str
-    result_id: str
+    outputId: str
+    resultId: str
     status: Literal["ATTACHED"]
-    gout_score: ProbabilityLevel
-    gn_score: ProbabilityLevel
-    nephro_score: ProbabilityLevel
-    evidence_map: dict[str, Any]
-    no_significant_indicators: bool
-    engine_version: str
-    generated_at: str
+    goutScore: ProbabilityLevel
+    gnScore: ProbabilityLevel
+    nephroScore: ProbabilityLevel
+    evidenceMap: dict[str, Any]
+    noSignificantIndicators: bool
+    engineVersion: str
+    generatedAt: str
 
 
 class SmartDiagnosisUnavailable(BaseModel):
     """Response shape for a result with no usable Smart Diagnosis output."""
 
-    result_id: str
+    resultId: str
     status: Literal["FLAGGED_UNAVAILABLE"]
 
 

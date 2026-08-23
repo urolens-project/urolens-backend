@@ -23,35 +23,35 @@ class ResultConfirmation(Base):
 
     __tablename__ = "result_confirmations"
 
-    confirmation_id: Mapped[uuid.UUID] = mapped_column(
+    confirmationId: Mapped[uuid.UUID] = mapped_column("confirmation_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         unique=True,
     )
-    medtech_id: Mapped[uuid.UUID] = mapped_column(
+    medtechId: Mapped[uuid.UUID] = mapped_column("medtech_id", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    confirmed_at: Mapped[datetime] = mapped_column(
+    confirmedAt: Mapped[datetime] = mapped_column("confirmed_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # ── Relationships ────────────────────────────────────────────────────────
-    analysis_result: Mapped[AnalysisResult] = relationship(
+    analysisResult: Mapped[AnalysisResult] = relationship(
         back_populates="confirmation"
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `confirmation_id`, for callers expecting a generic `id` field."""
-        return self.confirmation_id
+        return self.confirmationId
 
     @property
-    def confirmed_by(self) -> uuid.UUID:
+    def confirmedBy(self) -> uuid.UUID:
         """Alias for `medtech_id`, matching the API-contract field name."""
-        return self.medtech_id
+        return self.medtechId

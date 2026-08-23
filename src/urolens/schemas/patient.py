@@ -17,23 +17,23 @@ class SexEnum(StrEnum):
 class ConsentData(BaseModel):
     """A patient's consent answers, recorded alongside their intake."""
 
-    consent_given: bool
-    consent_storage: bool
-    consent_research: bool
+    consentGiven: bool
+    consentStorage: bool
+    consentResearch: bool
 
 
 class PatientCreateRequest(BaseModel):
     """Request body for creating a patient record."""
 
-    first_name: str
-    middle_name: str | None = None
-    last_name: str
-    date_of_birth: date
+    firstName: str
+    middleName: str | None = None
+    lastName: str
+    dateOfBirth: date
     sex: SexEnum
-    contact_no: str | None = None
+    contactNo: str | None = None
     address: str | None = None
-    clinical_history: str | None = None
-    is_walkin: bool = False
+    clinicalHistory: str | None = None
+    isWalkin: bool = False
     consent: ConsentData
 
 
@@ -43,19 +43,19 @@ class PatientResponse(BaseModel):
     re-derivable afterward).
     """
 
-    patient_id: UUID
-    patient_uid: str
-    first_name: str
-    middle_name: str | None = None
-    last_name: str
-    date_of_birth: str
+    patientId: UUID
+    patientUid: str
+    firstName: str
+    middleName: str | None = None
+    lastName: str
+    dateOfBirth: str
     sex: str
-    contact_no: str | None = None
+    contactNo: str | None = None
     address: str | None = None
-    clinical_history: str | None = None
-    is_walkin: bool
-    record_flag: str | None = None
-    created_at: datetime
-    user_id: UUID | None = None
-    portal_username: str | None = None
-    portal_password: str | None = None
+    clinicalHistory: str | None = None
+    isWalkin: bool
+    recordFlag: str | None = None
+    createdAt: datetime
+    userId: UUID | None = None
+    portalUsername: str | None = None
+    portalPassword: str | None = None

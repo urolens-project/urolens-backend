@@ -21,27 +21,27 @@ class PrintJob(Base):
 
     __tablename__ = "print_jobs"
 
-    print_job_id: Mapped[uuid.UUID] = mapped_column(
+    printJobId: Mapped[uuid.UUID] = mapped_column("print_job_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    label_id: Mapped[uuid.UUID] = mapped_column(
+    labelId: Mapped[uuid.UUID] = mapped_column("label_id", 
         UUID(as_uuid=True),
         ForeignKey("sample_labels.label_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    specimen_id: Mapped[uuid.UUID] = mapped_column(
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
         UUID(as_uuid=True),
         ForeignKey("specimens.specimen_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="SENT")
-    created_at: Mapped[datetime] = mapped_column(
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `print_job_id`, for callers expecting a generic `id` field."""
-        return self.print_job_id
+        return self.printJobId

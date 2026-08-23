@@ -12,12 +12,12 @@ from pydantic import BaseModel
 class NotificationOut(BaseModel):
     """Response shape for a single notification row."""
 
-    notification_id: uuid.UUID
+    notificationId: uuid.UUID
     message: str
-    notification_type: str
-    entity_id: uuid.UUID | None
-    is_read: bool
-    created_at: datetime
+    notificationType: str
+    entityId: uuid.UUID | None
+    isRead: bool
+    createdAt: datetime
 
     model_config = {"from_attributes": True}
 

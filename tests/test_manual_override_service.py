@@ -29,20 +29,20 @@ SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000021")
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000022")
 
 
-def _make_result(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
+def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
     result = MagicMock(spec=AnalysisResult)
-    result.result_id = RESULT_ID
-    result.specimen_id = SPECIMEN_ID
+    result.resultId = RESULT_ID
+    result.specimenId = SPECIMEN_ID
     result.status = status
-    result.ai_findings = {"rbc_casts": 7.0, "uric_acid_crystals": 15.0}
+    result.aiFindings = {"rbc_casts": 7.0, "uric_acid_crystals": 15.0}
     return result
 
 
-def _make_db_mock(result: AnalysisResult) -> AsyncMock:
+def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     db = AsyncMock()
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=execute_result)
+    executeResult = MagicMock()
+    executeResult.scalar_one_or_none.return_value = result
+    db.execute = AsyncMock(return_value=executeResult)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
@@ -50,26 +50,26 @@ def _make_db_mock(result: AnalysisResult) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_override_ignores_client_supplied_original_ai_value_and_uses_ai_findings():
+async def test_overrideIgnoresClientSuppliedOriginalAiValueAndUsesAiFindings():
     """A caller-supplied original_ai_value must never be trusted — the value
     actually persisted must come from the stored ai_findings instead.
     """
-    result = _make_result()
-    db = _make_db_mock(result)
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
+    result = _makeResult()
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
     request = MagicMock(spec=Request)
 
-    service = ManualOverrideService(db=db, audit_logger=audit_logger)
+    _service = ManualOverrideService(db=db, auditLogger=auditLogger)
 
     # Client claims the AI originally found 999 — the true stored value is 7.0.
-    await service.override_parameter(
-        result_id=RESULT_ID,
+    await _service.overrideParameter(
+        resultId=RESULT_ID,
         parameter="rbc_casts",
-        corrected_value=3.0,
+        correctedValue=3.0,
         rationale="Recount under supervision",
-        original_ai_value=999.0,
-        medtech_id=MEDTECH_ID,
+        originalAiValue=999.0,
+        medtechId=MEDTECH_ID,
         request=request,
     )
 
@@ -77,62 +77,62 @@ async def test_override_ignores_client_supplied_original_ai_value_and_uses_ai_fi
     added = db.add.call_args[0][0]
     assert isinstance(added, ManualOverride)
     # The persisted value is the re-derived one (7.0), never the client's claim (999.0).
-    assert added.original_ai_value == "7.0"
-    assert added.corrected_value == "3.0"
+    assert added.originalAiValue == "7.0"
+    assert added.correctedValue == "3.0"
 
     # Same value shows up in the audit trail, not the client-supplied one.
-    audit_logger.record.assert_called_once()
-    detail = audit_logger.record.call_args[1]["detail_json"]
+    auditLogger.record.assert_called_once()
+    detail = auditLogger.record.call_args[1]["detailJson"]
     assert detail["original_ai_value"] == 7.0
 
 
 @pytest.mark.asyncio
-async def test_override_unknown_parameter_raises_without_trusting_client_value():
+async def test_overrideUnknownParameterRaisesWithoutTrustingClientValue():
     """If the parameter isn't in ai_findings at all, the override is rejected —
     the service never falls back to trusting the client's original_ai_value.
     """
-    result = _make_result()
-    db = _make_db_mock(result)
-    audit_logger = MagicMock(spec=AuditLogger)
+    result = _makeResult()
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
     request = MagicMock(spec=Request)
 
-    service = ManualOverrideService(db=db, audit_logger=audit_logger)
+    _service = ManualOverrideService(db=db, auditLogger=auditLogger)
 
-    with pytest.raises(UnprocessableException) as exc_info:
-        await service.override_parameter(
-            result_id=RESULT_ID,
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _service.overrideParameter(
+            resultId=RESULT_ID,
             parameter="nonexistent_parameter",
-            corrected_value=1.0,
+            correctedValue=1.0,
             rationale="test",
-            original_ai_value=42.0,
-            medtech_id=MEDTECH_ID,
+            originalAiValue=42.0,
+            medtechId=MEDTECH_ID,
             request=request,
         )
-    assert exc_info.value.error_code == "PARAMETER_NOT_FOUND"
+    assert excInfo.value.errorCode == "PARAMETER_NOT_FOUND"
     db.add.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_override_rejected_after_result_finalised():
+async def test_overrideRejectedAfterResultFinalised():
     """Cannot override a parameter once the result has been approved or
     returned for correction.
     """
-    result = _make_result(status=ResultStatus.APPROVED)
-    db = _make_db_mock(result)
-    audit_logger = MagicMock(spec=AuditLogger)
+    result = _makeResult(status=ResultStatus.APPROVED)
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
     request = MagicMock(spec=Request)
 
-    service = ManualOverrideService(db=db, audit_logger=audit_logger)
+    _service = ManualOverrideService(db=db, auditLogger=auditLogger)
 
-    with pytest.raises(UnprocessableException) as exc_info:
-        await service.override_parameter(
-            result_id=RESULT_ID,
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _service.overrideParameter(
+            resultId=RESULT_ID,
             parameter="rbc_casts",
-            corrected_value=1.0,
+            correctedValue=1.0,
             rationale="test",
-            original_ai_value=1.0,
-            medtech_id=MEDTECH_ID,
+            originalAiValue=1.0,
+            medtechId=MEDTECH_ID,
             request=request,
         )
-    assert exc_info.value.error_code == "RESULT_ALREADY_FINALISED"
+    assert excInfo.value.errorCode == "RESULT_ALREADY_FINALISED"
     db.add.assert_not_called()

@@ -2,7 +2,7 @@
 
 This is the full rule reference for `urolens-backend`. `CONTRIBUTING.md` has the short, actionable version (the required sequence for adding a feature and the pre-PR checklist); this document explains *why* each rule exists and, where it matters, the actual current state of the codebase against it — several of these changed materially during recent consolidation work, and a stale restatement would mislead more than it helps.
 
-Rules 1-5 are security/PHI-critical — check these on every change, no exceptions. Rules 6-16 are structure and code-quality.
+Rules 1-5 are security/PHI-critical — check these on every change, no exceptions. Rules 6-17 are structure and code-quality.
 
 ## 1. Config
 
@@ -10,7 +10,7 @@ All configuration goes through `src/urolens/core/config.py`'s `Settings` class �
 
 ## 2. Auth / RBAC
 
-Every route gets the canonical session-revocation-aware dependency: `Depends(RequireRole([...]))` or `Depends(get_current_user)`, both from `src/urolens/core/rbac.py`. Role checks happen at the route/dependency level — never as an ownership-check-only inside a service. No client-supplied identity header (`X-User-Id` or similar) is ever trusted as authentication. (This exact anti-pattern existed in this codebase before the backend consolidation and was removed — see `changelog.md`'s "Specimens / labeling / lab-requests domain merge" entry.)
+Every route gets the canonical session-revocation-aware dependency: `Depends(RequireRole([...]))` or `Depends(getCurrentUser)`, both from `src/urolens/core/rbac.py`. Role checks happen at the route/dependency level — never as an ownership-check-only inside a service. No client-supplied identity header (`X-User-Id` or similar) is ever trusted as authentication. (This exact anti-pattern existed in this codebase before the backend consolidation and was removed — see `changelog.md`'s "Specimens / labeling / lab-requests domain merge" entry.)
 
 ## 3. PHI / PII
 
@@ -22,7 +22,7 @@ Never combine `allow_origins=["*"]` with `allow_credentials=True`. `main.py` use
 
 ## 5. IDs and attribution
 
-Real-world record IDs (specimen sample UIDs, lab request UIDs, patient UIDs) get a pre-insert uniqueness check with retry-on-collision — see `_generate_request_uid`/`_generate_sample_uid`/`_generate_patient_uid` in the relevant services for the established pattern. No hardcoded actor/user UUID in source, ever — if a route can't identify the real authenticated caller, it can't write data attributed to someone.
+Real-world record IDs (specimen sample UIDs, lab request UIDs, patient UIDs) get a pre-insert uniqueness check with retry-on-collision — see `_generateRequestUid`/`_generateSampleUid`/`_generatePatientUid` in the relevant services for the established pattern. No hardcoded actor/user UUID in source, ever — if a route can't identify the real authenticated caller, it can't write data attributed to someone.
 
 ## 6. Package boundaries
 
@@ -81,6 +81,19 @@ A test whose signature no longer matches its target is a CI failure to fix, not 
 Pin external/private dependencies to an exact version (or a specific tag/commit for a git dependency) — never a floating spec, never a mutable branch. `requirements.txt` is this project's sole dependency manifest (there is no `pyproject.toml`-based dependency management, and no dev/prod split — `ruff`, `pytest`, and `pytest-asyncio` live in the same file as `fastapi`). UTF-8 everywhere; `requirements.txt` was previously UTF-16-encoded (and, on top of that, partially re-saved in UTF-8 at some point without fixing the rest of the file) — fixed, verified via hex dump.
 
 **Known open violation, not yet fixed**: `urolens-ai-engine @ git+https://github.com/urolens-project/urolens-ai-engine.git@develop` pins to a mutable branch rather than a tag or commit. Flagged repeatedly (see `changelog.md`) rather than fixed, since correcting it needs a specific commit/tag decision from whoever owns that dependency, not something to guess at while doing unrelated work.
+
+## 17. Naming convention
+
+This codebase deliberately departs from PEP 8: functions, methods, parameters, local variables, and Pydantic/SQLAlchemy field declarations are **camelCase**, not snake_case (`getPatientById`, not `get_patient_by_id`). Class names stay PascalCase as usual. A handful of documented exceptions keep the language/frameworks working:
+
+- Dunder methods (`__init__`, `__repr__`, ...) and Alembic's `upgrade()`/`downgrade()` — required exact spelling, untouched.
+- `alembic/versions/*.py` — migration bodies are DB schema, not application code; entirely out of scope, including table/column name strings.
+- SQLAlchemy model attributes are camelCase in Python but map to unchanged snake_case Postgres columns via an explicit name, e.g. `firstName = Column("first_name", Text, ...)` / `mapped_column("first_name", ...)`. Never assume the attribute name is the column name in this codebase.
+- Raw Supabase calls (`.table(...).select(...).eq(...)`, dict literal keys) and any dict literal that mirrors a live DB row or a stored JSON blob use the real column names — snake_case, unchanged. Only a dict that gets `**`-unpacked into (or field-matched against) a Pydantic response model needs to mirror that model's camelCase field names.
+- FastAPI path parameters must match their literal `{placeholder}` in the route's path string — since path strings are unchanged, path-bound parameters stay snake_case (e.g. `result_id: uuid.UUID` binding to `"/{result_id}/approve"`) even though the same concept elsewhere in the same file is `resultId`.
+- pytest test functions keep the literal `test_` prefix; only the descriptive remainder is camelCase (`test_loginSuccess`, not `testLoginSuccess`).
+- Module-level constants stay `UPPER_SNAKE`.
+- Ruff has no rule that enforces this (its `N` pep8-naming family assumes snake_case, so it's deliberately left off `pyproject.toml`'s `select` list). `scripts/check_naming.py` is a standalone checker for the same exception list above — run it before opening a PR; there's no CI to catch a drift back to snake_case yet.
 
 ## Keeping this document accurate
 

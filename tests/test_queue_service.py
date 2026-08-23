@@ -10,7 +10,7 @@ from src.urolens.services.notification_service import NotificationService
 from src.urolens.services.queue_service import QueueService
 
 
-def _make_chain(return_data=None):
+def _makeChain(returnData=None):
     """Build a mock that returns itself at every method call, ending with an AsyncMock execute."""
     chain = MagicMock()
     chain.select.return_value = chain
@@ -20,109 +20,109 @@ def _make_chain(return_data=None):
     chain.eq.return_value = chain
     chain.maybe_single.return_value = chain
     chain.limit.return_value = chain
-    chain.execute = AsyncMock(return_value=MagicMock(data=return_data))
+    chain.execute = AsyncMock(return_value=MagicMock(data=returnData))
     return chain
 
 
 class TestMedTechWorkload:
     @pytest.mark.asyncio
-    async def test_get_workloads_returns_sorted_by_queue_count(self):
-        users_data = [
+    async def test_getWorkloadsReturnsSortedByQueueCount(self):
+        usersData = [
             {"user_id": uuid.uuid4(), "username": "medtech_a"},
             {"user_id": uuid.uuid4(), "username": "medtech_b"},
             {"user_id": uuid.uuid4(), "username": "medtech_c"},
         ]
 
-        queue_counts = {
-            str(users_data[0]["user_id"]): 5,
-            str(users_data[1]["user_id"]): 0,
-            str(users_data[2]["user_id"]): 3,
+        queueCounts = {
+            str(usersData[0]["user_id"]): 5,
+            str(usersData[1]["user_id"]): 0,
+            str(usersData[2]["user_id"]): 3,
         }
 
-        call_count = [0]
+        callCount = [0]
 
-        def table_side_effect(table_name):
-            if table_name == "users":
-                return _make_chain(return_data=users_data)
-            elif table_name == "queue_assignments":
-                idx = call_count[0]
-                call_count[0] += 1
-                if idx < len(users_data):
-                    mid = str(users_data[idx]["user_id"])
-                    return _make_chain(return_data=[{}] * queue_counts[mid])
-                return _make_chain(return_data=[])
-            return _make_chain(return_data=[])
+        def tableSideEffect(tableName):
+            if tableName == "users":
+                return _makeChain(returnData=usersData)
+            elif tableName == "queue_assignments":
+                idx = callCount[0]
+                callCount[0] += 1
+                if idx < len(usersData):
+                    mid = str(usersData[idx]["user_id"])
+                    return _makeChain(returnData=[{}] * queueCounts[mid])
+                return _makeChain(returnData=[])
+            return _makeChain(returnData=[])
 
         db = MagicMock()
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        notification_service = MagicMock()
-        audit_logger = MagicMock()
-        audit_logger.record = AsyncMock()
+        _notificationService = MagicMock()
+        auditLogger = MagicMock()
+        auditLogger.record = AsyncMock()
 
-        service = QueueService(
+        _service = QueueService(
             db=db,
-            audit_logger=audit_logger,
-            notification_service=notification_service,
+            auditLogger=auditLogger,
+            _notificationService=_notificationService,
         )
 
-        workloads = await service.get_workloads()
+        workloads = await _service.getWorkloads()
 
         assert len(workloads) == 3
         assert workloads[0].username == "medtech_b"
-        assert workloads[0].queue_count == 0
+        assert workloads[0].queueCount == 0
         assert workloads[1].username == "medtech_c"
-        assert workloads[1].queue_count == 3
+        assert workloads[1].queueCount == 3
         assert workloads[2].username == "medtech_a"
-        assert workloads[2].queue_count == 5
+        assert workloads[2].queueCount == 5
 
     @pytest.mark.asyncio
-    async def test_get_workloads_empty_when_no_medtechs(self):
+    async def test_getWorkloadsEmptyWhenNoMedtechs(self):
         db = MagicMock()
-        db.table.return_value = _make_chain(return_data=[])
+        db.table.return_value = _makeChain(returnData=[])
 
-        notification_service = MagicMock()
-        audit_logger = MagicMock()
-        audit_logger.record = AsyncMock()
+        _notificationService = MagicMock()
+        auditLogger = MagicMock()
+        auditLogger.record = AsyncMock()
 
-        service = QueueService(
+        _service = QueueService(
             db=db,
-            audit_logger=audit_logger,
-            notification_service=notification_service,
+            auditLogger=auditLogger,
+            _notificationService=_notificationService,
         )
 
-        workloads = await service.get_workloads()
+        workloads = await _service.getWorkloads()
         assert workloads == []
 
 
 class TestAssignSpecimen:
-    def _make_service(self, db=None):
-        notification_service = MagicMock()
-        notification_service.notify = AsyncMock()
-        audit_logger = MagicMock()
-        audit_logger.record = AsyncMock()
-        service = QueueService(
+    def _makeService(self, db=None):
+        _notificationService = MagicMock()
+        _notificationService.notify = AsyncMock()
+        auditLogger = MagicMock()
+        auditLogger.record = AsyncMock()
+        _service = QueueService(
             db=db or MagicMock(),
-            audit_logger=audit_logger,
-            notification_service=notification_service,
+            auditLogger=auditLogger,
+            _notificationService=_notificationService,
         )
-        return service, db or MagicMock(), audit_logger, notification_service
+        return _service, db or MagicMock(), auditLogger, _notificationService
 
-    def _valid_specimen(self, specimen_id=None, status="LABELED"):
-        sid = specimen_id or uuid.uuid4()
+    def _validSpecimen(self, specimenId=None, status="LABELED"):
+        sid = specimenId or uuid.uuid4()
         return MagicMock(data=[{"specimen_id": str(sid), "status": status}])
 
-    def _valid_medtech(self, medtech_id=None):
-        mid = medtech_id or uuid.uuid4()
+    def _validMedtech(self, medtechId=None):
+        mid = medtechId or uuid.uuid4()
         return MagicMock(data=[{"user_id": str(mid)}])
 
-    def _existing_assignment(self):
+    def _existingAssignment(self):
         return MagicMock(data=[])
 
-    def _assignment_result(self, assignment_id=None, specimen_id=None, medtech_id=None):
-        aid = assignment_id or uuid.uuid4()
-        sid = specimen_id or uuid.uuid4()
-        mid = medtech_id or uuid.uuid4()
+    def _assignmentResult(self, assignmentId=None, specimenId=None, medtechId=None):
+        aid = assignmentId or uuid.uuid4()
+        sid = specimenId or uuid.uuid4()
+        mid = medtechId or uuid.uuid4()
         return MagicMock(data=[{
             "assignment_id": str(aid),
             "specimen_id": str(sid),
@@ -133,69 +133,69 @@ class TestAssignSpecimen:
         }])
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_success(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
-        assignment_id = uuid.uuid4()
+    async def test_assignSpecimenSuccess(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
+        assignmentId = uuid.uuid4()
 
-        call_order = []
+        callOrder = []
 
-        def table_side_effect(table_name):
-            call_order.append(table_name)
-            if table_name == "specimens" and call_order.count("specimens") == 1:
-                return _make_chain(return_data=[
-                    {"specimen_id": str(specimen_id), "status": "LABELED"}
+        def tableSideEffect(tableName):
+            callOrder.append(tableName)
+            if tableName == "specimens" and callOrder.count("specimens") == 1:
+                return _makeChain(returnData=[
+                    {"specimen_id": str(specimenId), "status": "LABELED"}
                 ])
-            elif table_name == "users":
-                return _make_chain(return_data=[{"user_id": str(medtech_id)}])
-            elif table_name == "queue_assignments" and call_order.count("queue_assignments") == 1:
-                return _make_chain(return_data=[])
-            elif table_name == "queue_assignments" and call_order.count("queue_assignments") == 2:
-                return _make_chain(return_data=[{
-                    "assignment_id": str(assignment_id),
-                    "specimen_id": str(specimen_id),
-                    "medtech_id": str(medtech_id),
-                    "assigned_by": str(assigned_by),
+            elif tableName == "users":
+                return _makeChain(returnData=[{"user_id": str(medtechId)}])
+            elif tableName == "queue_assignments" and callOrder.count("queue_assignments") == 1:
+                return _makeChain(returnData=[])
+            elif tableName == "queue_assignments" and callOrder.count("queue_assignments") == 2:
+                return _makeChain(returnData=[{
+                    "assignment_id": str(assignmentId),
+                    "specimen_id": str(specimenId),
+                    "medtech_id": str(medtechId),
+                    "assigned_by": str(assignedBy),
                     "assigned_at": datetime.now(UTC).isoformat(),
                     "status": "ACTIVE",
                 }])
-            elif table_name == "specimens" and call_order.count("specimens") == 2:
-                return _make_chain(return_data=[{"status": "ASSIGNED"}])
-            return _make_chain(return_data=[])
+            elif tableName == "specimens" and callOrder.count("specimens") == 2:
+                return _makeChain(returnData=[{"status": "ASSIGNED"}])
+            return _makeChain(returnData=[])
 
         db = MagicMock()
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, audit_logger, notification_service = self._make_service(db)
+        _service, db, auditLogger, _notificationService = self._makeService(db)
 
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        response = await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        response = await _service.assignSpecimen(data, assignedBy, request)
 
-        assert response.specimen_id == specimen_id
-        assert response.medtech_id == medtech_id
+        assert response.specimenId == specimenId
+        assert response.medtechId == medtechId
         assert response.status == "ACTIVE"
 
-        notification_service.notify.assert_awaited_once()
-        audit_logger.record.assert_awaited_once()
-        audit_call_args = audit_logger.record.call_args
-        assert audit_call_args[0][0] == "QUEUE_ASSIGNED"
-        assert audit_call_args[1]["entity_type"] == "queue_assignment"
+        _notificationService.notify.assert_awaited_once()
+        auditLogger.record.assert_awaited_once()
+        auditCallArgs = auditLogger.record.call_args
+        assert auditCallArgs[0][0] == "QUEUE_ASSIGNED"
+        assert auditCallArgs[1]["entityType"] == "queue_assignment"
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_not_found(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
+    async def test_assignSpecimenNotFound(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
 
         db = MagicMock()
         db.table = MagicMock()
 
-        def table_side_effect(table_name):
+        def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
             chain.insert.return_value = chain
@@ -203,159 +203,160 @@ class TestAssignSpecimen:
             chain.execute = AsyncMock(return_value=MagicMock(data=[]))
             return chain
 
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, _, _ = self._make_service(db)
+        _service, db, _, _ = self._makeService(db)
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.assignSpecimen(data, assignedBy, request)
 
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail["error"]["code"] == "SPECIMEN_NOT_FOUND"
+        assert excInfo.value.status_code == 404
+        assert excInfo.value.detail["error"]["code"] == "SPECIMEN_NOT_FOUND"
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_invalid_status(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
+    async def test_assignSpecimenInvalidStatus(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
 
         db = MagicMock()
         db.table = MagicMock()
 
-        def table_side_effect(table_name):
+        def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
             chain.insert.return_value = chain
             chain.eq.return_value = chain
-            if table_name == "specimens":
+            if tableName == "specimens":
                 chain.execute = AsyncMock(
                     return_value=MagicMock(data=[
-                        {"specimen_id": str(specimen_id), "status": "COLLECTED"}
+                        {"specimen_id": str(specimenId), "status": "COLLECTED"}
                     ])
                 )
             else:
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
             return chain
 
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, _, _ = self._make_service(db)
+        _service, db, _, _ = self._makeService(db)
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.assignSpecimen(data, assignedBy, request)
 
-        assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["error"]["code"] == "INVALID_SPECIMEN_STATUS"
+        assert excInfo.value.status_code == 422
+        assert excInfo.value.detail["error"]["code"] == "INVALID_SPECIMEN_STATUS"
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_medtech_not_found(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
+    async def test_assignSpecimenMedtechNotFound(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
 
         db = MagicMock()
         db.table = MagicMock()
 
-        def table_side_effect(table_name):
+        def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
             chain.insert.return_value = chain
             chain.eq.return_value = chain
-            if table_name == "specimens":
+            if tableName == "specimens":
                 chain.execute = AsyncMock(
                     return_value=MagicMock(data=[
-                        {"specimen_id": str(specimen_id), "status": "LABELED"}
+                        {"specimen_id": str(specimenId), "status": "LABELED"}
                     ])
                 )
-            elif table_name == "users":
+            elif tableName == "users":
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
             else:
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
             return chain
 
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, _, _ = self._make_service(db)
+        _service, db, _, _ = self._makeService(db)
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.assignSpecimen(data, assignedBy, request)
 
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail["error"]["code"] == "MEDTECH_NOT_FOUND"
+        assert excInfo.value.status_code == 404
+        assert excInfo.value.detail["error"]["code"] == "MEDTECH_NOT_FOUND"
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_already_assigned(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
-        existing_assignment_id = uuid.uuid4()
+    async def test_assignSpecimenAlreadyAssigned(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
+        existingAssignmentId = uuid.uuid4()
 
         db = MagicMock()
         db.table = MagicMock()
 
+        callCount = [0]
 
-        def table_side_effect(table_name):
+        def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
             chain.insert.return_value = chain
             chain.eq.return_value = chain
-            if table_name == "specimens":
+            if tableName == "specimens":
                 chain.execute = AsyncMock(
                     return_value=MagicMock(data=[
-                        {"specimen_id": str(specimen_id), "status": "LABELED"}
+                        {"specimen_id": str(specimenId), "status": "LABELED"}
                     ])
                 )
-            elif table_name == "users":
+            elif tableName == "users":
                 chain.execute = AsyncMock(
-                    return_value=MagicMock(data=[{"user_id": str(medtech_id)}])
+                    return_value=MagicMock(data=[{"user_id": str(medtechId)}])
                 )
-            elif table_name == "queue_assignments":
+            elif tableName == "queue_assignments":
                 chain.execute = AsyncMock(
-                    return_value=MagicMock(data=[{"assignment_id": str(existing_assignment_id)}])
+                    return_value=MagicMock(data=[{"assignment_id": str(existingAssignmentId)}])
                 )
             else:
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
             return chain
 
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, _, _ = self._make_service(db)
+        _service, db, _, _ = self._makeService(db)
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.assignSpecimen(data, assignedBy, request)
 
-        assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["error"]["code"] == "SPECIMEN_ALREADY_ASSIGNED"
+        assert excInfo.value.status_code == 422
+        assert excInfo.value.detail["error"]["code"] == "SPECIMEN_ALREADY_ASSIGNED"
 
     @pytest.mark.asyncio
-    async def test_assign_specimen_rollback_on_status_update_failure(self):
-        specimen_id = uuid.uuid4()
-        medtech_id = uuid.uuid4()
-        assigned_by = uuid.uuid4()
-        assignment_id = uuid.uuid4()
+    async def test_assignSpecimenRollbackOnStatusUpdateFailure(self):
+        specimenId = uuid.uuid4()
+        medtechId = uuid.uuid4()
+        assignedBy = uuid.uuid4()
+        assignmentId = uuid.uuid4()
 
         db = MagicMock()
         db.table = MagicMock()
 
-        call_history = []
+        callHistory = []
 
-        def table_side_effect(table_name):
+        def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
             chain.insert.return_value = chain
@@ -363,90 +364,90 @@ class TestAssignSpecimen:
             chain.delete.return_value = chain
             chain.eq.return_value = chain
 
-            if table_name == "specimens" and not any(
-                "specimens" in str(c) and "update" in str(c) for c in call_history
+            if tableName == "specimens" and not any(
+                "specimens" in str(c) and "update" in str(c) for c in callHistory
             ):
                 chain.execute = AsyncMock(
                     return_value=MagicMock(data=[
-                        {"specimen_id": str(specimen_id), "status": "LABELED"}
+                        {"specimen_id": str(specimenId), "status": "LABELED"}
                     ])
                 )
-                call_history.append("specimens_select")
-            elif table_name == "specimens":
+                callHistory.append("specimens_select")
+            elif tableName == "specimens":
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
-                call_history.append("specimens_update")
-            elif table_name == "users":
+                callHistory.append("specimens_update")
+            elif tableName == "users":
                 chain.execute = AsyncMock(
-                    return_value=MagicMock(data=[{"user_id": str(medtech_id)}])
+                    return_value=MagicMock(data=[{"user_id": str(medtechId)}])
                 )
-            elif table_name == "queue_assignments" and not any(
-                "queue_assignments" in str(c) and "insert" in str(c) for c in call_history
+            elif tableName == "queue_assignments" and not any(
+                "queue_assignments" in str(c) and "insert" in str(c) for c in callHistory
             ):
                 chain.execute = AsyncMock(return_value=MagicMock(data=[]))
-                call_history.append("queue_check")
-            elif table_name == "queue_assignments":
+                callHistory.append("queue_check")
+            elif tableName == "queue_assignments":
                 chain.execute = AsyncMock(
                     return_value=MagicMock(data=[{
-                        "assignment_id": str(assignment_id),
-                        "specimen_id": str(specimen_id),
-                        "medtech_id": str(medtech_id),
-                        "assigned_by": str(assigned_by),
+                        "assignment_id": str(assignmentId),
+                        "specimen_id": str(specimenId),
+                        "medtech_id": str(medtechId),
+                        "assigned_by": str(assignedBy),
                         "assigned_at": datetime.now(UTC).isoformat(),
                         "status": "ACTIVE",
                     }])
                 )
-                call_history.append("queue_insert")
+                callHistory.append("queue_insert")
             return chain
 
-        db.table.side_effect = table_side_effect
+        db.table.side_effect = tableSideEffect
 
-        service, db, _, _ = self._make_service(db)
+        _service, db, _, _ = self._makeService(db)
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
 
-        data = QueueAssignRequest(specimen_id=specimen_id, medtech_id=medtech_id)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.assign_specimen(data, assigned_by, request)
+        data = QueueAssignRequest(specimenId=specimenId, medtechId=medtechId)
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.assignSpecimen(data, assignedBy, request)
 
-        assert exc_info.value.status_code == 500
+        assert excInfo.value.status_code == 500
         assert "queue_assignments" in str(db.table.call_args_list) or True
 
 
 class TestNotificationService:
     @pytest.mark.asyncio
-    async def test_notify_never_raises(self):
+    async def test_notifyNeverRaises(self):
         db = MagicMock()
         chain = MagicMock()
         chain.insert.return_value = chain
         chain.execute = AsyncMock(side_effect=Exception("DB error"))
         db.table.return_value = chain
 
-        service = NotificationService(db)
-        user_id = uuid.uuid4()
+        _service = NotificationService(db)
+        userId = uuid.uuid4()
 
-        await service.notify(user_id, "Test message", "TEST_TYPE")
+        await _service.notify(userId, "Test message", "TEST_TYPE")
 
         chain.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_notify_inserts_correctly(self):
+    async def test_notifyInsertsCorrectly(self):
         db = MagicMock()
         chain = MagicMock()
         chain.insert.return_value = chain
         chain.execute = AsyncMock(return_value=MagicMock())
         db.table.return_value = chain
 
-        service = NotificationService(db)
-        user_id = uuid.uuid4()
-        entity_id = uuid.uuid4()
+        _service = NotificationService(db)
+        userId = uuid.uuid4()
+        entityId = uuid.uuid4()
 
-        await service.notify(user_id, "Test", "TEST_TYPE", entity_id=entity_id)
+        await _service.notify(userId, "Test", "TEST_TYPE", entityId=entityId)
 
         chain.insert.assert_called_once()
         payload = chain.insert.call_args[0][0]
-        assert payload["user_id"] == str(user_id)
+        assert payload["user_id"] == str(userId)
         assert payload["message"] == "Test"
         assert payload["notification_type"] == "TEST_TYPE"
-        assert payload["entity_id"] == str(entity_id)
+        assert payload["entity_id"] == str(entityId)
         assert "is_read" not in payload

@@ -61,7 +61,7 @@ _STATUS_TO_CODE = {
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+async def httpExceptionHandler(request: Request, exc: HTTPException) -> JSONResponse:
     code = getattr(exc, "error_code", None) or _STATUS_TO_CODE.get(exc.status_code, "ERROR")
     return JSONResponse(
         status_code=exc.status_code,
@@ -70,7 +70,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validationExceptionHandler(request: Request, exc: RequestValidationError) -> JSONResponse:
     errors = {str(e["loc"][-1]): e["msg"] for e in exc.errors()}
     return JSONResponse(
         status_code=422,
@@ -106,5 +106,5 @@ app.include_router(notifications_router)
 
 
 @app.get("/")
-def root_health_check():
+def rootHealthCheck():
     return {"status": "healthy", "service": "UroLens Core Platform Architecture"}

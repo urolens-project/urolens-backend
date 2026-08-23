@@ -23,22 +23,22 @@ class User(Base):
 
     __tablename__ = "users"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    userId: Mapped[uuid.UUID] = mapped_column("user_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
-    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    hashedPassword: Mapped[str] = mapped_column("hashed_password", Text, nullable=False)
     role: Mapped[str] = mapped_column(String(30), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    failed_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
-    locked_at: Mapped[datetime | None] = mapped_column(
+    isActive: Mapped[bool] = mapped_column("is_active", Boolean, nullable=False, default=True)
+    failedAttempts: Mapped[int] = mapped_column("failed_attempts", SmallInteger, nullable=False, default=0)
+    lockedAt: Mapped[datetime | None] = mapped_column("locked_at", 
         DateTime(timezone=True), nullable=True
     )
-    expo_push_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
+    expoPushToken: Mapped[str | None] = mapped_column("expo_push_token", Text, nullable=True)
+    createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", 
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -49,12 +49,12 @@ class User(Base):
     @property
     def id(self) -> uuid.UUID:
         """Alias for `user_id`, for callers expecting a generic `id` field."""
-        return self.user_id
+        return self.userId
 
     @property
-    def is_locked(self) -> bool:
+    def isLocked(self) -> bool:
         """Whether the account is currently locked out (`locked_at` is set)."""
-        return self.locked_at is not None
+        return self.lockedAt is not None
 
     def __repr__(self) -> str:
         return f"<User {self.username!r} role={self.role}>"

@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
 from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.database import get_db
+from src.urolens.core.database import getDb
 from src.urolens.core.enums import UserRole
 from src.urolens.core.rbac import RequireRole
-from src.urolens.core.supabase import get_supabase
+from src.urolens.core.supabase import getSupabase
 from src.urolens.schemas.queue import (
     MedTechWorkloadItem,
     PendingSpecimenItem,
@@ -22,44 +22,44 @@ from src.urolens.services.queue_service import QueueService
 router = APIRouter()
 
 
-async def get_queue_service(
-    supabase_client: AsyncClient = Depends(get_supabase),
-    sqlalchemy_db: AsyncSession = Depends(get_db),
+async def getQueueService(
+    supabaseClient: AsyncClient = Depends(getSupabase),
+    sqlalchemyDb: AsyncSession = Depends(getDb),
 ) -> QueueService:
     """FastAPI dependency constructing a request-scoped `QueueService`."""
-    notification_service = NotificationService(db=sqlalchemy_db)
+    _notificationService = NotificationService(db=sqlalchemyDb)
     return QueueService(
-        db=supabase_client,
-        audit_logger=AuditLogger(),
-        notification_service=notification_service,
-        sqlalchemy_db=sqlalchemy_db,
+        db=supabaseClient,
+        auditLogger=AuditLogger(),
+        _notificationService=_notificationService,
+        sqlalchemyDb=sqlalchemyDb,
     )
 
 
 @router.get("/api/v1/queue/pending", response_model=list[PendingSpecimenItem])
-async def get_pending_specimens(
-    current_user: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
-    service: QueueService = Depends(get_queue_service),
+async def getPendingSpecimens(
+    currentUser: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
+    _service: QueueService = Depends(getQueueService),
 ):
     """Return all LABELED specimens awaiting assignment, FIFO order."""
-    return await service.get_pending_specimens()
+    return await _service.getPendingSpecimens()
 
 
 @router.get("/api/v1/queue/workloads", response_model=list[MedTechWorkloadItem])
-async def get_medtech_workloads(
-    current_user: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
-    service: QueueService = Depends(get_queue_service),
+async def getMedtechWorkloads(
+    currentUser: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
+    _service: QueueService = Depends(getQueueService),
 ):
     """Return all active MedTechs sorted by active queue depth (least-loaded first)."""
-    return await service.get_receptionist_workloads()
+    return await _service.getReceptionistWorkloads()
 
 
 @router.post("/api/v1/queue/assign", response_model=QueueAssignResponse, status_code=201)
-async def assign_specimen(
+async def assignSpecimen(
     data: QueueAssignRequest,
     request: Request,
-    current_user: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
-    service: QueueService = Depends(get_queue_service),
+    currentUser: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
+    _service: QueueService = Depends(getQueueService),
 ):
     """Assign a LABELED specimen to a MedTech and notify them."""
-    return await service.assign_specimen(data, current_user["user_id"], request)
+    return await _service.assignSpecimen(data, currentUser["user_id"], request)

@@ -25,28 +25,28 @@ class EngineErrorLog(Base):
 
     __tablename__ = "engine_error_logs"
 
-    error_id: Mapped[uuid.UUID] = mapped_column(
+    errorId: Mapped[uuid.UUID] = mapped_column("error_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    error_code: Mapped[str] = mapped_column(String(80), nullable=False)
-    error_message: Mapped[str] = mapped_column(Text, nullable=False)
-    stack_trace: Mapped[str | None] = mapped_column(Text, nullable=True)
-    flagged_at: Mapped[datetime] = mapped_column(
+    errorCode: Mapped[str] = mapped_column("error_code", String(80), nullable=False)
+    errorMessage: Mapped[str] = mapped_column("error_message", Text, nullable=False)
+    stackTrace: Mapped[str | None] = mapped_column("stack_trace", Text, nullable=True)
+    flaggedAt: Mapped[datetime] = mapped_column("flagged_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────
-    analysis_result: Mapped[AnalysisResult] = relationship(
-        back_populates="engine_error_logs"
+    analysisResult: Mapped[AnalysisResult] = relationship(
+        back_populates="engineErrorLogs"
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `error_id`, for callers expecting a generic `id` field."""
-        return self.error_id
+        return self.errorId

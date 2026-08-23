@@ -19,26 +19,26 @@ class ResultApproval(Base):
 
     __tablename__ = "result_approvals"
 
-    approval_id: Mapped[uuid.UUID] = mapped_column(
+    approvalId: Mapped[uuid.UUID] = mapped_column("approval_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
-    approved_by: Mapped[uuid.UUID] = mapped_column(
+    approvedBy: Mapped[uuid.UUID] = mapped_column("approved_by", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    approved_at: Mapped[datetime] = mapped_column(
+    approvedAt: Mapped[datetime] = mapped_column("approved_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `approval_id`, for callers expecting a generic `id` field."""
-        return self.approval_id
+        return self.approvalId

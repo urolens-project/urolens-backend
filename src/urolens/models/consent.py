@@ -11,10 +11,10 @@ class Consent(Base):
 
     __tablename__ = "consents"
 
-    consent_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
-    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.patient_id"), nullable=False)
-    consent_process = Column(Boolean, nullable=False)
-    consent_storage = Column(Boolean, nullable=False)
-    consent_research = Column(Boolean, nullable=False)
-    recorded_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
-    recorded_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    consentId = Column("consent_id", UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    patientId = Column("patient_id", UUID(as_uuid=True), ForeignKey("patients.patient_id"), nullable=False)
+    consentProcess = Column("consent_process", Boolean, nullable=False)
+    consentStorage = Column("consent_storage", Boolean, nullable=False)
+    consentResearch = Column("consent_research", Boolean, nullable=False)
+    recordedAt = Column("recorded_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    recordedBy = Column("recorded_by", UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)

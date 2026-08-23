@@ -27,12 +27,12 @@ from PIL import Image as PILImage
 from tests.integration.conftest import (
     TEST_IMAGE_ID,
     TEST_SPECIMEN_ID,
-    _make_sb_mock,
+    _makeSbMock,
 )
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
 
-def _make_jpeg(width: int = 800, height: int = 600) -> bytes:
+def _makeJpeg(width: int = 800, height: int = 600) -> bytes:
     img = PILImage.new("RGB", (width, height), color=(120, 180, 240))
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
@@ -52,48 +52,48 @@ FAKE_AI_FINDINGS = {
 # ── Upload tests ──────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_upload_valid_image_returns_201(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_uploadValidImageReturns201(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """Valid 800×600 JPEG → 201 with PENDING_CONFIRM status."""
-    sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
-    jpeg_bytes = _make_jpeg(800, 600)
+    sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
+    jpegBytes = _makeJpeg(800, 600)
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
+        patch("src.urolens.services.ai_integration_service.sb", sbMock),
+        patch("src.urolens.services.image_retake_service.sb", sbMock),
     ):
-        response = await async_client.post(
+        response = await asyncClient.post(
             "/api/v1/images/upload",
-            headers={"Authorization": f"Bearer {medtech_token}"},
-            files={"file": ("specimen.jpg", jpeg_bytes, "image/jpeg")},
-            data={"specimen_id": str(test_specimen)},
+            headers={"Authorization": f"Bearer {medtechToken}"},
+            files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
+            data={"specimenId": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["status"] == "PENDING_CONFIRM"
-    assert body["specimen_id"] == str(test_specimen)
-    assert "result_id" in body
-    assert "image_id" in body
+    assert body["specimenId"] == str(testSpecimen)
+    assert "resultId" in body
+    assert "imageId" in body
 
 
 @pytest.mark.asyncio
-async def test_upload_unsupported_format_returns_422(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_uploadUnsupportedFormatReturns422(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """GIF upload must be rejected with 422 — no Supabase calls needed."""
-    gif_bytes = b"GIF89a\x01\x00\x01\x00\x00\xff\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"
+    gifBytes = b"GIF89a\x01\x00\x01\x00\x00\xff\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"
 
-    response = await async_client.post(
+    response = await asyncClient.post(
         "/api/v1/images/upload",
-        headers={"Authorization": f"Bearer {medtech_token}"},
-        files={"file": ("specimen.gif", gif_bytes, "image/gif")},
-        data={"specimen_id": str(test_specimen)},
+        headers={"Authorization": f"Bearer {medtechToken}"},
+        files={"file": ("specimen.gif", gifBytes, "image/gif")},
+        data={"specimenId": str(testSpecimen)},
     )
 
     assert response.status_code == 422
@@ -101,19 +101,19 @@ async def test_upload_unsupported_format_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_upload_below_minimum_resolution_returns_422(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_uploadBelowMinimumResolutionReturns422(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """320×240 JPEG is below 640×480 minimum — must return 422."""
-    small_jpeg = _make_jpeg(320, 240)
+    smallJpeg = _makeJpeg(320, 240)
 
-    response = await async_client.post(
+    response = await asyncClient.post(
         "/api/v1/images/upload",
-        headers={"Authorization": f"Bearer {medtech_token}"},
-        files={"file": ("tiny.jpg", small_jpeg, "image/jpeg")},
-        data={"specimen_id": str(test_specimen)},
+        headers={"Authorization": f"Bearer {medtechToken}"},
+        files={"file": ("tiny.jpg", smallJpeg, "image/jpeg")},
+        data={"specimenId": str(testSpecimen)},
     )
 
     assert response.status_code == 422
@@ -121,119 +121,119 @@ async def test_upload_below_minimum_resolution_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_upload_triggers_ai_inference_when_package_available(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_uploadTriggersAiInferenceWhenPackageAvailable(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """When urolens_ai is installed, _try_run_inference is called and the findings
     are included in the response (ai_findings populated).
     """
-    sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
-    jpeg_bytes = _make_jpeg()
+    sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
+    jpegBytes = _makeJpeg()
 
     # `infer` is the callable; `infer(raw_bytes)` returns the inference object
-    mock_infer_fn = MagicMock()
-    mock_infer_fn.return_value.to_dict.return_value = FAKE_AI_FINDINGS
+    mockInferFn = MagicMock()
+    mockInferFn.return_value.to_dict.return_value = FAKE_AI_FINDINGS
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
+        patch("src.urolens.services.ai_integration_service.sb", sbMock),
+        patch("src.urolens.services.image_retake_service.sb", sbMock),
         # Simulate urolens_ai being installed by patching the import inside _try_run_inference
-        patch("builtins.__import__", _make_import_mock("urolens_ai", "infer", mock_infer_fn)),
+        patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", mockInferFn)),
     ):
-        response = await async_client.post(
+        response = await asyncClient.post(
             "/api/v1/images/upload",
-            headers={"Authorization": f"Bearer {medtech_token}"},
-            files={"file": ("specimen.jpg", jpeg_bytes, "image/jpeg")},
-            data={"specimen_id": str(test_specimen)},
+            headers={"Authorization": f"Bearer {medtechToken}"},
+            files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
+            data={"specimenId": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["status"] == "PENDING_CONFIRM"
-    assert body["ai_findings"] == FAKE_AI_FINDINGS
+    assert body["aiFindings"] == FAKE_AI_FINDINGS
 
 
 @pytest.mark.asyncio
-async def test_upload_succeeds_when_ai_inference_fails(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_uploadSucceedsWhenAiInferenceFails(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """AI failure must not break the upload. The endpoint returns 201 and
     ai_findings is None (the result row stays PENDING_CONFIRM with empty findings).
     """
-    sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
-    jpeg_bytes = _make_jpeg()
+    sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
+    jpegBytes = _makeJpeg()
 
-    def _raising_infer(_bytes):
+    def _raisingInfer(_bytes):
         raise RuntimeError("GPU out of memory")
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sb_mock),
-        patch("src.urolens.services.image_retake_service.sb", sb_mock),
-        patch("builtins.__import__", _make_import_mock("urolens_ai", "infer", _raising_infer)),
+        patch("src.urolens.services.ai_integration_service.sb", sbMock),
+        patch("src.urolens.services.image_retake_service.sb", sbMock),
+        patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", _raisingInfer)),
     ):
-        response = await async_client.post(
+        response = await asyncClient.post(
             "/api/v1/images/upload",
-            headers={"Authorization": f"Bearer {medtech_token}"},
-            files={"file": ("specimen.jpg", jpeg_bytes, "image/jpeg")},
-            data={"specimen_id": str(test_specimen)},
+            headers={"Authorization": f"Bearer {medtechToken}"},
+            files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
+            data={"specimenId": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["status"] == "PENDING_CONFIRM"
-    assert body["ai_findings"] is None
+    assert body["aiFindings"] is None
 
 
 # ── Discard tests ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_discard_active_image_returns_200(
-    async_client,
-    medtech_token: str,
-    test_specimen: uuid.UUID,
+async def test_discardActiveImageReturns200(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
 ) -> None:
     """POST /images/{id}/discard on an ACTIVE image → 200 with DISCARDED status."""
-    active_image = {
+    activeImage = {
         "image_id": str(TEST_IMAGE_ID),
         "specimen_id": str(TEST_SPECIMEN_ID),
         "status": "ACTIVE",
     }
-    sb_mock = _make_sb_mock(images_rows=[active_image], analysis_rows=[])
+    sbMock = _makeSbMock(imagesRows=[activeImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
-        response = await async_client.post(
+    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+        response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtech_token}"},
+            headers={"Authorization": f"Bearer {medtechToken}"},
         )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "DISCARDED"
-    assert body["image_id"] == str(TEST_IMAGE_ID)
-    assert body["discarded_at"] is not None
+    assert body["imageId"] == str(TEST_IMAGE_ID)
+    assert body["discardedAt"] is not None
 
 
 @pytest.mark.asyncio
-async def test_discard_already_discarded_image_returns_409(
-    async_client,
-    medtech_token: str,
+async def test_discardAlreadyDiscardedImageReturns409(
+    asyncClient,
+    medtechToken: str,
 ) -> None:
     """Discarding an already-DISCARDED image must return 409 Conflict."""
-    discarded_image = {
+    discardedImage = {
         "image_id": str(TEST_IMAGE_ID),
         "specimen_id": str(TEST_SPECIMEN_ID),
         "status": "DISCARDED",
     }
-    sb_mock = _make_sb_mock(images_rows=[discarded_image], analysis_rows=[])
+    sbMock = _makeSbMock(imagesRows=[discardedImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
-        response = await async_client.post(
+    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+        response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtech_token}"},
+            headers={"Authorization": f"Bearer {medtechToken}"},
         )
 
     assert response.status_code == 409
@@ -241,39 +241,39 @@ async def test_discard_already_discarded_image_returns_409(
 
 
 @pytest.mark.asyncio
-async def test_discard_nonexistent_image_returns_404(
-    async_client,
-    medtech_token: str,
+async def test_discardNonexistentImageReturns404(
+    asyncClient,
+    medtechToken: str,
 ) -> None:
     """Discarding an image that doesn't exist must return 404."""
-    sb_mock = _make_sb_mock(images_rows=[], analysis_rows=[])
+    sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
-        response = await async_client.post(
+    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+        response = await asyncClient.post(
             f"/api/v1/images/{uuid.uuid4()}/discard",
-            headers={"Authorization": f"Bearer {medtech_token}"},
+            headers={"Authorization": f"Bearer {medtechToken}"},
         )
 
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_discard_replaced_image_returns_409(
-    async_client,
-    medtech_token: str,
+async def test_discardReplacedImageReturns409(
+    asyncClient,
+    medtechToken: str,
 ) -> None:
     """Discarding a REPLACED image must return 409 Conflict."""
-    replaced_image = {
+    replacedImage = {
         "image_id": str(TEST_IMAGE_ID),
         "specimen_id": str(TEST_SPECIMEN_ID),
         "status": "REPLACED",
     }
-    sb_mock = _make_sb_mock(images_rows=[replaced_image], analysis_rows=[])
+    sbMock = _makeSbMock(imagesRows=[replacedImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sb_mock):
-        response = await async_client.post(
+    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+        response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtech_token}"},
+            headers={"Authorization": f"Bearer {medtechToken}"},
         )
 
     assert response.status_code == 409
@@ -281,20 +281,20 @@ async def test_discard_replaced_image_returns_409(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _make_import_mock(module_name: str, attr: str, value):
+def _makeImportMock(moduleName: str, attr: str, value):
     """Returns a replacement for builtins.__import__ that intercepts imports of
     `module_name` and returns a mock module exposing `attr` = `value`.
 
     All other imports fall through to the real __import__.
     """
     import builtins
-    real_import = builtins.__import__
+    realImport = builtins.__import__
 
-    def _patched_import(name, *args, **kwargs):
-        if name == module_name:
+    def _patchedImport(name, *args, **kwargs):
+        if name == moduleName:
             mod = MagicMock()
             setattr(mod, attr, value)
             return mod
-        return real_import(name, *args, **kwargs)
+        return realImport(name, *args, **kwargs)
 
-    return _patched_import
+    return _patchedImport

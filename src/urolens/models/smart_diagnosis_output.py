@@ -35,10 +35,10 @@ class SmartDiagnosisOutput(Base):
 
     __tablename__ = "smart_diagnosis_outputs"
 
-    output_id: Mapped[uuid.UUID] = mapped_column(
+    outputId: Mapped[uuid.UUID] = mapped_column("output_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    result_id: Mapped[uuid.UUID] = mapped_column(
+    resultId: Mapped[uuid.UUID] = mapped_column("result_id", 
         UUID(as_uuid=True),
         ForeignKey("analysis_results.result_id", ondelete="RESTRICT"),
         nullable=False,
@@ -46,38 +46,38 @@ class SmartDiagnosisOutput(Base):
     )
 
     # ── Diagnosis scores (Gout / Glomerulonephritis / Nephrolithiasis) ────────
-    gout_score: Mapped[str] = mapped_column(String(10), nullable=False)
-    gn_score: Mapped[str] = mapped_column(String(10), nullable=False)
-    nephro_score: Mapped[str] = mapped_column(String(10), nullable=False)
+    goutScore: Mapped[str] = mapped_column("gout_score", String(10), nullable=False)
+    gnScore: Mapped[str] = mapped_column("gn_score", String(10), nullable=False)
+    nephroScore: Mapped[str] = mapped_column("nephro_score", String(10), nullable=False)
 
     # ── Aggregate flags ───────────────────────────────────────────────────────
-    no_significant_indicators: Mapped[bool] = mapped_column(
+    noSignificantIndicators: Mapped[bool] = mapped_column("no_significant_indicators", 
         Boolean, nullable=False, default=False
     )
 
     # ── Evidence attribution ──────────────────────────────────────────────────
-    evidence_map: Mapped[dict[str, Any]] = mapped_column(
+    evidenceMap: Mapped[dict[str, Any]] = mapped_column("evidence_map", 
         JSONB, nullable=False, default=dict
     )
 
     # ── Engine metadata ───────────────────────────────────────────────────────
-    engine_version: Mapped[str] = mapped_column(
+    engineVersion: Mapped[str] = mapped_column("engine_version", 
         String(30), nullable=False, default="mvp-v1.0"
     )
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="ATTACHED"
     )
 
-    generated_at: Mapped[datetime] = mapped_column(
+    generatedAt: Mapped[datetime] = mapped_column("generated_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────
-    analysis_result: Mapped[AnalysisResult] = relationship(
-        back_populates="smart_diagnosis_output"
+    analysisResult: Mapped[AnalysisResult] = relationship(
+        back_populates="smartDiagnosisOutput"
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `output_id`, for callers expecting a generic `id` field."""
-        return self.output_id
+        return self.outputId

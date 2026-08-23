@@ -13,7 +13,7 @@ from .config import settings
 from .supabase import supabase  # noqa: F401
 
 engine = create_async_engine(
-    settings.async_database_url,
+    settings.asyncDatabaseUrl,
     echo=False,
     pool_pre_ping=True,
     pool_size=10,
@@ -31,7 +31,7 @@ AsyncSessionLocal = async_sessionmaker(
 this directly outside of a request context."""
 
 
-async def get_db() -> AsyncGenerator[AsyncSession]:
+async def getDb() -> AsyncGenerator[AsyncSession]:
     """FastAPI dependency yielding one `AsyncSession` per request.
 
     On any exception raised while the session is in use, rolls back before

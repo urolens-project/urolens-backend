@@ -21,6 +21,30 @@ These two fixes were pulled out of the in-progress backend consolidation
 single-file, don't depend on any of the consolidation's open decisions (which
 service layer survives, which RBAC import wins), and were live security gaps.
 
+### Changed
+- **Repo-wide naming convention: snake_case → camelCase**. Functions,
+  methods, parameters, local variables, and Pydantic/SQLAlchemy field
+  declarations across `src/urolens/` and `tests/` are now camelCase instead
+  of PEP 8 snake_case (see `docs/backend-standards.md` rule 17 for the full
+  rule and its exceptions). This is a deliberate, accepted **breaking change
+  to the JSON API contract** — response/request bodies now use camelCase
+  keys (e.g. `first_name` → `firstName`) since no alias layer was added.
+  Service-instance-holding attributes/locals/parameters additionally get a
+  leading `_` (e.g. `self._notificationService`); class names and file/module
+  names are unchanged.
+
+  Left unchanged by design: `alembic/versions/*.py` (DB schema, not
+  application code), live Postgres column names (SQLAlchemy attributes now
+  map to their unchanged column via an explicit
+  `Column("snake_name", ...)`/`mapped_column("snake_name", ...)` name), raw
+  Supabase query strings and any dict literal mirroring a DB row or a stored
+  JSON blob, and FastAPI path parameters (which must keep matching their
+  literal `{placeholder}` in the unchanged route path string).
+
+  `scripts/check_naming.py` is a new standalone checker for the same
+  exception list — run before opening a PR; there's no CI wired up yet to
+  catch a drift back to snake_case automatically.
+
 ## Track A2 — minimal PHI auth patch (rows 9–11 of the consolidation plan)
 
 ### Fixed

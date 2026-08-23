@@ -23,22 +23,22 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from src.urolens.api.result_releasing import get_result_releasing_service
+from src.urolens.api.result_releasing import getResultReleasingService
 from src.urolens.services.notification_service import NotificationService
 from src.urolens.services.result_releasing_service import ResultReleasingService
 
 
 @pytest.mark.asyncio
-async def test_notification_service_gets_a_real_sqlalchemy_session_not_the_supabase_client():
-    supabase_client = MagicMock(spec=AsyncClient)
-    sqlalchemy_session = MagicMock(spec=AsyncSession)
+async def test_notificationServiceGetsARealSqlalchemySessionNotTheSupabaseClient():
+    supabaseClient = MagicMock(spec=AsyncClient)
+    sqlalchemySession = MagicMock(spec=AsyncSession)
 
-    service = await get_result_releasing_service(
-        db=supabase_client, sqlalchemy_db=sqlalchemy_session
+    _service = await getResultReleasingService(
+        db=supabaseClient, sqlalchemyDb=sqlalchemySession
     )
 
-    assert isinstance(service, ResultReleasingService)
-    assert service.db is supabase_client
-    assert isinstance(service.notification_service, NotificationService)
-    assert service.notification_service.db is sqlalchemy_session
-    assert service.notification_service.db is not supabase_client
+    assert isinstance(_service, ResultReleasingService)
+    assert _service.db is supabaseClient
+    assert isinstance(_service._notificationService, NotificationService)
+    assert _service._notificationService.db is sqlalchemySession
+    assert _service._notificationService.db is not supabaseClient

@@ -12,8 +12,8 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.audit_logger import AuditLogger, get_audit_logger
-from ..core.database import get_db
+from ..core.audit_logger import AuditLogger, getAuditLogger
+from ..core.database import getDb
 from ..core.enums import UserRole
 from ..core.rbac import RequireRole
 from ..schemas.image import AnalysisResultResponse, ImageDiscardResponse
@@ -21,16 +21,16 @@ from ..services.ai_integration_service import AIIntegrationService
 from ..services.image_retake_service import ImageRetakeService
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
-_retake_service = ImageRetakeService()
+_retakeService = ImageRetakeService()
 _medtech = RequireRole([UserRole.MEDTECH])
 
 
-async def get_ai_integration_service(
-    db: AsyncSession = Depends(get_db),
-    audit_logger: AuditLogger = Depends(get_audit_logger),
+async def getAiIntegrationService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
 ) -> AIIntegrationService:
     """FastAPI dependency constructing a request-scoped `AIIntegrationService`."""
-    return AIIntegrationService(db=db, audit_logger=audit_logger)
+    return AIIntegrationService(db=db, auditLogger=auditLogger)
 
 
 @router.post(
@@ -39,27 +39,27 @@ async def get_ai_integration_service(
     status_code=status.HTTP_201_CREATED,
     summary="Upload a microscopy image and trigger AI inference (T2.7)",
 )
-async def upload_image(
+async def uploadImage(
     request: Request,
-    specimen_id: uuid.UUID = Form(...),
+    specimenId: uuid.UUID = Form(...),
     file: UploadFile = File(..., description="JPEG or PNG, minimum 640×480"),
     claims: dict = Depends(_medtech),
-    service: AIIntegrationService = Depends(get_ai_integration_service),
+    _service: AIIntegrationService = Depends(getAiIntegrationService),
 ) -> AnalysisResultResponse:
     """Upload a microscopy image for a specimen and run AI inference; see
     `AIIntegrationService.handle_upload`.
     """
-    uploader_id = uuid.UUID(claims["user_id"])
-    result = await service.handle_upload(specimen_id, uploader_id, file, request)
+    uploaderId = uuid.UUID(claims["user_id"])
+    result = await _service.handleUpload(specimenId, uploaderId, file, request)
     return AnalysisResultResponse(
-        id=result.result_id,
-        result_id=result.result_id,
-        specimen_id=result.specimen_id,
-        image_id=result.image_id,
+        id=result.resultId,
+        resultId=result.resultId,
+        specimenId=result.specimenId,
+        imageId=result.imageId,
         status=result.status,
-        ai_findings=result.ai_findings,
-        flagged_anomalies=result.flagged_anomalies,
-        smart_diagnosis=result.smart_diagnosis,
+        aiFindings=result.aiFindings,
+        flaggedAnomalies=result.flaggedAnomalies,
+        smartDiagnosis=result.smartDiagnosis,
     )
 
 
@@ -69,7 +69,7 @@ async def upload_image(
     status_code=status.HTTP_200_OK,
     summary="Discard an image so the MedTech can retake (T2.7)",
 )
-async def discard_image(
+async def discardImage(
     image_id: uuid.UUID,
     request: Request,
     claims: dict = Depends(_medtech),
@@ -77,10 +77,10 @@ async def discard_image(
     """Discard the current image so the MedTech can retake; see
     `ImageRetakeService.discard_and_retake`.
     """
-    medtech_id = uuid.UUID(claims["user_id"])
-    result = await _retake_service.discard_and_retake(
-        image_id=image_id,
-        medtech_id=medtech_id,
+    medtechId = uuid.UUID(claims["user_id"])
+    result = await _retakeService.discardAndRetake(
+        imageId=image_id,
+        medtechId=medtechId,
         request=request,
     )
     return ImageDiscardResponse(**result)

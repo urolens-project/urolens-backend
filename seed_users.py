@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.urolens.core.auth_service import hash_password
+from src.urolens.core.auth_service import hashPassword
 from src.urolens.core.supabase import supabase
 
 SEED_USERS = [
@@ -81,7 +81,7 @@ async def seed():
         await supabase.table("users").insert(
             {
                 "username": entry["username"],
-                "hashed_password": hash_password(entry["password"]),
+                "hashed_password": hashPassword(entry["password"]),
                 "role": entry["role"],
                 "is_active": entry["is_active"],
                 "locked_at": entry.get("locked_at"),
@@ -93,60 +93,60 @@ async def seed():
     print("\nSeed complete.\n")
     print("Test credentials (all passwords: password123):")
     for entry in SEED_USERS:
-        locked_note = " [LOCKED]" if entry.get("locked_at") else ""
-        print(f"  {entry['username']:<24} role={entry['role']}{locked_note}")
+        lockedNote = " [LOCKED]" if entry.get("locked_at") else ""
+        print(f"  {entry['username']:<24} role={entry['role']}{lockedNote}")
 
 
-async def seed_patients_and_results():
-    from src.urolens.core.encryption import encrypt_pii
+async def seedPatientsAndResults():
+    from src.urolens.core.encryption import encryptPii
 
     # ── Look up existing seeded data ─────────────────────────────────────────
-    patient_user = await supabase.table("users").select("*").eq("username", "patient").maybe_single().execute()
-    if not patient_user.data:
+    patientUser = await supabase.table("users").select("*").eq("username", "patient").maybe_single().execute()
+    if not patientUser.data:
         print("ERROR: 'patient' user not found. Run seed_users() first.")
         return
-    patient_user_id = patient_user.data["user_id"]
+    patientUserId = patientUser.data["user_id"]
 
-    medtech_user = await supabase.table("users").select("*").eq("username", "medtech").maybe_single().execute()
-    medtech_id = medtech_user.data["user_id"] if medtech_user.data else None
+    medtechUser = await supabase.table("users").select("*").eq("username", "medtech").maybe_single().execute()
+    medtechId = medtechUser.data["user_id"] if medtechUser.data else None
 
-    existing_patient = await supabase.table("patients").select("*").eq("user_id", patient_user_id).maybe_single().execute()
+    existingPatient = await supabase.table("patients").select("*").eq("user_id", patientUserId).maybe_single().execute()
 
-    if existing_patient.data:
+    if existingPatient.data:
         print("  Skipping patient creation for 'patient' user (already exists)")
-        patient_id = existing_patient.data["patient_id"]
+        patientId = existingPatient.data["patient_id"]
     else:
-        patient_result = await supabase.table("patients").insert({
+        patientResult = await supabase.table("patients").insert({
             "patient_uid": "PAT-100001",
-            "first_name": encrypt_pii("Maria"),
-            "last_name": encrypt_pii("Santos"),
-            "date_of_birth": encrypt_pii("1990-06-15"),
+            "first_name": encryptPii("Maria"),
+            "last_name": encryptPii("Santos"),
+            "date_of_birth": encryptPii("1990-06-15"),
             "sex": "FEMALE",
-            "contact_no": encrypt_pii("+639171112222"),
-            "address": encrypt_pii("123 Rizal Ave, Manila"),
+            "contact_no": encryptPii("+639171112222"),
+            "address": encryptPii("123 Rizal Ave, Manila"),
             "is_walkin": False,
             "record_flag": "COMPLETE",
-            "created_by": patient_user_id,
-            "user_id": patient_user_id,
+            "created_by": patientUserId,
+            "user_id": patientUserId,
             "created_at": "2026-05-01T08:00:00Z",
             "updated_at": "2026-05-01T08:00:00Z",
         }).execute()
-        patient_id = patient_result.data[0]["patient_id"]
-        print(f"  Created patient record for 'patient' user: {patient_id}")
+        patientId = patientResult.data[0]["patient_id"]
+        print(f"  Created patient record for 'patient' user: {patientId}")
 
     # ── Look up existing specimens ──────────────────────────────────────────
-    existing_specimens = await supabase.table("specimens").select("specimen_id").execute()
-    specimen_ids = [r["specimen_id"] for r in (existing_specimens.data or [])]
+    existingSpecimens = await supabase.table("specimens").select("specimen_id").execute()
+    specimenIds = [r["specimen_id"] for r in (existingSpecimens.data or [])]
 
     # ── Create sample analysis results ──────────────────────────────────────
-    existing_results = await supabase.table("analysis_results").select("result_id").eq("patient_id", patient_id).execute()
-    if existing_results.data:
-        print(f"  Skipping results for patient {patient_id} (already seeded)")
+    existingResults = await supabase.table("analysis_results").select("result_id").eq("patient_id", patientId).execute()
+    if existingResults.data:
+        print(f"  Skipping results for patient {patientId} (already seeded)")
         return
 
-    created_count = 0
+    createdCount = 0
 
-    sample_results = [
+    sampleResults = [
         {
             "status": "RELEASED",
             "cell_counts": {"rbc": 2, "wbc": 5, "epithelial_cells": 1, "casts": 0, "bacteria": 0, "crystals": 0, "mucus_threads": 0},
@@ -185,45 +185,45 @@ async def seed_patients_and_results():
         },
     ]
 
-    for result_data in sample_results:
+    for resultData in sampleResults:
         try:
-            spec_id = specimen_ids[created_count % len(specimen_ids)] if specimen_ids else None
-            if spec_id is None:
+            specId = specimenIds[createdCount % len(specimenIds)] if specimenIds else None
+            if specId is None:
                 print("  WARNING: No specimens found. Using placeholder specimen_id.")
                 continue
 
             payload = {
-                "specimen_id": spec_id,
-                "patient_id": patient_id,
-                "status": result_data["status"],
-                "cell_counts": result_data["cell_counts"],
-                "interpretation": result_data.get("interpretation"),
-                "medtech_name": result_data.get("medtech_name"),
-                "pathologist_name": result_data.get("pathologist_name"),
-                "pathologist_license": result_data.get("pathologist_license"),
-                "released_at": result_data.get("released_at"),
-                "confirmed_at": result_data.get("confirmed_at"),
-                "created_at": result_data["created_at"],
-                "updated_at": result_data["updated_at"],
+                "specimen_id": specId,
+                "patient_id": patientId,
+                "status": resultData["status"],
+                "cell_counts": resultData["cell_counts"],
+                "interpretation": resultData.get("interpretation"),
+                "medtech_name": resultData.get("medtech_name"),
+                "pathologist_name": resultData.get("pathologist_name"),
+                "pathologist_license": resultData.get("pathologist_license"),
+                "released_at": resultData.get("released_at"),
+                "confirmed_at": resultData.get("confirmed_at"),
+                "created_at": resultData["created_at"],
+                "updated_at": resultData["updated_at"],
                 "ai_findings": {},
                 "flagged_anomalies": {},
                 "particle_classes": {},
                 "model_version": "mvp-v1.0",
                 "smart_diagnosis_unavailable": False,
             }
-            if medtech_id:
-                payload["medtech_id"] = medtech_id
-                payload["confirmed_by"] = medtech_id
+            if medtechId:
+                payload["medtech_id"] = medtechId
+                payload["confirmed_by"] = medtechId
 
             await supabase.table("analysis_results").insert(payload).execute()
-            print(f"  Created analysis_result (status={result_data['status']})")
-            created_count += 1
+            print(f"  Created analysis_result (status={resultData['status']})")
+            createdCount += 1
         except Exception as e:
             print(f"  WARNING: Failed to create result: {e}")
 
-    print(f"\nSeeded {created_count} sample analysis result(s) for patient {patient_id}")
+    print(f"\nSeeded {createdCount} sample analysis result(s) for patient {patientId}")
 
 
 if __name__ == "__main__":
     asyncio.run(seed())
-    asyncio.run(seed_patients_and_results())
+    asyncio.run(seedPatientsAndResults())

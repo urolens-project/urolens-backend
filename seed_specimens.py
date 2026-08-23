@@ -49,16 +49,16 @@ async def seed():
         print("ERROR: 'medtech' user not found. Run seed_users.py first.")
         return
 
-    medtech_id = result.data["user_id"]
-    print(f"Found medtech user: {medtech_id}")
+    medtechId = result.data["user_id"]
+    print(f"Found medtech user: {medtechId}")
 
     # Fetch existing lab_request IDs to satisfy the FK constraint
-    lab_reqs = await supabase.table("lab_requests").select("lab_request_id").execute()
-    if not lab_reqs.data:
+    labReqs = await supabase.table("lab_requests").select("lab_request_id").execute()
+    if not labReqs.data:
         print("ERROR: No lab_requests found. The web developer must seed lab_requests first.")
         return
-    lab_request_ids = [r["lab_request_id"] for r in lab_reqs.data]
-    print(f"Found {len(lab_request_ids)} lab_request(s) to use\n")
+    labRequestIds = [r["lab_request_id"] for r in labReqs.data]
+    print(f"Found {len(labRequestIds)} lab_request(s) to use\n")
 
     now = datetime.now(UTC)
 
@@ -69,32 +69,32 @@ async def seed():
             print(f"  Skipping {spec['sample_uid']} (already exists)")
             continue
 
-        received_at = (now - timedelta(hours=spec["hours_ago_received"])).isoformat()
-        assigned_at = (now - timedelta(hours=spec["hours_ago_assigned"])).isoformat()
+        receivedAt = (now - timedelta(hours=spec["hours_ago_received"])).isoformat()
+        assignedAt = (now - timedelta(hours=spec["hours_ago_assigned"])).isoformat()
 
         # Insert specimen
-        spec_result = await supabase.table("specimens").insert({
+        specResult = await supabase.table("specimens").insert({
             "sample_uid":     spec["sample_uid"],
             "patient_name":   spec["patient_name"],
             "patient_uid":    spec["patient_uid"],
             "test_type":      spec["test_type"],
             "status":         spec["status"],
             "priority_level": spec["priority_level"],
-            "received_at":    received_at,
-            "assigned_at":    assigned_at,
-            "medtech_id":     medtech_id,
-            "lab_request_id": lab_request_ids[i % len(lab_request_ids)],  # rotate through existing lab_requests
-            "received_by":    medtech_id,
+            "received_at":    receivedAt,
+            "assigned_at":    assignedAt,
+            "medtech_id":     medtechId,
+            "lab_request_id": labRequestIds[i % len(labRequestIds)],  # rotate through existing lab_requests
+            "received_by":    medtechId,
         }).execute()
 
-        specimen_id = spec_result.data[0]["specimen_id"]
+        specimenId = specResult.data[0]["specimen_id"]
 
         # Insert queue assignment (assignment_id is the PK in existing schema)
         await supabase.table("queue_assignments").insert({
-            "specimen_id": specimen_id,
-            "medtech_id":  medtech_id,
-            "assigned_by": medtech_id,
-            "assigned_at": assigned_at,
+            "specimen_id": specimenId,
+            "medtech_id":  medtechId,
+            "assigned_by": medtechId,
+            "assigned_at": assignedAt,
             "status":      "ACTIVE",
         }).execute()
 

@@ -24,32 +24,32 @@ class Specimen(Base):
 
     __tablename__ = "specimens"
 
-    specimen_id: Mapped[uuid.UUID] = mapped_column(
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    lab_request_id: Mapped[uuid.UUID] = mapped_column(
+    labRequestId: Mapped[uuid.UUID] = mapped_column("lab_request_id", 
         UUID(as_uuid=True), nullable=False, index=True
     )
-    sample_uid: Mapped[str | None] = mapped_column(String(30), nullable=True, unique=True)
+    sampleUid: Mapped[str | None] = mapped_column("sample_uid", String(30), nullable=True, unique=True)
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="RECEIVED"
     )
-    visual_check_passed: Mapped[bool] = mapped_column(
+    visualCheckPassed: Mapped[bool] = mapped_column("visual_check_passed", 
         Boolean, nullable=False, default=True
     )
-    received_by: Mapped[uuid.UUID] = mapped_column(
+    receivedBy: Mapped[uuid.UUID] = mapped_column("received_by", 
         UUID(as_uuid=True), nullable=False
     )
-    received_at: Mapped[datetime] = mapped_column(
+    receivedAt: Mapped[datetime] = mapped_column("received_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    assigned_at: Mapped[datetime | None] = mapped_column(
+    assignedAt: Mapped[datetime | None] = mapped_column("assigned_at", 
         DateTime(timezone=True), nullable=True
     )
-    completed_at: Mapped[datetime | None] = mapped_column(
+    completedAt: Mapped[datetime | None] = mapped_column("completed_at", 
         DateTime(timezone=True), nullable=True
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", 
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -59,21 +59,21 @@ class Specimen(Base):
     # ── Denormalized intake/labeling fields ─────────────────────────────────
     # Added via migration 0032 — these columns already existed on the live table
     # (written/read by the pre-merge Supabase-REST code) but were never modeled.
-    medtech_id: Mapped[uuid.UUID | None] = mapped_column(
+    medtechId: Mapped[uuid.UUID | None] = mapped_column("medtech_id", 
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=True,
     )
-    patient_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    patientName: Mapped[str | None] = mapped_column("patient_name", Text, nullable=True)
     """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
-    patient_uid: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    test_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    priority_level: Mapped[str] = mapped_column(
+    patientUid: Mapped[str | None] = mapped_column("patient_uid", String(30), nullable=True)
+    testType: Mapped[str | None] = mapped_column("test_type", String(50), nullable=True)
+    priorityLevel: Mapped[str] = mapped_column("priority_level", 
         String(20), nullable=False, default="ROUTINE"
     )
-    rejection_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    rejection_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    rejected_at: Mapped[datetime | None] = mapped_column(
+    rejectionReason: Mapped[str | None] = mapped_column("rejection_reason", String(30), nullable=True)
+    rejectionNote: Mapped[str | None] = mapped_column("rejection_note", Text, nullable=True)
+    rejectedAt: Mapped[datetime | None] = mapped_column("rejected_at", 
         DateTime(timezone=True), nullable=True
     )
 
@@ -81,11 +81,11 @@ class Specimen(Base):
     images: Mapped[list[Image]] = relationship(
         back_populates="specimen", cascade="save-update, merge"
     )
-    analysis_result: Mapped[AnalysisResult | None] = relationship(
+    analysisResult: Mapped[AnalysisResult | None] = relationship(
         back_populates="specimen", uselist=False
     )
 
     @property
     def id(self) -> uuid.UUID:
         """Alias for `specimen_id`, for callers expecting a generic `id` field."""
-        return self.specimen_id
+        return self.specimenId

@@ -34,7 +34,7 @@ from src.urolens.services.notification_service import NotificationService
 from src.urolens.services.result_confirmation_service import ResultConfirmationService
 from src.urolens.services.smart_diagnosis_service import (
     SmartDiagnosisService,
-    _classify_error,
+    _classifyError,
 )
 
 # ── Shared test constants ─────────────────────────────────────────────────────
@@ -46,172 +46,172 @@ MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000012")
 
 # ── AI engine mock builders ───────────────────────────────────────────────────
 
-def _make_engine_output(
-    gout_level: str = "HIGH",
-    gn_level: str = "MODERATE",
-    nephro_level: str = "LOW",
-    no_significant: bool = False,
-    engine_version: str = "mvp-v1.0",
+def _makeEngineOutput(
+    goutLevel: str = "HIGH",
+    gnLevel: str = "MODERATE",
+    nephroLevel: str = "LOW",
+    noSignificant: bool = False,
+    engineVersion: str = "mvp-v1.0",
 ) -> MagicMock:
     """Builds a mock SmartDiagnosisOutput matching the urolens_ai schema."""
-    def _condition(level_val: str) -> MagicMock:
+    def _condition(levelVal: str) -> MagicMock:
         cond = MagicMock()
         cond.level = MagicMock()
-        cond.level.value = level_val
-        cond.weighted_score = 5.0 if level_val != "LOW" else 0.0
+        cond.level.value = levelVal
+        cond.weighted_score = 5.0 if levelVal != "LOW" else 0.0
         cond.evidence = []
         return cond
 
     out = MagicMock()
-    out.gout = _condition(gout_level)
-    out.glomerulonephritis = _condition(gn_level)
-    out.nephrolithiasis = _condition(nephro_level)
-    out.no_significant_indicators = no_significant
-    out.engine_version = engine_version
+    out.gout = _condition(goutLevel)
+    out.glomerulonephritis = _condition(gnLevel)
+    out.nephrolithiasis = _condition(nephroLevel)
+    out.noSignificantIndicators = noSignificant
+    out.engineVersion = engineVersion
     return out
 
 
-def _make_all_low_output() -> MagicMock:
-    return _make_engine_output(
-        gout_level="LOW",
-        gn_level="LOW",
-        nephro_level="LOW",
-        no_significant=True,
+def _makeAllLowOutput() -> MagicMock:
+    return _makeEngineOutput(
+        goutLevel="LOW",
+        gnLevel="LOW",
+        nephroLevel="LOW",
+        noSignificant=True,
     )
 
 
 # ── DB session mock builder ───────────────────────────────────────────────────
 
-def _make_db_mock(result: AnalysisResult) -> AsyncMock:
+def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     """Returns a mock AsyncSession that yields the given AnalysisResult on SELECT."""
     db = AsyncMock()
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=execute_result)
+    executeResult = MagicMock()
+    executeResult.scalar_one_or_none.return_value = result
+    db.execute = AsyncMock(return_value=executeResult)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
     # begin_nested() must be a sync call returning an async context manager.
     # AsyncMock() supports `async with` natively via __aenter__/__aexit__.
-    nested_ctx = AsyncMock()
-    nested_ctx.__aenter__ = AsyncMock(return_value=nested_ctx)
-    nested_ctx.__aexit__ = AsyncMock(return_value=False)
-    db.begin_nested = MagicMock(return_value=nested_ctx)
+    nestedCtx = AsyncMock()
+    nestedCtx.__aenter__ = AsyncMock(return_value=nestedCtx)
+    nestedCtx.__aexit__ = AsyncMock(return_value=False)
+    db.begin_nested = MagicMock(return_value=nestedCtx)
 
     return db
 
 
-def _make_result(
-    result_id: uuid.UUID = RESULT_ID,
-    specimen_id: uuid.UUID = SPECIMEN_ID,
+def _makeResult(
+    resultId: uuid.UUID = RESULT_ID,
+    specimenId: uuid.UUID = SPECIMEN_ID,
     status: str = ResultStatus.PENDING_CONFIRM,
-    ai_findings: dict | None = None,
+    aiFindings: dict | None = None,
 ) -> AnalysisResult:
     result = MagicMock(spec=AnalysisResult)
-    result.result_id = result_id
-    result.id = result_id
-    result.specimen_id = specimen_id
+    result.resultId = resultId
+    result.id = resultId
+    result.specimenId = specimenId
     result.status = status
-    result.ai_findings = ai_findings or {"uric_acid_crystals": 15, "rbc_casts": 3}
-    result.smart_diagnosis_unavailable = False
+    result.aiFindings = aiFindings or {"uric_acid_crystals": 15, "rbc_casts": 3}
+    result.smartDiagnosisUnavailable = False
     result.image = None
-    result.confirmed_by = None
-    result.confirmed_at = None
+    result.confirmedBy = None
+    result.confirmedAt = None
     return result
 
 
 # ── SmartDiagnosisService.run() tests ────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_run_success_persists_output():
+async def test_runSuccessPersistsOutput():
     """Happy path: run() persists SmartDiagnosisOutput and returns it."""
-    engine_output = _make_engine_output()
-    result = _make_result()
-    db = _make_db_mock(result)
+    engineOutput = _makeEngineOutput()
+    result = _makeResult()
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
-    notif.notify_supervisor_diagnosis_unavailable = AsyncMock()
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
+    _notif.notifySupervisorDiagnosisUnavailable = AsyncMock()
 
-    service = SmartDiagnosisService(audit_logger=audit_logger, notif_service=notif)
+    _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._load_result",
+        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
         "urolens_ai.generate_smart_diagnosis",
-        return_value=engine_output,
+        return_value=engineOutput,
     ):
-        output = await service.run(result_id=RESULT_ID, db=db)
+        output = await _service.run(resultId=RESULT_ID, db=db)
 
     assert output is not None
     db.add.assert_called_once()
     added = db.add.call_args[0][0]
     assert isinstance(added, SmartDiagnosisOutput)
-    assert added.gout_score == "HIGH"
-    assert added.gn_score == "MODERATE"
-    assert added.nephro_score == "LOW"
-    assert added.no_significant_indicators is False
-    assert added.engine_version == "mvp-v1.0"
-    audit_logger.record.assert_called_once()
-    call_kwargs = audit_logger.record.call_args[1]
-    assert call_kwargs["event_type"] == "SMART_DIAGNOSIS_GENERATED"
+    assert added.goutScore == "HIGH"
+    assert added.gnScore == "MODERATE"
+    assert added.nephroScore == "LOW"
+    assert added.noSignificantIndicators is False
+    assert added.engineVersion == "mvp-v1.0"
+    auditLogger.record.assert_called_once()
+    callKwargs = auditLogger.record.call_args[1]
+    assert callKwargs["eventType"] == "SMART_DIAGNOSIS_GENERATED"
 
 
 @pytest.mark.asyncio
-async def test_run_all_low_sets_no_significant_indicators():
+async def test_runAllLowSetsNoSignificantIndicators():
     """When all scores are LOW, no_significant_indicators must be True."""
-    engine_output = _make_all_low_output()
-    result = _make_result(ai_findings={"rbc": 0, "wbc": 0})
-    db = _make_db_mock(result)
+    engineOutput = _makeAllLowOutput()
+    result = _makeResult(aiFindings={"rbc": 0, "wbc": 0})
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
 
-    service = SmartDiagnosisService(audit_logger=audit_logger, notif_service=notif)
+    _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._load_result",
+        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
         "urolens_ai.generate_smart_diagnosis",
-        return_value=engine_output,
+        return_value=engineOutput,
     ):
-        output = await service.run(result_id=RESULT_ID, db=db)
+        output = await _service.run(resultId=RESULT_ID, db=db)
 
     assert output is not None
     added = db.add.call_args[0][0]
-    assert added.no_significant_indicators is True
-    assert added.gout_score == "LOW"
-    assert added.gn_score == "LOW"
-    assert added.nephro_score == "LOW"
+    assert added.noSignificantIndicators is True
+    assert added.goutScore == "LOW"
+    assert added.gnScore == "LOW"
+    assert added.nephroScore == "LOW"
 
 
 @pytest.mark.asyncio
-async def test_run_engine_failure_creates_error_log_and_returns_none():
+async def test_runEngineFailureCreatesErrorLogAndReturnsNone():
     """Engine failure: EngineErrorLog added, smart_diagnosis_unavailable=True, returns None."""
     class _FakeRuleEngineError(Exception):
         def __init__(self, code: str, message: str):
             super().__init__(message)
             self.code = code
 
-    result = _make_result()
-    db = _make_db_mock(result)
+    result = _makeResult()
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
-    notif.notify_supervisor_diagnosis_unavailable = AsyncMock()
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
+    _notif.notifySupervisorDiagnosisUnavailable = AsyncMock()
 
-    service = SmartDiagnosisService(audit_logger=audit_logger, notif_service=notif)
+    _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._load_result",
+        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -221,38 +221,38 @@ async def test_run_engine_failure_creates_error_log_and_returns_none():
             message="rule engine crashed",
         ),
     ):
-        output = await service.run(result_id=RESULT_ID, db=db)
+        output = await _service.run(resultId=RESULT_ID, db=db)
 
     assert output is None
     # EngineErrorLog was added
-    add_calls = db.add.call_args_list
-    error_log_added = any(
-        isinstance(call[0][0], EngineErrorLog) for call in add_calls
+    addCalls = db.add.call_args_list
+    errorLogAdded = any(
+        isinstance(call[0][0], EngineErrorLog) for call in addCalls
     )
-    assert error_log_added, "EngineErrorLog must be added on engine failure"
+    assert errorLogAdded, "EngineErrorLog must be added on engine failure"
     # smart_diagnosis_unavailable flag set
-    assert result.smart_diagnosis_unavailable is True
+    assert result.smartDiagnosisUnavailable is True
     # Supervisor notified
-    notif.notify_supervisor_diagnosis_unavailable.assert_called_once_with(
-        result_id=RESULT_ID
+    _notif.notifySupervisorDiagnosisUnavailable.assert_called_once_with(
+        resultId=RESULT_ID
     )
 
 
 @pytest.mark.asyncio
-async def test_run_engine_failure_does_not_propagate():
+async def test_runEngineFailureDoesNotPropagate():
     """run() MUST NEVER re-raise — engine failure is fully absorbed."""
-    result = _make_result()
-    db = _make_db_mock(result)
+    result = _makeResult()
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
-    notif.notify_supervisor_diagnosis_unavailable = AsyncMock()
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
+    _notif.notifySupervisorDiagnosisUnavailable = AsyncMock()
 
-    service = SmartDiagnosisService(audit_logger=audit_logger, notif_service=notif)
+    _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._load_result",
+        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -260,114 +260,114 @@ async def test_run_engine_failure_does_not_propagate():
         side_effect=RuntimeError("unexpected crash"),
     ):
         # Must not raise
-        result_val = await service.run(result_id=RESULT_ID, db=db)
+        resultVal = await _service.run(resultId=RESULT_ID, db=db)
 
-    assert result_val is None
+    assert resultVal is None
 
 
 # ── _classify_error tests ─────────────────────────────────────────────────────
 
-def test_classify_error_known_code():
+def test_classifyErrorKnownCode():
     exc = MagicMock()
     exc.code = "INVALID_CLASSIFICATION"
-    assert _classify_error(exc) == "INVALID_CLASSIFICATION"
+    assert _classifyError(exc) == "INVALID_CLASSIFICATION"
 
 
-def test_classify_error_unknown_falls_back():
+def test_classifyErrorUnknownFallsBack():
     exc = RuntimeError("oops")
-    assert _classify_error(exc) == "RULE_EVALUATION_FAILED"
+    assert _classifyError(exc) == "RULE_EVALUATION_FAILED"
 
 
 # ── ResultConfirmationService integration ─────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_confirm_result_triggers_smart_diagnosis():
+async def test_confirmResultTriggersSmartDiagnosis():
     """confirm_result() calls SmartDiagnosisService.run() synchronously."""
-    result = _make_result(status=ResultStatus.PENDING_CONFIRM)
-    db = _make_db_mock(result)
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
-    notif.notify_supervisor_result_ready = AsyncMock()
-    notif.notify_supervisor_diagnosis_unavailable = AsyncMock()
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
+    _notif.notifySupervisorResultReady = AsyncMock()
+    _notif.notifySupervisorDiagnosisUnavailable = AsyncMock()
 
-    smart_diag = MagicMock(spec=SmartDiagnosisService)
-    smart_diag.run = AsyncMock(return_value=MagicMock(spec=SmartDiagnosisOutput))
+    _smartDiag = MagicMock(spec=SmartDiagnosisService)
+    _smartDiag.run = AsyncMock(return_value=MagicMock(spec=SmartDiagnosisOutput))
 
     # confirmation refresh mock
-    confirmation_mock = MagicMock()
-    confirmation_mock.id = uuid.uuid4()
-    confirmation_mock.result_id = RESULT_ID
-    confirmation_mock.confirmed_by = MEDTECH_ID
-    confirmation_mock.confirmed_at = datetime.now(UTC)
+    confirmationMock = MagicMock()
+    confirmationMock.id = uuid.uuid4()
+    confirmationMock.resultId = RESULT_ID
+    confirmationMock.confirmedBy = MEDTECH_ID
+    confirmationMock.confirmedAt = datetime.now(UTC)
     db.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "__refreshed__", True))
 
-    service = ResultConfirmationService(
+    _service = ResultConfirmationService(
         db=db,
-        audit_logger=audit_logger,
-        smart_diagnosis_service=smart_diag,
-        notif_service=notif,
+        auditLogger=auditLogger,
+        _smartDiagnosisService=_smartDiag,
+        _notifService=_notif,
     )
 
-    request_mock = MagicMock()
-    request_mock.client = None
+    requestMock = MagicMock()
+    requestMock.client = None
 
     with patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._get_result",
+        "src.urolens.services.result_confirmation_service.ResultConfirmationService._getResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validate_no_pending_retake",
+        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
         new_callable=AsyncMock,
     ):
-        await service.confirm_result(
-            result_id=RESULT_ID,
-            medtech_id=MEDTECH_ID,
-            request=request_mock,
+        await _service.confirmResult(
+            resultId=RESULT_ID,
+            medtechId=MEDTECH_ID,
+            request=requestMock,
         )
 
-    smart_diag.run.assert_called_once_with(result_id=RESULT_ID, db=db)
+    _smartDiag.run.assert_called_once_with(resultId=RESULT_ID, db=db)
 
 
 @pytest.mark.asyncio
-async def test_confirm_result_succeeds_even_when_smart_diagnosis_fails():
+async def test_confirmResultSucceedsEvenWhenSmartDiagnosisFails():
     """Confirmation succeeds even when SmartDiagnosisService.run() returns None (engine failed)."""
-    result = _make_result(status=ResultStatus.PENDING_CONFIRM)
-    db = _make_db_mock(result)
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(result)
 
-    audit_logger = MagicMock(spec=AuditLogger)
-    audit_logger.record = AsyncMock()
-    notif = MagicMock(spec=NotificationService)
-    notif.notify_supervisor_result_ready = AsyncMock()
-    notif.notify_supervisor_diagnosis_unavailable = AsyncMock()
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    _notif = MagicMock(spec=NotificationService)
+    _notif.notifySupervisorResultReady = AsyncMock()
+    _notif.notifySupervisorDiagnosisUnavailable = AsyncMock()
 
-    smart_diag = MagicMock(spec=SmartDiagnosisService)
-    smart_diag.run = AsyncMock(return_value=None)  # engine failed
+    _smartDiag = MagicMock(spec=SmartDiagnosisService)
+    _smartDiag.run = AsyncMock(return_value=None)  # engine failed
 
-    service = ResultConfirmationService(
+    _service = ResultConfirmationService(
         db=db,
-        audit_logger=audit_logger,
-        smart_diagnosis_service=smart_diag,
-        notif_service=notif,
+        auditLogger=auditLogger,
+        _smartDiagnosisService=_smartDiag,
+        _notifService=_notif,
     )
 
-    request_mock = MagicMock()
-    request_mock.client = None
+    requestMock = MagicMock()
+    requestMock.client = None
 
     with patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._get_result",
+        "src.urolens.services.result_confirmation_service.ResultConfirmationService._getResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validate_no_pending_retake",
+        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
         new_callable=AsyncMock,
     ):
         # Must NOT raise even though smart diagnosis returned None
-        await service.confirm_result(
-            result_id=RESULT_ID,
-            medtech_id=MEDTECH_ID,
-            request=request_mock,
+        await _service.confirmResult(
+            resultId=RESULT_ID,
+            medtechId=MEDTECH_ID,
+            request=requestMock,
         )
 
     db.commit.assert_called_once()
