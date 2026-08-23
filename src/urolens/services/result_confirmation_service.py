@@ -102,11 +102,11 @@ class ResultConfirmationService:
         # poisons the session and makes SmartDiagnosis + audit logging blow up.
         try:
             await self.db.flush([confirmation])
-        except IntegrityError:
+        except IntegrityError as err:
             raise ConflictException(
                 code="RESULT_ALREADY_CONFIRMED",
                 message="This result has already been confirmed.",
-            )
+            ) from err
 
         # Settle particle_classes = ai_findings merged with any MedTech overrides.
         # If no overrides exist this is a straight copy of ai_findings.
