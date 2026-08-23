@@ -3,7 +3,6 @@ a password derived from their (decrypted) last name + date of birth, rather
 than a stored credential.
 """
 import asyncio
-import logging
 import unicodedata
 from datetime import UTC, datetime, timedelta
 
@@ -23,7 +22,6 @@ from src.urolens.core.supabase import supabase
 from src.urolens.schemas.auth import PatientLoginResponse
 
 _PATIENT_TOKEN_EXPIRE_MINUTES = 30
-logger = logging.getLogger(__name__)
 
 
 def _apiError(statusCode: int, code: str, message: str) -> HTTPException:

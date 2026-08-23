@@ -45,6 +45,101 @@ service layer survives, which RBAC import wins), and were live security gaps.
   exception list — run before opening a PR; there's no CI wired up yet to
   catch a drift back to snake_case automatically.
 
+## Pyright scan + code review: 5 crash bugs from a merge conflict
+
+A follow-up Pyright scan (same method as the earlier "Full-codebase
+Pylance/Pyright scan" entry below: `npx pyright` against the project venv)
+plus a code review, run after the naming-convention branch was merged with
+`fix/refactor-backend-dev` (merge commit `3ebc3ba`). That merge's conflict
+resolution introduced five crash-level bugs, all confirmed via `git blame`/
+`git diff` to be unrelated to the naming-convention rename itself (the
+rename commit was clean; the merge is what broke these). Diagnostic count
+dropped from 1,262 to 1,245 — the remainder is the same systemic Supabase
+`.data`-typing noise documented in the earlier scan entry, not re-litigated
+here.
+
+### Fixed
+- **`core/rbac.py`: every auth/authz failure crashed with `NameError`
+  instead of returning 401/403.** The merge refactored the
+  `_UNAUTHORIZED`/`_FORBIDDEN` exception constants into functions
+  `_unauthorized()`/`_forbidden()`, but left both returning the same 403 body
+  (`_unauthorized()` lost its 401 semantics), and never updated the three
+  `raise _UNAUTHORIZED`/`raise _FORBIDDEN` call sites to call the new
+  functions — `NameError` on every invalid/expired JWT and every
+  role-mismatched request. Restored distinct 401/403 responses and fixed all
+  three call sites.
+- **`core/rbac.py`: undefined `ip_address`** in a newly-added
+  `logger.warning(...)` call (the real local variable is `ipAddress`) —
+  compounded the bug above by throwing before even reaching the broken
+  `raise`.
+- **`api/results.py`: syntax error** — an extra `)` in `confirmResult`'s
+  `Depends(_REQUIRE_MEDTECH))` corrupted parsing for the rest of the
+  function and cascaded into the file failing to import cleanly.
+- **`services/lab_request_service.py` and `services/specimen_service.py`:
+  UID generation crashed on every call.** The merge changed `import random`
+  to `import secrets` (a reasonable switch to cryptographically-secure
+  randomness) but never updated the call site, which still called
+  `random.randint(10000, 99999)` — `NameError` on every lab-request/specimen
+  creation. Now uses `secrets.randbelow(90000) + 10000`.
+- **`services/patient_service.py`: `AttributeError` on `row.patient_id`** in
+  a newly-added exception-handler log line — the `Patient` model's attribute
+  is `patientId` post-rename. Only fired as a secondary crash after a PII
+  decrypt failure; fixed to `row.patientId`.
+- **`services/patient_auth_service.py`: dead `logger`/`import logging`**
+  added by the merge but never called anywhere in the file. Removed.
+
+### Flagged, not fixed — pre-existing, needs a product decision
+- **`Patient` model has no `sex` column**, but it's read as `.sex` in 4
+  places (`patient_service.py`, `result_review_service.py`) — confirmed via
+  `git blame` to predate both the rename and this merge. Every code path
+  through patient search/portal lookup or the supervisor result-review
+  patient-display helper hits `AttributeError` today. Same class of issue as
+  `pdf_service.py`'s already-documented schema mismatch below — deciding
+  whether to add the column (+ migration) or remove the reads is a product
+  call, not something to guess at here.
+
+## Fixed all 16 pre-existing test failures — full suite now green (72/72)
+
+Root-caused and fixed every test that was failing before any of the work
+above (confirmed via a clean run of the pre-rename code) — none were
+related to the naming convention or the merge-conflict bugs; each was its
+own stale-test issue. `pytest -q`: 56 passed/16 failed → **72 passed/0
+failed**.
+
+### Fixed
+- **`test_auth_service.py::TestPasswordHashing`** (3 tests): `verifyPassword`
+  is `async def`, but these test methods were plain `def` and never
+  `await`ed it — comparing a coroutine object to `True`/`False`, which is
+  always false. Made the three affected tests `async` + `@pytest.mark.asyncio`
+  and added the missing `await`.
+- **`test_queue_service.py::TestMedTechWorkload`** (2 tests) and
+  **`TestAssignSpecimen`** (6 tests, via its shared `_makeService` helper):
+  `QueueService.__init__` gained a required `sqlalchemyDb` parameter (used
+  only by `assignSpecimen`'s audit-log call, not by `getWorkloads`) that
+  these tests never supplied. Added `sqlalchemyDb=MagicMock()` to both
+  construction sites.
+- **`test_queue_service.py::TestNotificationService`** (2 tests): stale
+  mocks from before `NotificationService` was ported to SQLAlchemy — the
+  tests mocked a Supabase-style `db.table(...).insert(...)` chain, but
+  `notify()` now does `await self.db.execute(insert(Notification).values(...))`.
+  Rewrote both tests around an `AsyncSession`-shaped mock; the "inserts
+  correctly" test now inspects the compiled `Insert` statement's bound
+  params (`stmt.compile().params`) instead of a raw dict payload, and
+  explicitly pins the push-token lookup's `scalar_one_or_none()` to `None`
+  so the best-effort Expo push path doesn't attempt a real HTTP call.
+- **`test_image_upload_and_inference.py`** (3 tests): the upload endpoint's
+  `Depends(getDb)` was never overridden in these HTTP-level integration
+  tests, so it tried to open a real Postgres connection (`getaddrinfo
+  failed` — no network access here) — this predates the SQLAlchemy port of
+  `AIIntegrationService`, back when upload was Supabase-REST-only end to
+  end. Added a `mockSqlDb` fixture that overrides `app.dependency_overrides[getDb]`
+  with an `AsyncSession`-shaped mock (every lookup returns "not found" so
+  `handleUpload` takes its create-new path; `flush()` hand-assigns
+  `resultId` the way a real flush's column-default machinery would).
+  Separately, `test_uploadTriggersAiInferenceWhenPackageAvailable` mocked
+  the AI engine's return value with `.to_dict()`, but `_runInference`
+  actually reads `.particles` — fixed the mock shape to match.
+
 ## Track A2 — minimal PHI auth patch (rows 9–11 of the consolidation plan)
 
 ### Fixed

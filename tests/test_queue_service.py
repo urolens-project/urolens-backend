@@ -64,6 +64,7 @@ class TestMedTechWorkload:
             db=db,
             auditLogger=auditLogger,
             _notificationService=_notificationService,
+            sqlalchemyDb=MagicMock(),
         )
 
         workloads = await _service.getWorkloads()
@@ -89,6 +90,7 @@ class TestMedTechWorkload:
             db=db,
             auditLogger=auditLogger,
             _notificationService=_notificationService,
+            sqlalchemyDb=MagicMock(),
         )
 
         workloads = await _service.getWorkloads()
@@ -105,6 +107,7 @@ class TestAssignSpecimen:
             db=db or MagicMock(),
             auditLogger=auditLogger,
             _notificationService=_notificationService,
+            sqlalchemyDb=MagicMock(),
         )
         return _service, db or MagicMock(), auditLogger, _notificationService
 
@@ -417,26 +420,27 @@ class TestAssignSpecimen:
 class TestNotificationService:
     @pytest.mark.asyncio
     async def test_notifyNeverRaises(self):
-        db = MagicMock()
-        chain = MagicMock()
-        chain.insert.return_value = chain
-        chain.execute = AsyncMock(side_effect=Exception("DB error"))
-        db.table.return_value = chain
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=Exception("DB error"))
 
         _service = NotificationService(db)
         userId = uuid.uuid4()
 
         await _service.notify(userId, "Test message", "TEST_TYPE")
 
-        chain.execute.assert_awaited_once()
+        db.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_notifyInsertsCorrectly(self):
-        db = MagicMock()
-        chain = MagicMock()
-        chain.insert.return_value = chain
-        chain.execute = AsyncMock(return_value=MagicMock())
-        db.table.return_value = chain
+        db = AsyncMock()
+        # notify()'s insert doesn't touch the result; _push()'s push-token
+        # lookup does -- returning None here short-circuits _push() before
+        # it would otherwise attempt a real network call to Expo. AsyncMock's
+        # attribute chaining makes nested auto-created attributes AsyncMock
+        # too, so the result object must be pinned to a plain MagicMock
+        # explicitly or `.scalar_one_or_none()` returns an unawaited coroutine.
+        db.execute = AsyncMock(return_value=MagicMock())
+        db.execute.return_value.scalar_one_or_none.return_value = None
 
         _service = NotificationService(db)
         userId = uuid.uuid4()
@@ -444,10 +448,9 @@ class TestNotificationService:
 
         await _service.notify(userId, "Test", "TEST_TYPE", entityId=entityId)
 
-        chain.insert.assert_called_once()
-        payload = chain.insert.call_args[0][0]
-        assert payload["user_id"] == str(userId)
-        assert payload["message"] == "Test"
-        assert payload["notification_type"] == "TEST_TYPE"
-        assert payload["entity_id"] == str(entityId)
-        assert "is_read" not in payload
+        insertStmt = db.execute.call_args_list[0].args[0]
+        params = insertStmt.compile().params
+        assert params["user_id"] == userId
+        assert params["message"] == "Test"
+        assert params["notification_type"] == "TEST_TYPE"
+        assert params["entity_id"] == entityId

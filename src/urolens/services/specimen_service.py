@@ -44,7 +44,7 @@ async def _generateSampleUid(db: AsyncSession) -> str:
     """
     dateStr = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"SMP-{dateStr}-{random.randint(10000, 99999)}"
+        uid = f"SMP-{dateStr}-{secrets.randbelow(90000) + 10000}"
         existing = await db.execute(select(Specimen.specimenId).where(Specimen.sampleUid == uid))
         if existing.scalar_one_or_none() is None:
             return uid
