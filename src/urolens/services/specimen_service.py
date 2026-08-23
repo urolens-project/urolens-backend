@@ -5,7 +5,7 @@ rejection).
 from __future__ import annotations
 
 import logging
-import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -44,7 +44,7 @@ async def _generate_sample_uid(db: AsyncSession) -> str:
     """
     date_str = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"SMP-{date_str}-{random.randint(10000, 99999)}"
+        uid = f"SMP-{date_str}-{secrets.randbelow(90000) + 10000}"
         existing = await db.execute(select(Specimen.specimen_id).where(Specimen.sample_uid == uid))
         if existing.scalar_one_or_none() is None:
             return uid

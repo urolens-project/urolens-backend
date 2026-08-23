@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
 
 
-class ScoreLevel(str, enum.Enum):
+class ScoreLevel(enum.StrEnum):
     """The three risk levels a Smart Diagnosis condition score can take."""
 
     LOW = "LOW"

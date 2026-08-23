@@ -54,8 +54,9 @@ from ..services.smart_diagnosis_service import SmartDiagnosisService
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
-_supervisor = RequireRole([UserRole.SUPERVISOR])
-
+_REQUIRE_SUPERVISOR = RequireRole([UserRole.SUPERVISOR])
+_REQUIRE_MEDTECH = RequireRole([UserRole.MEDTECH])
+_REQUIRE_BOTH = RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])
 
 # ── Dependency factories (DIP) ────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ async def get_result_review_service(
 async def confirm_result(
     id: uuid.UUID,
     request: Request,
-    current_user: dict = Depends(RequireRole([UserRole.MEDTECH])),
+    current_user: dict = Depends(_REQUIRE_MEDTECH),
     service: ResultConfirmationService = Depends(get_confirmation_service),
 ) -> ConfirmResultResponse:
     """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
@@ -125,7 +126,7 @@ async def override_parameter(
     id: uuid.UUID,
     body: OverrideRequest,
     request: Request,
-    current_user: dict = Depends(RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])),
+    current_user: dict = Depends(_REQUIRE_BOTH),
     service: ManualOverrideService = Depends(get_override_service),
 ) -> OverrideResponse:
     """Override a single AI-generated parameter value.
@@ -151,7 +152,7 @@ async def override_parameter(
 
 @router.get("/supervisor/stats", response_model=SupervisorStatsResponse)
 async def get_supervisor_stats(
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> SupervisorStatsResponse:
     """Dashboard counts for the supervisor's review queue; see
@@ -164,7 +165,7 @@ async def get_supervisor_stats(
 async def list_approved_today(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ApprovedTodayListResponse:
     """List results approved today; see `ResultReviewService.get_approved_today`."""
@@ -175,7 +176,7 @@ async def list_approved_today(
 async def list_escalated(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> EscalatedListResponse:
     """List escalated results; see `ResultReviewService.get_escalated`."""
@@ -186,7 +187,7 @@ async def list_escalated(
 async def list_pending_results(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> PendingResultListResponse:
     """List results awaiting supervisor approval; see `ResultReviewService.get_pending`."""
@@ -197,7 +198,7 @@ async def list_pending_results(
 async def annotate_result(
     result_id: uuid.UUID,
     body: AnnotationRequest,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> AnnotationResponse:
     """Save a supervisor's annotation on a result; see
@@ -216,7 +217,7 @@ async def annotate_result(
 async def approve_result(
     result_id: uuid.UUID,
     body: ApproveRequest,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ApproveResponse:
     """Approve a pending result; see `ResultReviewService.approve_result`."""
@@ -232,7 +233,7 @@ async def approve_result(
 async def return_result(
     result_id: uuid.UUID,
     body: ReturnRequest,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> ReturnResponse:
     """Return a pending result for correction; see `ResultReviewService.return_result`."""
@@ -248,7 +249,7 @@ async def return_result(
 async def escalate_result(
     result_id: uuid.UUID,
     body: EscalateRequest,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> EscalateResponse:
     """Escalate a pending result; see `ResultReviewService.escalate_result`."""
@@ -268,7 +269,7 @@ async def escalate_result(
 )
 async def get_smart_diagnosis_route(
     result_id: str,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output; see
     `result_review_service.get_smart_diagnosis`.
@@ -279,7 +280,7 @@ async def get_smart_diagnosis_route(
 @router.get("/{result_id}", response_model=FullResultDetail)
 async def get_full_result(
     result_id: uuid.UUID,
-    current_user: dict = Depends(_supervisor),
+    current_user: dict = Depends(_REQUIRE_SUPERVISOR),
     service: ResultReviewService = Depends(get_result_review_service),
 ) -> FullResultDetail:
     """Fetch a result's full supervisor-review detail; see

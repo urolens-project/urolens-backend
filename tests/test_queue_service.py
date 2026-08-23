@@ -305,7 +305,6 @@ class TestAssignSpecimen:
         db = MagicMock()
         db.table = MagicMock()
 
-        call_count = [0]
 
         def table_side_effect(table_name):
             chain = MagicMock()

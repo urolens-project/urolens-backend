@@ -4,12 +4,14 @@ events).
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from .config import settings
 from .supabase import supabase
 
+logger = logging.getLogger(__name__)
 
 class AuditLogger:
     """Writes to the shared `audit_logs` table. The one audit-writing code
@@ -54,6 +56,7 @@ class AuditLogger:
             }).execute()
         except Exception:
             # Audit must never break the main transaction
+            logger.exception("Failed to log audit entry.")
             pass
 
 

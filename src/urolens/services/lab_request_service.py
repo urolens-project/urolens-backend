@@ -9,7 +9,7 @@ physician was specified on the intake form (if any) and
 """
 from __future__ import annotations
 
-import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -38,7 +38,7 @@ async def _generate_request_uid(db: AsyncSession) -> str:
     """
     date_str = datetime.now(_PHT).strftime("%Y%m%d")
     for _ in range(_UID_GENERATION_ATTEMPTS):
-        uid = f"REQ-{date_str}-{random.randint(10000, 99999)}"
+        uid = f"REQ-{date_str}-{secrets.randbelow(90000) + 10000}"
         existing = await db.execute(
             select(LabRequest.lab_request_id).where(LabRequest.request_uid == uid)
         )

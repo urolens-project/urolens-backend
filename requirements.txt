@@ -33,6 +33,7 @@ typing_extensions==4.15.0
 uvicorn==0.47.0
 python-dotenv==1.2.1
 Pillow==12.2.0
+pre-commit==4.6.2
 python-multipart
 
 urolens-ai-engine @ git+https://github.com/urolens-project/urolens-ai-engine.git@develop
