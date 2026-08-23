@@ -4,6 +4,7 @@ search, and portal-account-linked lookup.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
 from fastapi import HTTPException, Request, status
@@ -22,6 +23,7 @@ _UID_GENERATION_ATTEMPTS = 5
 _DUPLICATE_CHECK_LIMIT = 100
 _SEARCH_LIMIT = 20
 
+logger = logging.getLogger(__name__)
 
 class PatientService:
     """Owns patient creation, search, and portal-account-linked lookup.
@@ -155,6 +157,7 @@ class PatientService:
                 first = decrypt_pii(row.first_name)
                 last = decrypt_pii(row.last_name)
             except Exception:
+                logger.exception("PII decrypt failed for patient row %s", row.patient_id)
                 continue
 
             if q_lower in first.lower() or q_lower in last.lower():
@@ -243,6 +246,7 @@ class PatientService:
             except HTTPException:
                 raise
             except Exception:
+                logger.exception("PII decrypt failed for patient row")
                 continue
 
     async def _generate_patient_uid(self) -> str:

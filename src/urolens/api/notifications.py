@@ -12,6 +12,7 @@ from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.notifications import NotificationOut, PushTokenRequest
 
+_REQUIRE_MEDTECH = RequireRole([UserRole.MEDTECH])
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
 
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
 @router.get("/notifications", response_model=list[NotificationOut])
 async def list_notifications(
-    current_user: dict = Depends(RequireRole([UserRole.MEDTECH])),
+    current_user: dict = Depends(_REQUIRE_MEDTECH),
     db: AsyncSession = Depends(get_db),
 ):
     """List the authenticated MedTech's 50 most recent notifications, newest first."""
@@ -37,7 +38,7 @@ async def list_notifications(
 @router.patch("/notifications/{notification_id}/read", status_code=204)
 async def mark_notification_read(
     notification_id: uuid.UUID,
-    current_user: dict = Depends(RequireRole([UserRole.MEDTECH])),
+    current_user: dict = Depends(_REQUIRE_MEDTECH),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark one of the authenticated MedTech's own notifications read.
