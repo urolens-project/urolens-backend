@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.urolens.core.supabase import supabase
+from src.core.supabase import supabase
 
 _PHT = timezone(timedelta(hours=8))
 

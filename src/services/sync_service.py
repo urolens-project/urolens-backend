@@ -4,7 +4,7 @@ queue assignments, and analysis results from Supabase.
 import asyncio
 from datetime import UTC, datetime
 
-from src.urolens.core.supabase import supabase
+from src.core.supabase import supabase
 
 # Columns to select per table — only what the mobile sync needs
 _SPECIMEN_COLS = (

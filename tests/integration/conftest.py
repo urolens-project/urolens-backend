@@ -22,7 +22,7 @@ from httpx import ASGITransport, AsyncClient
 
 # Import app after env is loaded (main.py calls load_dotenv at top)
 from main import app
-from src.urolens.core.config import settings
+from src.core.config import settings
 
 # ── Fixed IDs ────────────────────────────────────────────────────────────────
 
@@ -54,14 +54,14 @@ def testSpecimen() -> uuid.UUID:
 
 @pytest_asyncio.fixture(autouse=True)
 async def mockSessionActive():
-    """The canonical auth dependency (src.urolens.core.rbac, adopted by image.py
+    """The canonical auth dependency (src.core.rbac, adopted by image.py
     in the image/AI domain merge) checks session revocation via
     is_session_active(), which hits Supabase — unlike the old non-canonical
     dependency these tests were originally written against, which only
     decoded the JWT locally. Mocked here (autouse) so the plain signed-JWT
     fixtures above don't need a real `sessions` table.
     """
-    with patch("src.urolens.core.rbac.isSessionActive", AsyncMock(return_value=True)):
+    with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
         yield
 
 
@@ -151,7 +151,7 @@ async def clientWithMockSb(asyncClient):
         analysisRows=[],
     )
     with (
-        patch("src.urolens.api.image.sb", sbMock),
-        patch("src.urolens.services.image_retake_service.sb", sbMock),
+        patch("src.api.image.sb", sbMock),
+        patch("src.services.image_retake_service.sb", sbMock),
     ):
         yield asyncClient, sbMock

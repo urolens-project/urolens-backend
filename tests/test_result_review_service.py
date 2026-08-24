@@ -29,14 +29,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.urolens.core.exceptions import ConflictException, UnprocessableException
-from src.urolens.models.analysis_result import AnalysisResult, ResultStatus
-from src.urolens.models.escalation import Escalation
-from src.urolens.models.result_approval import ResultApproval
-from src.urolens.models.result_return import ResultReturn
-from src.urolens.models.result_review import ResultReview
-from src.urolens.models.specimen import Specimen
-from src.urolens.services.result_review_service import ResultReviewService
+from src.core.exceptions import ConflictException, UnprocessableException
+from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.escalation import Escalation
+from src.models.result_approval import ResultApproval
+from src.models.result_return import ResultReturn
+from src.models.result_review import ResultReview
+from src.models.specimen import Specimen
+from src.services.result_review_service import ResultReviewService
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")

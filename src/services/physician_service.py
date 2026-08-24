@@ -6,9 +6,9 @@ SQLAlchemy version) — consolidated away; physicians now go through
 """
 import logging
 
-from src.urolens.core.encryption import decryptPii
-from src.urolens.core.supabase import supabase
-from src.urolens.schemas.physician import PhysicianPatientItem
+from src.core.encryption import decryptPii
+from src.core.supabase import supabase
+from src.schemas.physician import PhysicianPatientItem
 
 logger = logging.getLogger(__name__)
 

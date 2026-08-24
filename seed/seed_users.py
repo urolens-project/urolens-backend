@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.urolens.core.auth_service import hashPassword
-from src.urolens.core.supabase import supabase
+from src.core.auth_service import hashPassword
+from src.core.supabase import supabase
 
 SEED_USERS = [
     {
@@ -98,7 +98,7 @@ async def seed():
 
 
 async def seedPatientsAndResults():
-    from src.urolens.core.encryption import encryptPii
+    from src.core.encryption import encryptPii
 
     # ── Look up existing seeded data ─────────────────────────────────────────
     patientUser = await supabase.table("users").select("*").eq("username", "patient").maybe_single().execute()

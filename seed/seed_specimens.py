@@ -1,7 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from src.urolens.core.supabase import supabase
+from src.core.supabase import supabase
 
 # Adjust status values to match the specimens.status enum in your DB.
 # Run this in Supabase SQL Editor to see valid values:

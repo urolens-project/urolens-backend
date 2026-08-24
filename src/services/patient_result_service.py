@@ -8,8 +8,8 @@ from uuid import UUID
 from fastapi import HTTPException, Request, status
 from supabase import AsyncClient
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.schemas.patient_portal import (
+from src.core.audit_logger import AuditLogger
+from src.schemas.patient_portal import (
     PARTICLE_LABELS,
     ParticleCount,
     PatientResultDetailResponse,

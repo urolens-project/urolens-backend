@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from src.urolens.schemas.queue import QueueAssignRequest
-from src.urolens.services.notification_service import NotificationService
-from src.urolens.services.queue_service import QueueService
+from src.schemas.queue import QueueAssignRequest
+from src.services.notification_service import NotificationService
+from src.services.queue_service import QueueService
 
 
 def _makeChain(returnData=None):

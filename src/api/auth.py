@@ -11,8 +11,8 @@ from fastapi import (
     status,
 )
 
-from src.urolens.core import audit_logger
-from src.urolens.core.auth_service import (
+from src.core import audit_logger
+from src.core.auth_service import (
     closeSession,
     createSession,
     getUserByUsername,
@@ -21,8 +21,8 @@ from src.urolens.core.auth_service import (
     resetFailedAttempts,
     verifyPassword,
 )
-from src.urolens.core.rbac import getCurrentUser
-from src.urolens.schemas.auth import LoginRequest, LoginResponse
+from src.core.rbac import getCurrentUser
+from src.schemas.auth import LoginRequest, LoginResponse
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

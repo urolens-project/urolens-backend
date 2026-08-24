@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.urolens.core.enums import UserRole
-from src.urolens.services.notification_service import NotificationService
+from src.core.enums import UserRole
+from src.services.notification_service import NotificationService
 
 LAB_REQUEST_ID = uuid.UUID("00000000-0000-0000-0000-000000000060")
 

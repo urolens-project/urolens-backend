@@ -18,21 +18,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.models.analysis_result import AnalysisResult, ResultStatus
-from src.urolens.models.engine_error_log import EngineErrorLog
-from src.urolens.models.image import Image  # noqa: F401
-from src.urolens.models.manual_override import ManualOverride  # noqa: F401
-from src.urolens.models.result_confirmation import ResultConfirmation  # noqa: F401
-from src.urolens.models.result_view import ResultView  # noqa: F401
-from src.urolens.models.smart_diagnosis_output import SmartDiagnosisOutput
+from src.core.audit_logger import AuditLogger
+from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.engine_error_log import EngineErrorLog
+from src.models.image import Image  # noqa: F401
+from src.models.manual_override import ManualOverride  # noqa: F401
+from src.models.result_confirmation import ResultConfirmation  # noqa: F401
+from src.models.result_view import ResultView  # noqa: F401
+from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 
 # Import every model that shares the SQLAlchemy registry so all forward-reference
 # strings (e.g. "Specimen") are resolvable before mapper configuration is triggered.
-from src.urolens.models.specimen import Specimen  # noqa: F401
-from src.urolens.services.notification_service import NotificationService
-from src.urolens.services.result_confirmation_service import ResultConfirmationService
-from src.urolens.services.smart_diagnosis_service import (
+from src.models.specimen import Specimen  # noqa: F401
+from src.services.notification_service import NotificationService
+from src.services.result_confirmation_service import ResultConfirmationService
+from src.services.smart_diagnosis_service import (
     SmartDiagnosisService,
     _classifyError,
 )
@@ -138,7 +138,7 @@ async def test_runSuccessPersistsOutput():
     _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
+        "src.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -175,7 +175,7 @@ async def test_runAllLowSetsNoSignificantIndicators():
     _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
+        "src.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -211,7 +211,7 @@ async def test_runEngineFailureCreatesErrorLogAndReturnsNone():
     _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
+        "src.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -252,7 +252,7 @@ async def test_runEngineFailureDoesNotPropagate():
     _service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notif)
 
     with patch(
-        "src.urolens.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
+        "src.services.smart_diagnosis_service.SmartDiagnosisService._loadResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
@@ -314,11 +314,11 @@ async def test_confirmResultTriggersSmartDiagnosis():
     requestMock.client = None
 
     with patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._getResult",
+        "src.services.result_confirmation_service.ResultConfirmationService._getResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
         new_callable=AsyncMock,
     ):
         await _service.confirmResult(
@@ -356,11 +356,11 @@ async def test_confirmResultSucceedsEvenWhenSmartDiagnosisFails():
     requestMock.client = None
 
     with patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._getResult",
+        "src.services.result_confirmation_service.ResultConfirmationService._getResult",
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.urolens.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
         new_callable=AsyncMock,
     ):
         # Must NOT raise even though smart diagnosis returned None

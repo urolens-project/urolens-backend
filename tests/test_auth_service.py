@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt
 import pytest
 
-from src.urolens.core.auth_service import (
+from src.core.auth_service import (
     decodeJwt,
     hashPassword,
     incrementFailedAttempts,
@@ -86,7 +86,7 @@ class TestJWT:
             "iat": now - timedelta(hours=10),
             "exp": now - timedelta(hours=2),
         }
-        from src.urolens.core.config import settings
+        from src.core.config import settings
 
         expiredToken = jwt.encode(
             expiredPayload, settings.jwtSigningKey, algorithm=settings.jwtAlgorithm
@@ -114,7 +114,7 @@ class TestFailedAttempts:
     async def test_incrementBelowThreshold(self):
         user = {"user_id": uuid.uuid4(), "failed_attempts": 2, "locked_at": None}
         with patch(
-            "src.urolens.core.auth_service._getUserById",
+            "src.core.auth_service._getUserById",
             AsyncMock(return_value=user),
         ):
             mockExecute = AsyncMock()
@@ -124,7 +124,7 @@ class TestFailedAttempts:
             mockUpdate.update.return_value = mockEq
             mockTable = MagicMock()
             mockTable.table.return_value = mockUpdate
-            with patch("src.urolens.core.auth_service.supabase", mockTable):
+            with patch("src.core.auth_service.supabase", mockTable):
                 await incrementFailedAttempts(user["user_id"])
                 callArgs = mockUpdate.update.call_args
                 assert callArgs is not None
@@ -136,7 +136,7 @@ class TestFailedAttempts:
     async def test_incrementTriggersLockout(self):
         user = {"user_id": uuid.uuid4(), "failed_attempts": 4, "locked_at": None}
         with patch(
-            "src.urolens.core.auth_service._getUserById",
+            "src.core.auth_service._getUserById",
             AsyncMock(return_value=user),
         ):
             mockExecute = AsyncMock()
@@ -146,7 +146,7 @@ class TestFailedAttempts:
             mockUpdate.update.return_value = mockEq
             mockTable = MagicMock()
             mockTable.table.return_value = mockUpdate
-            with patch("src.urolens.core.auth_service.supabase", mockTable):
+            with patch("src.core.auth_service.supabase", mockTable):
                 await incrementFailedAttempts(user["user_id"])
                 callArgs = mockUpdate.update.call_args
                 updateData = callArgs[0][0]
@@ -162,7 +162,7 @@ class TestFailedAttempts:
         mockUpdate.update.return_value = mockEq
         mockTable = MagicMock()
         mockTable.table.return_value = mockUpdate
-        with patch("src.urolens.core.auth_service.supabase", mockTable):
+        with patch("src.core.auth_service.supabase", mockTable):
             await resetFailedAttempts(uuid.uuid4())
 
 
@@ -170,7 +170,7 @@ class TestSessionActive:
     @pytest.mark.asyncio
     async def test_activeSession(self):
         with patch(
-            "src.urolens.core.auth_service.supabase",
+            "src.core.auth_service.supabase",
             MagicMock(),
         ) as mock:
             mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
@@ -182,7 +182,7 @@ class TestSessionActive:
     @pytest.mark.asyncio
     async def test_closedSession(self):
         with patch(
-            "src.urolens.core.auth_service.supabase",
+            "src.core.auth_service.supabase",
             MagicMock(),
         ) as mock:
             mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
@@ -194,7 +194,7 @@ class TestSessionActive:
     @pytest.mark.asyncio
     async def test_nonexistentSession(self):
         with patch(
-            "src.urolens.core.auth_service.supabase",
+            "src.core.auth_service.supabase",
             MagicMock(),
         ) as mock:
             mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
