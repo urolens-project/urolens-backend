@@ -109,7 +109,7 @@ async def getResultReviewService(
 async def confirmResult(
     id: uuid.UUID,
     request: Request,
-    currentUser: dict = Depends(_REQUIRE_MEDTECH)),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
     """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""

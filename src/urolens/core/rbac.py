@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 def _unauthorized() -> HTTPException:
     return HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Insufficient permissions.",
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required.",
     )
 
 def _forbidden() -> HTTPException:
@@ -50,14 +50,14 @@ async def getCurrentUser(
     try:
         claims = decodeJwt(token)
     except Exception:
-        logger.warning("JWT decode failed from %s", ip_address, exc_info=True)
+        logger.warning("JWT decode failed from %s", ipAddress, exc_info=True)
         await audit_logger.logAccessDenied(ipAddress)
-        raise _UNAUTHORIZED
+        raise _unauthorized()
 
     sessionId = claims.get("session_id")
     if not sessionId or not await isSessionActive(sessionId):
         await audit_logger.logAccessDenied(ipAddress, userId=claims.get("user_id"))
-        raise _UNAUTHORIZED
+        raise _unauthorized()
 
     return claims
 
@@ -90,5 +90,5 @@ class RequireRole:
         """
         userRole = currentUser.get("role", "").lower()
         if userRole not in {r.lower() for r in self.allowedRoles}:
-            raise _FORBIDDEN
+            raise _forbidden()
         return currentUser
