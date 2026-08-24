@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.urolens.schemas.result_review import VALID_ESCALATION_PATHS, EscalateRequest
+from src.schemas.result_review import VALID_ESCALATION_PATHS, EscalateRequest
 
 
 def test_validEscalationPathsAccepted():

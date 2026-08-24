@@ -29,8 +29,8 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from main import app
-from src.urolens.core.config import settings
-from src.urolens.services.result_releasing_service import ResultReleasingService
+from src.core.config import settings
+from src.services.result_releasing_service import ResultReleasingService
 
 # ── Fixed IDs ─────────────────────────────────────────────────────────────────
 
@@ -292,7 +292,7 @@ class TestRBAC:
     async def test_supervisorCannotAccessApprovedQueue(self, asyncClient):
         token = _mintToken(SUPERVISOR_ID, "SUPERVISOR")
         with patch(
-            "src.urolens.core.rbac.isSessionActive", AsyncMock(return_value=True)
+            "src.core.rbac.isSessionActive", AsyncMock(return_value=True)
         ):
             response = await asyncClient.get(
                 "/api/v1/results/approved",

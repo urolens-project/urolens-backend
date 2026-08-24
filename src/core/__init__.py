@@ -1,7 +1,7 @@
 """Core infrastructure: config, database/Supabase clients, auth/session
 primitives, RBAC dependencies, encryption, audit logging, and shared
 exceptions/enums. Public API re-exported below — prefer
-`from src.urolens.core import RequireRole` over reaching into a submodule
+`from src.core import RequireRole` over reaching into a submodule
 directly (rule 6). Importing anything from this package (even `UserRole`
 alone) now eagerly constructs the Settings/Supabase client/DB engine, since
 Python must run this file before any submodule import completes — a

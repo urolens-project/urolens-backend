@@ -46,7 +46,7 @@ cp .env.example .env
 | `ENCRYPTION_KEY` | Fernet key for PHI/PII encryption at rest — generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `JWT_ALGORITHM`, `JWT_EXPIRY_HOURS`, `MAX_FAILED_ATTEMPTS` | Have working defaults; override only if you need to |
 
-> 🔒 `src/urolens/core/config.py` validates `JWT_SIGNING_KEY` and `ENCRYPTION_KEY` **at
+> 🔒 `src/core/config.py` validates `JWT_SIGNING_KEY` and `ENCRYPTION_KEY` **at
 > import time** — the app will refuse to start with a `RuntimeError` if either is unset or
 > still the placeholder value from `.env.example`. If `python -c "import main"` fails
 > immediately, check `.env` first.

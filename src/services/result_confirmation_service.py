@@ -1,4 +1,4 @@
-# Path: urolens-backend/src/urolens/services/result_confirmation_service.py
+# Path: urolens-backend/src/services/result_confirmation_service.py
 """MedTech result-confirmation transaction (T2.5): confirms an analysis
 result, settles particle_classes, triggers Smart Diagnosis, and notifies the
 supervisor — all as one unit of work.

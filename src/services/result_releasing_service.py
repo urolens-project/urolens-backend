@@ -10,15 +10,15 @@ from uuid import UUID
 from fastapi import HTTPException, Request, status
 from supabase import AsyncClient
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.encryption import decryptPii
-from src.urolens.schemas.result_releasing import (
+from src.core.audit_logger import AuditLogger
+from src.core.encryption import decryptPii
+from src.schemas.result_releasing import (
     ApprovedResultItem,
     ApprovedResultsResponse,
     PaginationMeta,
     ResultReleaseResponse,
 )
-from src.urolens.services.notification_service import NotificationService
+from src.services.notification_service import NotificationService
 
 
 class ResultReleasingService:

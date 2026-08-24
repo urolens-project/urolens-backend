@@ -57,7 +57,7 @@ def _makeSyntheticMicroscopyImage() -> bytes:
 
 
 async def main():
-    from src.urolens.core.supabase import supabase
+    from src.core.supabase import supabase
 
     # 1. Get specimen_id from result_id
     print(f"Looking up specimen for result_id={RESULT_ID} ...")
