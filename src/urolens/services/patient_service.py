@@ -157,7 +157,7 @@ class PatientService:
                 first = decryptPii(row.firstName)
                 last = decryptPii(row.lastName)
             except Exception:
-                logger.exception("PII decrypt failed for patient row %s", row.patient_id)
+                logger.exception("PII decrypt failed for patient row %s", row.patientId)
                 continue
 
             if qLower in first.lower() or qLower in last.lower():

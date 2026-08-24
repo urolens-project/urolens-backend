@@ -17,28 +17,31 @@ from src.urolens.core.auth_service import (
 
 
 class TestPasswordHashing:
-    def test_hashAndVerifyCorrectPassword(self):
+    @pytest.mark.asyncio
+    async def test_hashAndVerifyCorrectPassword(self):
         password = "secure_password_123"
         hashed = hashPassword(password)
         assert hashed != password
-        assert verifyPassword(password, hashed) is True
+        assert await verifyPassword(password, hashed) is True
 
-    def test_verifyWrongPassword(self):
+    @pytest.mark.asyncio
+    async def test_verifyWrongPassword(self):
         password = "secure_password_123"
         hashed = hashPassword(password)
-        assert verifyPassword("wrong_password", hashed) is False
+        assert await verifyPassword("wrong_password", hashed) is False
 
     def test_hashIsBcryptFormat(self):
         hashed = hashPassword("test")
         assert hashed.startswith("$2b$") or hashed.startswith("$2a$")
 
-    def test_differentHashesForSamePassword(self):
+    @pytest.mark.asyncio
+    async def test_differentHashesForSamePassword(self):
         password = "password123"
         hash1 = hashPassword(password)
         hash2 = hashPassword(password)
         assert hash1 != hash2
-        assert verifyPassword(password, hash1) is True
-        assert verifyPassword(password, hash2) is True
+        assert await verifyPassword(password, hash1) is True
+        assert await verifyPassword(password, hash2) is True
 
 
 class TestJWT:
