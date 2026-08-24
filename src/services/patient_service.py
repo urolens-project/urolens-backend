@@ -11,13 +11,13 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.auth_service import hashPassword
-from src.urolens.core.encryption import decryptPii, encryptPii
-from src.urolens.models.consent import Consent
-from src.urolens.models.patient import Patient
-from src.urolens.models.user import User
-from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
+from src.core.audit_logger import AuditLogger
+from src.core.auth_service import hashPassword
+from src.core.encryption import decryptPii, encryptPii
+from src.models.consent import Consent
+from src.models.patient import Patient
+from src.models.user import User
+from src.schemas.patient import PatientCreateRequest, PatientResponse
 
 _UID_GENERATION_ATTEMPTS = 5
 _DUPLICATE_CHECK_LIMIT = 100

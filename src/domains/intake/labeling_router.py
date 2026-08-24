@@ -7,16 +7,16 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.database import getDb
-from src.urolens.core.enums import UserRole
-from src.urolens.core.rbac import RequireRole
-from src.urolens.schemas.labeling import (
+from src.core.database import getDb
+from src.core.enums import UserRole
+from src.core.rbac import RequireRole
+from src.schemas.labeling import (
     LabelConfirmRequest,
     LabelConfirmResponse,
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )
-from src.urolens.services import labeling_service
+from src.services import labeling_service
 
 router = APIRouter(
     prefix="/api/v1/specimens",

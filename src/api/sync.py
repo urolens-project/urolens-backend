@@ -3,9 +3,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
-from src.urolens.core.rbac import getCurrentUser
-from src.urolens.schemas.sync import SyncPullResponse
-from src.urolens.services import sync_service
+from src.core.rbac import getCurrentUser
+from src.schemas.sync import SyncPullResponse
+from src.services import sync_service
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 

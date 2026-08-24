@@ -6,16 +6,16 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.database import getDb
-from src.urolens.core.rbac import RequireRole
-from src.urolens.schemas.lab_request import LabRequestCreateResponse
-from src.urolens.schemas.physician import (
+from src.core.database import getDb
+from src.core.rbac import RequireRole
+from src.schemas.lab_request import LabRequestCreateResponse
+from src.schemas.physician import (
     LabRequestCreateRequest,
     PhysicianPatientItem,
     PhysicianResultDetail,
     PhysicianResultListResponse,
 )
-from src.urolens.services import (
+from src.services import (
     lab_request_service,
     physician_result_service,
     physician_service,

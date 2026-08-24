@@ -6,18 +6,18 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from src.urolens.core.audit_logger import AuditLogger, getAuditLogger
-from src.urolens.core.database import getDb
-from src.urolens.core.enums import UserRole
-from src.urolens.core.rbac import RequireRole
-from src.urolens.core.supabase import getSupabase
-from src.urolens.schemas.patient_portal import (
+from src.core.audit_logger import AuditLogger, getAuditLogger
+from src.core.database import getDb
+from src.core.enums import UserRole
+from src.core.rbac import RequireRole
+from src.core.supabase import getSupabase
+from src.schemas.patient_portal import (
     PatientResultDetailResponse,
     PatientResultItem,
 )
-from src.urolens.services.patient_result_service import PatientResultService
-from src.urolens.services.patient_service import PatientService
-from src.urolens.services.pdf_service import generateResultPdf
+from src.services.patient_result_service import PatientResultService
+from src.services.patient_service import PatientService
+from src.services.pdf_service import generateResultPdf
 
 router = APIRouter()
 

@@ -20,10 +20,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.urolens.core.exceptions import NotFoundException
-from src.urolens.models.patient import Patient
-from src.urolens.models.user import User
-from src.urolens.services.lab_request_service import (
+from src.core.exceptions import NotFoundException
+from src.models.patient import Patient
+from src.models.user import User
+from src.services.lab_request_service import (
     _generateRequestUid,
     createLabRequest,
 )
@@ -111,9 +111,9 @@ async def test_createLabRequestRaises404WhenPatientMissingPhysicianStyle():
 async def test_createLabRequestReceptionistStyleSkipsNotificationButStillAudits():
     db = _makeDb()
     with patch(
-        "src.urolens.services.lab_request_service.NotificationService"
+        "src.services.lab_request_service.NotificationService"
     ) as mockNotifCls, patch(
-        "src.urolens.services.lab_request_service.AuditLogger"
+        "src.services.lab_request_service.AuditLogger"
     ) as mockAuditCls:
         mockAuditCls.return_value.record = AsyncMock()
 
@@ -143,9 +143,9 @@ async def test_createLabRequestReceptionistStyleSkipsNotificationButStillAudits(
 async def test_createLabRequestPhysicianStyleNotifiesReceptionistsAndAudits():
     db = _makeDb()
     with patch(
-        "src.urolens.services.lab_request_service.NotificationService"
+        "src.services.lab_request_service.NotificationService"
     ) as mockNotifCls, patch(
-        "src.urolens.services.lab_request_service.AuditLogger"
+        "src.services.lab_request_service.AuditLogger"
     ) as mockAuditCls:
         mockNotifCls.return_value.notifyActiveReceptionists = AsyncMock()
         mockAuditCls.return_value.record = AsyncMock()
@@ -174,8 +174,8 @@ async def test_createLabRequestLooksUpPhysicianNameWhenMissing():
     physician.username = "dr_santos"
     db = _makeDb(getSideEffect=[physician])
 
-    with patch("src.urolens.services.lab_request_service.NotificationService"), patch(
-        "src.urolens.services.lab_request_service.AuditLogger"
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
     ) as mockAuditCls:
         mockAuditCls.return_value.record = AsyncMock()
         await createLabRequest(

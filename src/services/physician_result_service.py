@@ -9,10 +9,10 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException, Request, status
 
-from src.urolens.core.config import settings
-from src.urolens.core.encryption import decryptPii
-from src.urolens.core.supabase import supabase
-from src.urolens.schemas.physician import (
+from src.core.config import settings
+from src.core.encryption import decryptPii
+from src.core.supabase import supabase
+from src.schemas.physician import (
     PhysicianResultDetail,
     PhysicianResultSummary,
     SmartDiagnosisDetail,

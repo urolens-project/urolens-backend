@@ -33,25 +33,25 @@ This is enforced two ways, not just requested:
 
 ## 🧩 Adding a new feature — required sequence
 
-1. 🗂️ **Check `src/urolens/schemas/`** for an existing request/response shape before defining
+1. 🗂️ **Check `src/schemas/`** for an existing request/response shape before defining
    a new one. Several domain modules already export a wide surface via `schemas/__init__.py`.
-2. 🧠 **Check `src/urolens/services/`** for existing logic before writing new service code —
+2. 🧠 **Check `src/services/`** for existing logic before writing new service code —
    the service layer is organized one file per domain (`patient_service.py`,
    `queue_service.py`, etc.), and `services/__init__.py` re-exports the public
    classes/functions.
-3. ⚙️ **Add or extend a service** in `src/urolens/services/<feature>_service.py`.
-4. 🔐 **Add or extend a router** in `src/urolens/api/` (or `src/urolens/domains/<feature>/`
+3. ⚙️ **Add or extend a service** in `src/services/<feature>_service.py`.
+4. 🔐 **Add or extend a router** in `src/api/` (or `src/domains/<feature>/`
    for the two domain-specific router groups — specimen intake and lab-request creation
    currently live there). Every protected route must use the canonical dependency from
-   `src/urolens/core/rbac.py` — `Depends(RequireRole([...]))` or `Depends(getCurrentUser)` —
+   `src/core/rbac.py` — `Depends(RequireRole([...]))` or `Depends(getCurrentUser)` —
    never a bespoke auth check.
 5. 📌 **Register the router in `main.py`.** Check the existing `app.include_router(...)`
    calls first to confirm no other router already serves the path you're adding.
 6. 📦 **Prefer importing from a package's barrel where practical.** `core/`, `services/`,
    `schemas/`, and `models/` all have populated `__init__.py` files re-exporting their public
-   API (e.g. `from src.urolens.services import PatientService`). This is additive — most
+   API (e.g. `from src.services import PatientService`). This is additive — most
    *existing* call sites still import submodules directly
-   (`from src.urolens.services.patient_service import PatientService`), and that hasn't been
+   (`from src.services.patient_service import PatientService`), and that hasn't been
    migrated yet — but new code should reach for the barrel first. `api/` and `domains/` don't
    have barrels: every router module exports a symbol literally named `router`, which would
    collide across all of them. Import those submodules directly.
@@ -59,7 +59,7 @@ This is enforced two ways, not just requested:
    (`uvicorn main:app --reload`) and check `/docs` for the new route before considering the
    change done.
 8. 🌱 **New environment variable?** Add it to `.env`, `.env.example`, and
-   `src/urolens/core/config.py`'s `Settings` class — with startup validation if it's a
+   `src/core/config.py`'s `Settings` class — with startup validation if it's a
    secret, following the pattern already used for `JWT_SIGNING_KEY`/`ENCRYPTION_KEY`.
 9. 🗃️ **Touching the database?**
    - Run `alembic heads` first — must show a single head before you start.

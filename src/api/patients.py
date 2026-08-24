@@ -2,12 +2,12 @@
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.audit_logger import AuditLogger, getAuditLogger
-from src.urolens.core.database import getDb
-from src.urolens.core.enums import UserRole
-from src.urolens.core.rbac import RequireRole
-from src.urolens.schemas.patient import PatientCreateRequest, PatientResponse
-from src.urolens.services.patient_service import PatientService
+from src.core.audit_logger import AuditLogger, getAuditLogger
+from src.core.database import getDb
+from src.core.enums import UserRole
+from src.core.rbac import RequireRole
+from src.schemas.patient import PatientCreateRequest, PatientResponse
+from src.services.patient_service import PatientService
 
 router = APIRouter()
 

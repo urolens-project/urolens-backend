@@ -1,6 +1,6 @@
 """Business-logic layer: one module per domain service, called from
 `api/`/`domains/` routers. Public API re-exported below — prefer
-`from src.urolens.services import PatientService` over reaching into a
+`from src.services import PatientService` over reaching into a
 submodule directly (rule 6).
 
 Module-scoped loggers (`log`/`logger`) and internal constants (e.g.

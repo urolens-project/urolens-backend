@@ -25,8 +25,8 @@ import pytest
 from PIL import Image as PILImage
 
 from main import app
-from src.urolens.core.database import getDb
-from src.urolens.models.analysis_result import AnalysisResult
+from src.core.database import getDb
+from src.models.analysis_result import AnalysisResult
 from tests.integration.conftest import (
     TEST_IMAGE_ID,
     TEST_SPECIMEN_ID,
@@ -110,8 +110,8 @@ async def test_uploadValidImageReturns201(
     jpegBytes = _makeJpeg(800, 600)
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sbMock),
-        patch("src.urolens.services.image_retake_service.sb", sbMock),
+        patch("src.services.ai_integration_service.sb", sbMock),
+        patch("src.services.image_retake_service.sb", sbMock),
     ):
         response = await asyncClient.post(
             "/api/v1/images/upload",
@@ -187,8 +187,8 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
     mockInferFn.return_value.particles = FAKE_AI_FINDINGS
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sbMock),
-        patch("src.urolens.services.image_retake_service.sb", sbMock),
+        patch("src.services.ai_integration_service.sb", sbMock),
+        patch("src.services.image_retake_service.sb", sbMock),
         # Simulate urolens_ai being installed by patching the import inside _try_run_inference
         patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", mockInferFn)),
     ):
@@ -222,8 +222,8 @@ async def test_uploadSucceedsWhenAiInferenceFails(
         raise RuntimeError("GPU out of memory")
 
     with (
-        patch("src.urolens.services.ai_integration_service.sb", sbMock),
-        patch("src.urolens.services.image_retake_service.sb", sbMock),
+        patch("src.services.ai_integration_service.sb", sbMock),
+        patch("src.services.image_retake_service.sb", sbMock),
         patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", _raisingInfer)),
     ):
         response = await asyncClient.post(
@@ -255,7 +255,7 @@ async def test_discardActiveImageReturns200(
     }
     sbMock = _makeSbMock(imagesRows=[activeImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+    with patch("src.services.image_retake_service.sb", sbMock):
         response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtechToken}"},
@@ -281,7 +281,7 @@ async def test_discardAlreadyDiscardedImageReturns409(
     }
     sbMock = _makeSbMock(imagesRows=[discardedImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+    with patch("src.services.image_retake_service.sb", sbMock):
         response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtechToken}"},
@@ -299,7 +299,7 @@ async def test_discardNonexistentImageReturns404(
     """Discarding an image that doesn't exist must return 404."""
     sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+    with patch("src.services.image_retake_service.sb", sbMock):
         response = await asyncClient.post(
             f"/api/v1/images/{uuid.uuid4()}/discard",
             headers={"Authorization": f"Bearer {medtechToken}"},
@@ -321,7 +321,7 @@ async def test_discardReplacedImageReturns409(
     }
     sbMock = _makeSbMock(imagesRows=[replacedImage], analysisRows=[])
 
-    with patch("src.urolens.services.image_retake_service.sb", sbMock):
+    with patch("src.services.image_retake_service.sb", sbMock):
         response = await asyncClient.post(
             f"/api/v1/images/{TEST_IMAGE_ID}/discard",
             headers={"Authorization": f"Bearer {medtechToken}"},

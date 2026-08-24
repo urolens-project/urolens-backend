@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-TARGET_DIRS = [REPO / "src" / "urolens", REPO / "tests"]
+TARGET_DIRS = [REPO / "src", REPO / "tests"]
 
 UPPER_CONST_RE = re.compile(r"^_*[A-Z0-9]+(_[A-Z0-9]+)*_*$")
 DUNDER_RE = re.compile(r"^__[a-zA-Z0-9_]+__$")
