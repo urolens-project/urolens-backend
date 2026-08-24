@@ -7,10 +7,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.urolens.core.database import getDb
-from src.urolens.core.enums import UserRole
-from src.urolens.core.rbac import RequireRole
-from src.urolens.schemas.specimen import (
+from src.core.database import getDb
+from src.core.enums import UserRole
+from src.core.rbac import RequireRole
+from src.schemas.specimen import (
     LabRequestSearchItem,
     SpecimenListItem,
     SpecimenReceiveRequest,
@@ -18,7 +18,7 @@ from src.urolens.schemas.specimen import (
     SpecimenRejectRequest,
     SpecimenRejectResponse,
 )
-from src.urolens.services import lab_request_service, specimen_service
+from src.services import lab_request_service, specimen_service
 
 router = APIRouter(
     prefix="/api/v1/specimens",

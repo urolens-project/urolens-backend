@@ -1,9 +1,9 @@
 """Patient-portal login/logout routes."""
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from src.urolens.core.rbac import getCurrentUser
-from src.urolens.schemas.auth import PatientLoginRequest, PatientLoginResponse
-from src.urolens.services.patient_auth_service import patientLogin, patientLogout
+from src.core.rbac import getCurrentUser
+from src.schemas.auth import PatientLoginRequest, PatientLoginResponse
+from src.services.patient_auth_service import patientLogin, patientLogout
 
 router = APIRouter(prefix="/api/v1/auth", tags=["patient-auth"])
 

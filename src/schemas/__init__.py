@@ -1,5 +1,5 @@
 """Pydantic request/response models, grouped by domain module. Public API
-re-exported below — prefer `from src.urolens.schemas import PatientResponse`
+re-exported below — prefer `from src.schemas import PatientResponse`
 over reaching into a submodule directly (rule 6).
 
 Two pairs of classes are deliberately excluded from this barrel, not

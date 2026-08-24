@@ -2,14 +2,14 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-# import src.urolens.models  # noqa: F401 — registers all SQLAlchemy models before first query
+# import src.models  # noqa: F401 — registers all SQLAlchemy models before first query
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.urolens.api import (
+from src.api import (
     auth,
     patient_auth,
     patient_portal,
@@ -17,18 +17,18 @@ from src.urolens.api import (
     physician,
     queue,
 )
-from src.urolens.api.image import router as images_router
-from src.urolens.api.notifications import router as notifications_router  # Epic 8
-from src.urolens.api.result_releasing import router as result_releasing_router
+from src.api.image import router as images_router
+from src.api.notifications import router as notifications_router  # Epic 8
+from src.api.result_releasing import router as result_releasing_router
 
 # Mobile developer routers
-from src.urolens.api.results import router as results_router
-from src.urolens.api.sync import router as sync_router
-from src.urolens.domains.intake.labeling_router import router as labeling_router
+from src.api.results import router as results_router
+from src.api.sync import router as sync_router
+from src.domains.intake.labeling_router import router as labeling_router
 
 # Web developer routers
-from src.urolens.domains.intake.specimens_router import router as src_specimens_router
-from src.urolens.domains.request.lab_requests_router import (
+from src.domains.intake.specimens_router import router as src_specimens_router
+from src.domains.request.lab_requests_router import (
     router as lab_requests_router,
 )
 
@@ -37,7 +37,7 @@ app = FastAPI(title="UroLens LIS Engine")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    # Auth is Bearer-token-in-header (see apiClient.ts / src.urolens.core.rbac), never
+    # Auth is Bearer-token-in-header (see apiClient.ts / src.core.rbac), never
     # cookies — allow_credentials=True is not needed and must stay False, since
     # combining it with allow_origins=["*"] lets any origin read authenticated
     # responses made with the browser's ambient credentials.

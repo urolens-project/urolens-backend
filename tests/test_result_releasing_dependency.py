@@ -23,9 +23,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from src.urolens.api.result_releasing import getResultReleasingService
-from src.urolens.services.notification_service import NotificationService
-from src.urolens.services.result_releasing_service import ResultReleasingService
+from src.api.result_releasing import getResultReleasingService
+from src.services.notification_service import NotificationService
+from src.services.result_releasing_service import ResultReleasingService
 
 
 @pytest.mark.asyncio

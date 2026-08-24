@@ -5,19 +5,19 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.database import getDb
-from src.urolens.core.enums import UserRole
-from src.urolens.core.rbac import RequireRole
-from src.urolens.core.supabase import getSupabase
-from src.urolens.schemas.queue import (
+from src.core.audit_logger import AuditLogger
+from src.core.database import getDb
+from src.core.enums import UserRole
+from src.core.rbac import RequireRole
+from src.core.supabase import getSupabase
+from src.schemas.queue import (
     MedTechWorkloadItem,
     PendingSpecimenItem,
     QueueAssignRequest,
     QueueAssignResponse,
 )
-from src.urolens.services.notification_service import NotificationService
-from src.urolens.services.queue_service import QueueService
+from src.services.notification_service import NotificationService
+from src.services.queue_service import QueueService
 
 router = APIRouter()
 

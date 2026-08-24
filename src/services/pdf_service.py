@@ -1,7 +1,7 @@
 """Renders a patient-facing PDF lab report from a confirmed/released result."""
 from datetime import UTC, datetime
 
-from src.urolens.schemas.patient_portal import PatientResultDetail
+from src.schemas.patient_portal import PatientResultDetail
 
 
 def _safeStr(value: str | None, fallback: str = "Pending") -> str:

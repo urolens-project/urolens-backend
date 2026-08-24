@@ -18,11 +18,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import Request
 
-from src.urolens.core.audit_logger import AuditLogger
-from src.urolens.core.exceptions import UnprocessableException
-from src.urolens.models.analysis_result import AnalysisResult, ResultStatus
-from src.urolens.models.manual_override import ManualOverride
-from src.urolens.services.manual_override_service import ManualOverrideService
+from src.core.audit_logger import AuditLogger
+from src.core.exceptions import UnprocessableException
+from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.manual_override import ManualOverride
+from src.services.manual_override_service import ManualOverrideService
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000020")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000021")

@@ -32,7 +32,7 @@ work, and a stale restatement would mislead more than it helps.
 
 ## 1. ⚙️ Config
 
-All configuration goes through `src/urolens/core/config.py`'s `Settings` class — no
+All configuration goes through `src/core/config.py`'s `Settings` class — no
 `os.getenv` calls anywhere else in the codebase. Secrets (`JWT_SIGNING_KEY`, DB credentials,
 `ENCRYPTION_KEY`) have no default; the app raises `RuntimeError` at import time if any of them
 is unset or still equal to a known placeholder value. This is deliberate and load-bearing —
@@ -41,7 +41,7 @@ see `README.md`'s setup section for what this looks like when you hit it.
 ## 2. 🔐 Auth / RBAC
 
 Every route gets the canonical session-revocation-aware dependency: `Depends(RequireRole([...]))`
-or `Depends(getCurrentUser)`, both from `src/urolens/core/rbac.py`. Role checks happen at the
+or `Depends(getCurrentUser)`, both from `src/core/rbac.py`. Role checks happen at the
 route/dependency level — never as an ownership-check-only inside a service. No client-supplied
 identity header (`X-User-Id` or similar) is ever trusted as authentication.
 
@@ -51,7 +51,7 @@ identity header (`X-User-Id` or similar) is ever trusted as authentication.
 
 ## 3. 🏥 PHI / PII
 
-Encrypted at rest via Fernet (`src/urolens/core/encryption.py`), one policy, no second
+Encrypted at rest via Fernet (`src/core/encryption.py`), one policy, no second
 unencrypted path for the same entity. Never log or print decrypted PHI, key material (even
 partial), or raw passwords. PHI-bearing files/images are served only through an
 authenticated + audited endpoint, never a public storage URL.
@@ -75,16 +75,16 @@ can't write data attributed to someone.
 
 ## 6. 📦 Package boundaries
 
-> 📍 **Current state:** `src/urolens/core/`, `services/`, `schemas/`, and `models/` all have
+> 📍 **Current state:** `src/core/`, `services/`, `schemas/`, and `models/` all have
 > populated `__init__.py` files re-exporting their public API (e.g.
-> `from src.urolens.services import PatientService`). This was added deliberately
+> `from src.services import PatientService`). This was added deliberately
 > additive-only — most *existing* call sites in this codebase still import submodules
-> directly (`from src.urolens.services.patient_service import PatientService`), and migrating
+> directly (`from src.services.patient_service import PatientService`), and migrating
 > them wasn't done as part of that change. New code should prefer importing from the barrel
 > where practical; don't feel obligated to rewrite working imports you're not otherwise
 > touching.
 
-`src/urolens/api/` and `src/urolens/domains/` deliberately do **not** have barrels — every one
+`src/api/` and `src/domains/` deliberately do **not** have barrels — every one
 of their 14 router modules exports a symbol literally named `router`, an unavoidable
 collision a flat re-export can't resolve. `main.py` handles this today by aliasing each
 router import individually; import those submodules directly.
@@ -98,9 +98,9 @@ barrel.
 
 ## 7. 📥 Imports
 
-The actual convention in this codebase: **absolute** `from src.urolens.<package>.<module> import X`
+The actual convention in this codebase: **absolute** `from src.<package>.<module> import X`
 in top-level files (`main.py`, `tests/`) and **relative** `from ..<package>.<module> import X` /
-`from .<module> import X` within `src/urolens/` package modules themselves. Don't climb more
+`from .<module> import X` within `src/` package modules themselves. Don't climb more
 than one level of relative import across a domain boundary — if you need to reach far, use
 the absolute form instead.
 
@@ -120,9 +120,9 @@ one-line summary, `Args:` for each parameter whose purpose isn't obvious from it
 `[tool.ruff.lint.pydocstyle] convention = "google"`). Private helpers get a short comment if
 their purpose isn't obvious from the name.
 
-> ✅ **Current state:** a full docstring pass ran across `src/urolens/`'s entire exported
+> ✅ **Current state:** a full docstring pass ran across `src/`'s entire exported
 > surface — confirmed via Ruff's `D`-category report (`docs/ruff-baseline-report.md`): zero
-> missing-docstring violations (`D100`–`D105`) remain in `src/urolens/`, only
+> missing-docstring violations (`D100`–`D105`) remain in `src/`, only
 > Google-convention formatting nitpicks (blank-line placement, a handful of undocumented
 > `__init__`s). `tests/` and the root-level scripts (`seed_*.py`, `test_image_upload.py`)
 > were never in that pass's scope and don't carry the same expectation — docstrings on
@@ -138,7 +138,7 @@ relying on inference for anything another module consumes. No `Any` — use unio
 > yet enforced or build-blocking, and `mypy --strict` is not yet wired into CI (there is no
 > CI configured at all yet). Most of this codebase predates this rule — see
 > `docs/ruff-baseline-report.md` for the actual gap count (roughly 75 violations inside
-> `src/urolens/` specifically, once test files and scripts are excluded from the raw total).
+> `src/` specifically, once test files and scripts are excluded from the raw total).
 
 ## 11. 🗂️ Schemas only in `schemas/`
 
