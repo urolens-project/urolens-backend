@@ -134,24 +134,3 @@ def _makeSbMock(
 async def asyncClient():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
-
-
-# ── Composite fixture: client + fresh Supabase mock ──────────────────────────
-
-@pytest_asyncio.fixture
-async def clientWithMockSb(asyncClient):
-    """Yields (async_client, sb_mock).
-
-    Patches both the image-router and the retake-service Supabase references so
-    both use the same mock instance. Starts with no existing DB rows (empty
-    images and analysis_results tables).
-    """
-    sbMock = _makeSbMock(
-        imagesRows=[],
-        analysisRows=[],
-    )
-    with (
-        patch("src.api.image.sb", sbMock),
-        patch("src.services.image_retake_service.sb", sbMock),
-    ):
-        yield asyncClient, sbMock
