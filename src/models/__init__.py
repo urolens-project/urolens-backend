@@ -17,6 +17,7 @@ from .queue_assignment import QueueAssignment  # noqa: F401
 from .result_approval import ResultApproval  # noqa: F401
 from .result_confirmation import ResultConfirmation  # noqa: F401
 from .result_release import ResultRelease  # noqa: F401
+from .result_retrieval import ResultRetrieval  # noqa: F401
 from .result_return import ResultReturn  # noqa: F401
 from .result_review import ResultReview  # noqa: F401
 from .result_view import ResultView  # noqa: F401

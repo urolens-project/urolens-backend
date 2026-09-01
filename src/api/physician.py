@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.audit_logger import AuditLogger, getAuditLogger
 from src.core.database import getDb
 from src.core.rbac import RequireRole
 from src.schemas.lab_request import LabRequestCreateResponse
@@ -17,13 +18,21 @@ from src.schemas.physician import (
 )
 from src.services import (
     lab_request_service,
-    physician_result_service,
     physician_service,
 )
+from src.services.physician_result_service import PhysicianResultService
 
 router = APIRouter(prefix="/api/v1/physician", tags=["physician"])
 
 _physician = RequireRole(["PHYSICIAN"])
+
+
+async def getPhysicianResultService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> PhysicianResultService:
+    """FastAPI dependency constructing a request-scoped `PhysicianResultService`."""
+    return PhysicianResultService(db=db, auditLogger=auditLogger)
 
 
 @router.get("/patients/search", response_model=list[PhysicianPatientItem])
@@ -65,12 +74,13 @@ async def listMyResults(
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
     claims: dict = Depends(_physician),
+    _service: PhysicianResultService = Depends(getPhysicianResultService),
 ):
     """List the authenticated physician's results; see
-    `physician_result_service.list_results`.
+    `PhysicianResultService.list_results`.
     """
-    return await physician_result_service.listResults(
-        physicianId=claims["user_id"],
+    return await _service.listResults(
+        physicianId=uuid.UUID(claims["user_id"]),
         page=page,
         pageSize=pageSize,
     )
@@ -78,15 +88,16 @@ async def listMyResults(
 
 @router.get("/results/{result_id}", response_model=PhysicianResultDetail)
 async def getResultDetail(
-    result_id: str,
+    result_id: uuid.UUID,
     request: Request,
     claims: dict = Depends(_physician),
+    _service: PhysicianResultService = Depends(getPhysicianResultService),
 ):
     """Fetch one result's detail for the authenticated physician; see
-    `physician_result_service.get_result_detail`.
+    `PhysicianResultService.get_result_detail`.
     """
-    return await physician_result_service.getResultDetail(
+    return await _service.getResultDetail(
         resultId=result_id,
-        physicianId=claims["user_id"],
+        physicianId=uuid.UUID(claims["user_id"]),
         request=request,
     )
