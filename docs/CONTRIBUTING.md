@@ -40,9 +40,7 @@ This is enforced two ways, not just requested:
    `queue_service.py`, etc.), and `services/__init__.py` re-exports the public
    classes/functions.
 3. ⚙️ **Add or extend a service** in `src/services/<feature>_service.py`.
-4. 🔐 **Add or extend a router** in `src/api/` (or `src/domains/<feature>/`
-   for the two domain-specific router groups — specimen intake and lab-request creation
-   currently live there). Every protected route must use the canonical dependency from
+4. 🔐 **Add or extend a router** in `src/api/`. Every protected route must use the canonical dependency from
    `src/core/rbac.py` — `Depends(RequireRole([...]))` or `Depends(getCurrentUser)` —
    never a bespoke auth check.
 5. 📌 **Register the router in `main.py`.** Check the existing `app.include_router(...)`
@@ -52,8 +50,8 @@ This is enforced two ways, not just requested:
    API (e.g. `from src.services import PatientService`). This is additive — most
    *existing* call sites still import submodules directly
    (`from src.services.patient_service import PatientService`), and that hasn't been
-   migrated yet — but new code should reach for the barrel first. `api/` and `domains/` don't
-   have barrels: every router module exports a symbol literally named `router`, which would
+   migrated yet — but new code should reach for the barrel first. `api/` doesn't
+   have a barrel: every router module exports a symbol literally named `router`, which would
    collide across all of them. Import those submodules directly.
 7. 📖 **Verify the OpenAPI docs render correctly.** Start the server
    (`uvicorn main:app --reload`) and check `/docs` for the new route before considering the

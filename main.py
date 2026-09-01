@@ -24,13 +24,11 @@ from src.api.result_releasing import router as result_releasing_router
 # Mobile developer routers
 from src.api.results import router as results_router
 from src.api.sync import router as sync_router
-from src.domains.intake.labeling_router import router as labeling_router
+from src.api.labeling import router as labeling_router
 
 # Web developer routers
-from src.domains.intake.specimens_router import router as src_specimens_router
-from src.domains.request.lab_requests_router import (
-    router as lab_requests_router,
-)
+from src.api.specimens import router as src_specimens_router
+from src.api.lab_requests import router as lab_requests_router
 
 app = FastAPI(title="UroLens LIS Engine")
 
