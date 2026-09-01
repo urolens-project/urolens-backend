@@ -21,7 +21,6 @@ from ..services.ai_integration_service import AIIntegrationService
 from ..services.image_retake_service import ImageRetakeService
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
-_retakeService = ImageRetakeService()
 _medtech = RequireRole([UserRole.MEDTECH])
 
 
@@ -31,6 +30,14 @@ async def getAiIntegrationService(
 ) -> AIIntegrationService:
     """FastAPI dependency constructing a request-scoped `AIIntegrationService`."""
     return AIIntegrationService(db=db, auditLogger=auditLogger)
+
+
+async def getImageRetakeService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> ImageRetakeService:
+    """FastAPI dependency constructing a request-scoped `ImageRetakeService`."""
+    return ImageRetakeService(db=db, auditLogger=auditLogger)
 
 
 @router.post(
@@ -73,12 +80,13 @@ async def discardImage(
     image_id: uuid.UUID,
     request: Request,
     claims: dict = Depends(_medtech),
+    _service: ImageRetakeService = Depends(getImageRetakeService),
 ) -> ImageDiscardResponse:
     """Discard the current image so the MedTech can retake; see
     `ImageRetakeService.discard_and_retake`.
     """
     medtechId = uuid.UUID(claims["user_id"])
-    result = await _retakeService.discardAndRetake(
+    result = await _service.discardAndRetake(
         imageId=image_id,
         medtechId=medtechId,
         request=request,
