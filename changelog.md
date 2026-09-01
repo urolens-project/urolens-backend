@@ -44,6 +44,25 @@ service layer survives, which RBAC import wins), and were live security gaps.
   `scripts/check_naming.py` is a new standalone checker for the same
   exception list — run before opening a PR; there's no CI wired up yet to
   catch a drift back to snake_case automatically.
+- **Finished the `domains/` → `api/` router restructuring.** The
+  services/schemas layers for specimens/labeling/lab-requests had already
+  been moved into `src/services/`/`src/schemas/`; only the router layer was
+  left behind in `src/domains/`. Moved and renamed the 3 remaining router
+  files to match every other router's bare-domain-name convention (no
+  `_router` suffix): `src/domains/intake/specimens_router.py` →
+  `src/api/specimens.py`, `src/domains/intake/labeling_router.py` →
+  `src/api/labeling.py`, `src/domains/request/lab_requests_router.py` →
+  `src/api/lab_requests.py`. Pure relocation — no logic, RBAC, or route-path
+  changes; all 3 files already used absolute `src.*` imports, so nothing
+  inside them needed to change. Updated `main.py`'s 3 import lines to the new
+  `src.api.*` paths (same aliases, so the `app.include_router(...)` calls
+  and mount order are untouched). Fixed two docs mentions
+  (`docs/CONTRIBUTING.md`, `docs/BACKEND-STANDARDS.md`) that described
+  `src/domains/` as a currently-live second router location. Grep-confirmed
+  zero remaining references to `src.domains`/`src/domains` anywhere in the
+  repo (outside this changelog's own history) before deleting `src/domains/`
+  in full, including its `__init__.py` files and `__pycache__` artifacts.
+  Route count unchanged (50) and `pytest` still 72 passed post-move.
 
 ## Pyright scan + code review: 5 crash bugs from a merge conflict
 

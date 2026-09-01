@@ -84,8 +84,8 @@ can't write data attributed to someone.
 > where practical; don't feel obligated to rewrite working imports you're not otherwise
 > touching.
 
-`src/api/` and `src/domains/` deliberately do **not** have barrels — every one
-of their 14 router modules exports a symbol literally named `router`, an unavoidable
+`src/api/` deliberately does **not** have a barrel — every one
+of its 14 router modules exports a symbol literally named `router`, an unavoidable
 collision a flat re-export can't resolve. `main.py` handles this today by aliasing each
 router import individually; import those submodules directly.
 
