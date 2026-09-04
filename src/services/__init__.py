@@ -29,7 +29,7 @@ from .patient_auth_service import patientLogin, patientLogout  # noqa: F401
 from .patient_result_service import PatientResultService  # noqa: F401
 from .patient_service import PatientService  # noqa: F401
 from .pdf_service import generateResultPdf  # noqa: F401
-from .physician_result_service import getResultDetail, listResults  # noqa: F401
+from .physician_result_service import PhysicianResultService  # noqa: F401
 from .physician_service import searchPatients  # noqa: F401
 from .queue_service import QueueService  # noqa: F401
 from .result_confirmation_service import ResultConfirmationService  # noqa: F401

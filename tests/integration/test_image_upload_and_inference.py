@@ -26,8 +26,12 @@ from PIL import Image as PILImage
 
 from main import app
 from src.core.database import getDb
+from src.core.exceptions import ConflictError, NotFoundError
 from src.models.analysis_result import AnalysisResult
+from src.models.image import Image
+from src.services.image_retake_service import ImageRetakeService
 from tests.integration.conftest import (
+    MEDTECH_USER_ID,
     TEST_IMAGE_ID,
     TEST_SPECIMEN_ID,
     _makeSbMock,
@@ -109,10 +113,7 @@ async def test_uploadValidImageReturns201(
     sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
     jpegBytes = _makeJpeg(800, 600)
 
-    with (
-        patch("src.services.ai_integration_service.sb", sbMock),
-        patch("src.services.image_retake_service.sb", sbMock),
-    ):
+    with patch("src.services.ai_integration_service.sb", sbMock):
         response = await asyncClient.post(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
@@ -188,7 +189,6 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
 
     with (
         patch("src.services.ai_integration_service.sb", sbMock),
-        patch("src.services.image_retake_service.sb", sbMock),
         # Simulate urolens_ai being installed by patching the import inside _try_run_inference
         patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", mockInferFn)),
     ):
@@ -223,7 +223,6 @@ async def test_uploadSucceedsWhenAiInferenceFails(
 
     with (
         patch("src.services.ai_integration_service.sb", sbMock),
-        patch("src.services.image_retake_service.sb", sbMock),
         patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", _raisingInfer)),
     ):
         response = await asyncClient.post(
@@ -240,94 +239,100 @@ async def test_uploadSucceedsWhenAiInferenceFails(
 
 
 # ── Discard tests ─────────────────────────────────────────────────────────────
+#
+# ImageRetakeService is now SQLAlchemy AsyncSession-injected (no more
+# module-level `sb` to patch) — these construct the service directly with a
+# mocked AsyncSession/AuditLogger, mirroring tests/test_lab_request_service.py's
+# pattern, rather than driving the flow through the HTTP layer.
+
+def _makeImageRow(imageStatus: str, imageId=None, specimenId=None) -> MagicMock:
+    image = MagicMock(spec=Image)
+    image.imageId = imageId or TEST_IMAGE_ID
+    image.specimenId = specimenId or TEST_SPECIMEN_ID
+    image.status = imageStatus
+    image.discardedAt = None
+    return image
+
+
+def _makeRetakeDb(image: MagicMock | None) -> AsyncMock:
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=image)
+    db.commit = AsyncMock()
+    return db
+
+
+def _makeRetakeAuditLogger() -> MagicMock:
+    auditLogger = MagicMock()
+    auditLogger.record = AsyncMock()
+    return auditLogger
+
 
 @pytest.mark.asyncio
-async def test_discardActiveImageReturns200(
-    asyncClient,
-    medtechToken: str,
-    testSpecimen: uuid.UUID,
-) -> None:
-    """POST /images/{id}/discard on an ACTIVE image → 200 with DISCARDED status."""
-    activeImage = {
-        "image_id": str(TEST_IMAGE_ID),
-        "specimen_id": str(TEST_SPECIMEN_ID),
-        "status": "ACTIVE",
+async def test_discardActiveImageReturns200() -> None:
+    """Discarding an ACTIVE image succeeds: status flips to DISCARDED and is
+    committed, and an IMAGE_DISCARDED audit entry is written via the
+    centralized AuditLogger (not a raw insert).
+    """
+    image = _makeImageRow("ACTIVE")
+    db = _makeRetakeDb(image)
+    auditLogger = _makeRetakeAuditLogger()
+    service = ImageRetakeService(db=db, auditLogger=auditLogger)
+
+    result = await service.discardAndRetake(TEST_IMAGE_ID, MEDTECH_USER_ID, request=None)
+
+    assert result["status"] == "DISCARDED"
+    assert result["imageId"] == str(TEST_IMAGE_ID)
+    assert result["discardedAt"] is not None
+    assert image.status == "DISCARDED"
+    db.commit.assert_awaited_once()
+
+    auditLogger.record.assert_awaited_once()
+    assert auditLogger.record.call_args.kwargs["eventType"] == "IMAGE_DISCARDED"
+    assert auditLogger.record.call_args.kwargs["detailJson"] == {
+        "specimen_id": str(TEST_SPECIMEN_ID)
     }
-    sbMock = _makeSbMock(imagesRows=[activeImage], analysisRows=[])
-
-    with patch("src.services.image_retake_service.sb", sbMock):
-        response = await asyncClient.post(
-            f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtechToken}"},
-        )
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "DISCARDED"
-    assert body["imageId"] == str(TEST_IMAGE_ID)
-    assert body["discardedAt"] is not None
 
 
 @pytest.mark.asyncio
-async def test_discardAlreadyDiscardedImageReturns409(
-    asyncClient,
-    medtechToken: str,
-) -> None:
-    """Discarding an already-DISCARDED image must return 409 Conflict."""
-    discardedImage = {
-        "image_id": str(TEST_IMAGE_ID),
-        "specimen_id": str(TEST_SPECIMEN_ID),
-        "status": "DISCARDED",
-    }
-    sbMock = _makeSbMock(imagesRows=[discardedImage], analysisRows=[])
+async def test_discardAlreadyDiscardedImageReturns409() -> None:
+    """Discarding an already-DISCARDED image must raise ConflictError (409)."""
+    image = _makeImageRow("DISCARDED")
+    db = _makeRetakeDb(image)
+    service = ImageRetakeService(db=db, auditLogger=_makeRetakeAuditLogger())
 
-    with patch("src.services.image_retake_service.sb", sbMock):
-        response = await asyncClient.post(
-            f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtechToken}"},
-        )
+    with pytest.raises(ConflictError) as excInfo:
+        await service.discardAndRetake(TEST_IMAGE_ID, MEDTECH_USER_ID, request=None)
 
-    assert response.status_code == 409
-    assert "discarded" in response.json()["error"]["message"].lower()
+    assert excInfo.value.status_code == 409
+    assert "discarded" in str(excInfo.value.detail).lower()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_discardNonexistentImageReturns404(
-    asyncClient,
-    medtechToken: str,
-) -> None:
-    """Discarding an image that doesn't exist must return 404."""
-    sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
+async def test_discardNonexistentImageReturns404() -> None:
+    """Discarding an image that doesn't exist must raise NotFoundError (404)."""
+    db = _makeRetakeDb(None)
+    service = ImageRetakeService(db=db, auditLogger=_makeRetakeAuditLogger())
 
-    with patch("src.services.image_retake_service.sb", sbMock):
-        response = await asyncClient.post(
-            f"/api/v1/images/{uuid.uuid4()}/discard",
-            headers={"Authorization": f"Bearer {medtechToken}"},
-        )
+    with pytest.raises(NotFoundError) as excInfo:
+        await service.discardAndRetake(uuid.uuid4(), MEDTECH_USER_ID, request=None)
 
-    assert response.status_code == 404
+    assert excInfo.value.status_code == 404
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_discardReplacedImageReturns409(
-    asyncClient,
-    medtechToken: str,
-) -> None:
-    """Discarding a REPLACED image must return 409 Conflict."""
-    replacedImage = {
-        "image_id": str(TEST_IMAGE_ID),
-        "specimen_id": str(TEST_SPECIMEN_ID),
-        "status": "REPLACED",
-    }
-    sbMock = _makeSbMock(imagesRows=[replacedImage], analysisRows=[])
+async def test_discardReplacedImageReturns409() -> None:
+    """Discarding a REPLACED image must raise ConflictError (409)."""
+    image = _makeImageRow("REPLACED")
+    db = _makeRetakeDb(image)
+    service = ImageRetakeService(db=db, auditLogger=_makeRetakeAuditLogger())
 
-    with patch("src.services.image_retake_service.sb", sbMock):
-        response = await asyncClient.post(
-            f"/api/v1/images/{TEST_IMAGE_ID}/discard",
-            headers={"Authorization": f"Bearer {medtechToken}"},
-        )
+    with pytest.raises(ConflictError) as excInfo:
+        await service.discardAndRetake(TEST_IMAGE_ID, MEDTECH_USER_ID, request=None)
 
-    assert response.status_code == 409
+    assert excInfo.value.status_code == 409
+    db.commit.assert_not_awaited()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
