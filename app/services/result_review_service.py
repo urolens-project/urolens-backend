@@ -363,7 +363,7 @@ async def get_full_result(result_id: str) -> dict:
 
     overrides_task = supabase.table("manual_overrides").select(
         "override_id, parameter_name, original_ai_value, corrected_value, rationale, overridden_at"
-    ).eq("result_id", result_id).execute()
+    ).eq("result_id", result_id).order("overridden_at").execute()
 
     review_task = supabase.table("result_reviews").select(
         "annotation_notes, spatial_annotations"
