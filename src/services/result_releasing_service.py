@@ -1,6 +1,7 @@
-"""Supervisor result release — Supabase-REST implementation, deliberately
-left as-is (not ported to SQLAlchemy) per the consolidation plan's
-deferred-services list.
+"""Supervisor result release — SQLAlchemy `AsyncSession` implementation.
+Lists `APPROVED` results awaiting release and performs the release
+transaction (status update + notifications + audit log) in one committed
+unit of work.
 """
 from __future__ import annotations
 
@@ -8,10 +9,16 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
-from supabase import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
 from src.core.encryption import decryptPii
+from src.models.analysis_result import AnalysisResult
+from src.models.lab_request import LabRequest
+from src.models.patient import Patient
+from src.models.result_release import ResultRelease
+from src.models.specimen import Specimen
 from src.schemas.result_releasing import (
     ApprovedResultItem,
     ApprovedResultsResponse,
@@ -28,7 +35,7 @@ class ResultReleasingService:
 
     def __init__(
         self,
-        db: AsyncClient,
+        db: AsyncSession,
         auditLogger: AuditLogger,
         _notificationService: NotificationService,
     ) -> None:
@@ -54,18 +61,17 @@ class ResultReleasingService:
             A page of `ApprovedResultItem`s (patient name decrypted, or
             `"Unknown Patient"` if decryption fails) plus pagination metadata.
         """
-        query = (
-            self.db.table("analysis_results")
-            .select("result_id, specimen_id, patient_id, updated_at")
-            .eq("status", "APPROVED")
-            .order("updated_at", desc=True)
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.status == "APPROVED")
+            .order_by(AnalysisResult.updatedAt.desc())
             .limit(limit + 1)
         )
         if cursor:
-            query = query.lt("updated_at", cursor)
+            cursorDt = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+            stmt = stmt.where(AnalysisResult.updatedAt < cursorDt)
 
-        result = await query.execute()
-        rows = result.data or []
+        rows = (await self.db.execute(stmt)).scalars().all()
 
         hasMore = len(rows) > limit
         if hasMore:
@@ -77,38 +83,33 @@ class ResultReleasingService:
             sampleUid: str | None = None
             testType: str | None = None
 
-            if row.get("patient_id"):
-                pRes = await self.db.table("patients").select(
-                    "first_name, last_name"
-                ).eq("patient_id", row["patient_id"]).execute()
-                if pRes.data:
-                    p = pRes.data[0]
+            if row.patientId:
+                patient = await self.db.get(Patient, row.patientId)
+                if patient is not None:
                     try:
-                        first = decryptPii(p["first_name"])
-                        last = decryptPii(p["last_name"])
+                        first = decryptPii(patient.firstName)
+                        last = decryptPii(patient.lastName)
                         patientName = f"{first} {last}"
                     except Exception:
                         patientName = "Unknown Patient"
 
-            if row.get("specimen_id"):
-                sRes = await self.db.table("specimens").select(
-                    "sample_uid, test_type"
-                ).eq("specimen_id", row["specimen_id"]).execute()
-                if sRes.data:
-                    sampleUid = sRes.data[0].get("sample_uid")
-                    testType = sRes.data[0].get("test_type")
+            if row.specimenId:
+                specimen = await self.db.get(Specimen, row.specimenId)
+                if specimen is not None:
+                    sampleUid = specimen.sampleUid
+                    testType = specimen.testType
 
             items.append(
                 ApprovedResultItem(
-                    resultId=UUID(str(row["result_id"])),
+                    resultId=row.resultId,
                     patientName=patientName,
                     sampleUid=sampleUid,
                     testType=testType,
-                    approvedAt=row["updated_at"],
+                    approvedAt=row.updatedAt,
                 )
             )
 
-        nextCursor = rows[-1]["updated_at"] if hasMore and rows else None
+        nextCursor = rows[-1].updatedAt.isoformat() if hasMore and rows else None
         return ApprovedResultsResponse(
             data=items,
             pagination=PaginationMeta(nextCursor=nextCursor, hasMore=hasMore),
@@ -125,11 +126,12 @@ class ResultReleasingService:
         transitions the result to `RELEASED` and its specimen to
         `COMPLETED`, notifies the patient (if `release_method` is
         `"DIGITAL"`) and the ordering physician, and writes an audit log
-        entry.
-
-        If the status update after creating the release record fails, the
-        release record is deleted to avoid leaving an orphaned release with
-        no corresponding status change.
+        entry — all in one transaction, committed once. Nothing is written
+        unless every step succeeds; on any failure the whole unit of work is
+        rolled back (by `getDb`'s dependency), so there's no manual
+        compensating delete for the release row the way the prior
+        Supabase-REST version needed (each of its calls auto-committed
+        individually).
 
         Args:
             current_user: the authenticated caller; recorded as `released_by`.
@@ -141,16 +143,11 @@ class ResultReleasingService:
             HTTPException: 404 (`NOT_FOUND`), if `result_id` doesn't exist.
                 422 (`RESULT_NOT_APPROVED`), if the result isn't in `APPROVED`
                 status. 422 (`ALREADY_RELEASED`), if it's already been
-                released. 500 (`RELEASE_FAILED`/`STATUS_UPDATE_FAILED`), if
-                the release-record insert or the subsequent status update
-                returns no data.
+                released.
         """
-        # Verify result exists
-        rRes = await self.db.table("analysis_results").select(
-            "result_id, status, patient_id, specimen_id"
-        ).eq("result_id", str(resultId)).execute()
+        row = await self.db.get(AnalysisResult, resultId)
 
-        if not rRes.data:
+        if row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
@@ -162,9 +159,7 @@ class ResultReleasingService:
                 },
             )
 
-        row = rRes.data[0]
-
-        if row["status"] != "APPROVED":
+        if row.status != "APPROVED":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -176,10 +171,10 @@ class ResultReleasingService:
                 },
             )
 
-        existing = await self.db.table("result_releases").select(
-            "release_id"
-        ).eq("result_id", str(resultId)).execute()
-        if existing.data:
+        existing = await self.db.execute(
+            select(ResultRelease.releaseId).where(ResultRelease.resultId == resultId)
+        )
+        if existing.scalar_one_or_none() is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -191,109 +186,60 @@ class ResultReleasingService:
                 },
             )
 
-        releaseInsert = await self.db.table("result_releases").insert({
-            "result_id": str(resultId),
-            "released_by": str(currentUser["user_id"]),
-            "release_method": releaseMethod,
-        }).execute()
-        if not releaseInsert.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": {
-                        "code": "RELEASE_FAILED",
-                        "message": "Failed to create release record.",
-                        "details": {},
-                    }
-                },
-            )
+        release = ResultRelease(
+            resultId=resultId,
+            releasedBy=UUID(str(currentUser["user_id"])),
+            releaseMethod=releaseMethod,
+        )
+        self.db.add(release)
+        await self.db.flush([release])
 
-        releaseRow = releaseInsert.data[0]
-        releaseId = releaseRow["release_id"]
+        nowUtc = datetime.now(UTC)
+        row.status = "RELEASED"
+        row.releasedAt = nowUtc
 
-        try:
-            nowIso = datetime.now(UTC).isoformat()
-
-            updateRes = await self.db.table("analysis_results").update({
-                "status": "RELEASED",
-                "released_at": nowIso,
-            }).eq("result_id", str(resultId)).execute()
-
-            if not updateRes.data:
-                await self.db.table("result_releases").delete().eq(
-                    "release_id", releaseId
-                ).execute()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={
-                        "error": {
-                            "code": "STATUS_UPDATE_FAILED",
-                            "message": "Failed to update result status.",
-                            "details": {},
-                        }
-                    },
-                )
-
-            # Mark the specimen COMPLETED so it drops off the medtech's active queue
-            await self.db.table("specimens").update({
-                "status": "COMPLETED",
-                "completed_at": nowIso,
-            }).eq("specimen_id", str(row["specimen_id"])).execute()
-
-        except HTTPException:
-            raise
-        except Exception:
-            await self.db.table("result_releases").delete().eq(
-                "release_id", releaseId
-            ).execute()
-            raise
+        specimen = await self.db.get(Specimen, row.specimenId)
+        if specimen is not None:
+            specimen.status = "COMPLETED"
+            specimen.completedAt = nowUtc
 
         if releaseMethod == "DIGITAL":
-            patientId = row.get("patient_id")
-            if patientId:
-                patientRes = await self.db.table("patients").select("user_id").eq(
-                    "patient_id", str(patientId)
-                ).execute()
-                if patientRes.data and patientRes.data[0].get("user_id"):
+            if row.patientId:
+                patient = await self.db.get(Patient, row.patientId)
+                if patient is not None and patient.userId:
                     await self._notificationService.notify(
-                        UUID(str(patientRes.data[0]["user_id"])),
+                        patient.userId,
                         "Your lab result is now available.",
                         "RESULT_RELEASED",
                         entityId=resultId,
                     )
 
-            specimenId = row.get("specimen_id")
-            if specimenId:
-                specRes = await self.db.table("specimens").select(
-                    "lab_request_id"
-                ).eq("specimen_id", str(specimenId)).execute()
-                if specRes.data and specRes.data[0].get("lab_request_id"):
-                    lrRes = await self.db.table("lab_requests").select(
-                        "physician_id"
-                    ).eq(
-                        "lab_request_id", str(specRes.data[0]["lab_request_id"])
-                    ).execute()
-                    if lrRes.data and lrRes.data[0].get("physician_id"):
-                        await self._notificationService.notify(
-                            UUID(str(lrRes.data[0]["physician_id"])),
-                            "A lab result has been released for your patient.",
-                            "RESULT_RELEASED",
-                            entityId=resultId,
-                        )
+            if specimen is not None and specimen.labRequestId:
+                labRequest = await self.db.get(LabRequest, specimen.labRequestId)
+                if labRequest is not None and labRequest.physicianId:
+                    await self._notificationService.notify(
+                        labRequest.physicianId,
+                        "A lab result has been released for your patient.",
+                        "RESULT_RELEASED",
+                        entityId=resultId,
+                    )
 
         await self.auditLogger.record(
             "RESULT_RELEASED",
             entityType="result_release",
-            entityId=releaseId,
+            entityId=release.releaseId,
             userId=currentUser["user_id"],
             detailJson={"result_id": str(resultId), "release_method": releaseMethod},
             request=request,
         )
 
+        await self.db.commit()
+        await self.db.refresh(release)
+
         return ResultReleaseResponse(
-            releaseId=UUID(str(releaseId)),
+            releaseId=release.releaseId,
             resultId=resultId,
             releasedBy=UUID(str(currentUser["user_id"])),
             releaseMethod=releaseMethod,
-            releasedAt=releaseRow.get("released_at", datetime.now(UTC)),
+            releasedAt=release.releasedAt or nowUtc,
         )

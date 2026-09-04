@@ -11,10 +11,11 @@ Covers
 
 Architecture
 ------------
-Service-layer tests (scenarios 1-4) mirror the pattern in tests/test_queue_service.py:
-Supabase is replaced with a MagicMock per-test; no real DB or network required.
-The RBAC test (scenario 5) uses httpx.AsyncClient + ASGITransport with a patched
-is_session_active so auth middleware accepts the token without a live sessions table.
+Service-layer tests (scenarios 1-4) mock a SQLAlchemy `AsyncSession` (mirrors
+tests/test_lab_request_service.py's pattern): `db.get(Model, id)` is backed by
+a lookup table, `db.execute()` backs the `ResultRelease` existing-release
+check, and `db.flush()` assigns the generated `release_id`/`released_at` the
+way a real flush against Postgres would. No real DB or network required.
 """
 from __future__ import annotations
 
@@ -30,6 +31,11 @@ from httpx import ASGITransport, AsyncClient
 
 from main import app
 from src.core.config import settings
+from src.models.analysis_result import AnalysisResult
+from src.models.lab_request import LabRequest
+from src.models.patient import Patient
+from src.models.result_release import ResultRelease
+from src.models.specimen import Specimen
 from src.services.result_releasing_service import ResultReleasingService
 
 # ── Fixed IDs ─────────────────────────────────────────────────────────────────
@@ -45,23 +51,78 @@ TEST_LAB_REQUEST_ID = uuid.UUID("00000000-0000-0000-0000-000000000025")
 TEST_RELEASE_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 
 
-# ── Mock chain builder (mirrors test_queue_service.py) ────────────────────────
+# ── Row builders ─────────────────────────────────────────────────────────────
 
-def _makeChain(returnData=None):
-    chain = MagicMock()
-    chain.select.return_value = chain
-    chain.insert.return_value = chain
-    chain.update.return_value = chain
-    chain.delete.return_value = chain
-    chain.eq.return_value = chain
-    chain.lt.return_value = chain
-    chain.order.return_value = chain
-    chain.limit.return_value = chain
-    chain.execute = AsyncMock(return_value=MagicMock(data=returnData))
-    return chain
+def _analysisResultRow(resultId=None, resultStatus="APPROVED", patientId=None, specimenId=None):
+    ar = MagicMock(spec=AnalysisResult)
+    ar.resultId = resultId or TEST_RESULT_ID
+    ar.status = resultStatus
+    ar.patientId = patientId if patientId is not None else TEST_PATIENT_ID
+    ar.specimenId = specimenId if specimenId is not None else TEST_SPECIMEN_ID
+    ar.updatedAt = datetime.now(UTC)
+    ar.releasedAt = None
+    return ar
 
 
-def _makeService(db: MagicMock) -> tuple[ResultReleasingService, MagicMock, MagicMock]:
+def _specimenRow(specimenId=None, labRequestId=None):
+    s = MagicMock(spec=Specimen)
+    s.specimenId = specimenId or TEST_SPECIMEN_ID
+    s.labRequestId = labRequestId if labRequestId is not None else TEST_LAB_REQUEST_ID
+    s.status = "ASSIGNED"
+    s.completedAt = None
+    s.sampleUid = "SAMP-001"
+    s.testType = "URINALYSIS"
+    return s
+
+
+def _patientRow(patientId=None, userId=None):
+    p = MagicMock(spec=Patient)
+    p.patientId = patientId or TEST_PATIENT_ID
+    p.userId = userId if userId is not None else TEST_PATIENT_USER_ID
+    return p
+
+
+def _labRequestRow(labRequestId=None, physicianId=None):
+    lr = MagicMock(spec=LabRequest)
+    lr.labRequestId = labRequestId or TEST_LAB_REQUEST_ID
+    lr.physicianId = physicianId if physicianId is not None else TEST_PHYSICIAN_ID
+    return lr
+
+
+# ── Mock AsyncSession builder ─────────────────────────────────────────────────
+
+def _makeDb(getMap: dict, existingReleaseId=None) -> AsyncMock:
+    """`db.get(Model, id)` is backed by `getMap` (keyed by `(Model, id)`).
+    `db.execute()` backs the `ResultRelease` existing-release-for-this-result
+    check — `existing_release_id` controls whether it reports a collision.
+    `db.flush()` assigns `release_id`/`released_at` the way a real flush
+    against Postgres (server-generated defaults) would.
+    """
+    db = AsyncMock()
+
+    async def _get(model, id_):
+        return getMap.get((model, id_))
+
+    db.get = AsyncMock(side_effect=_get)
+    db.add = MagicMock()
+
+    existingResult = MagicMock()
+    existingResult.scalar_one_or_none.return_value = existingReleaseId
+    db.execute = AsyncMock(return_value=existingResult)
+
+    async def _flush(objs):
+        for obj in objs:
+            if isinstance(obj, ResultRelease):
+                obj.releaseId = TEST_RELEASE_ID
+                obj.releasedAt = datetime.now(UTC)
+
+    db.flush = AsyncMock(side_effect=_flush)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+def _makeService(db: AsyncMock) -> tuple[ResultReleasingService, MagicMock, MagicMock]:
     auditLogger = MagicMock()
     auditLogger.record = AsyncMock()
     _notificationService = MagicMock()
@@ -72,27 +133,6 @@ def _makeService(db: MagicMock) -> tuple[ResultReleasingService, MagicMock, Magi
         _notificationService=_notificationService,
     )
     return _service, auditLogger, _notificationService
-
-
-def _approvedResultRow(resultId=None, status="APPROVED"):
-    rid = resultId or TEST_RESULT_ID
-    return {
-        "result_id": str(rid),
-        "status": status,
-        "patient_id": str(TEST_PATIENT_ID),
-        "specimen_id": str(TEST_SPECIMEN_ID),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-
-
-def _releaseRow(releaseId=None):
-    return {
-        "release_id": str(releaseId or TEST_RELEASE_ID),
-        "result_id": str(TEST_RESULT_ID),
-        "released_by": str(RECEPTIONIST_ID),
-        "release_method": "PHYSICAL",
-        "released_at": datetime.now(UTC).isoformat(),
-    }
 
 
 def _currentUser(userId=None, role="RECEPTIONIST"):
@@ -111,22 +151,13 @@ def _fakeRequest():
 class TestPhysicalRelease:
     @pytest.mark.asyncio
     async def test_physicalReleaseReturnsResponse(self):
-        callOrder: list[str] = []
-
-        def tableSideEffect(tableName: str):
-            callOrder.append(tableName)
-            if tableName == "analysis_results" and callOrder.count("analysis_results") == 1:
-                return _makeChain([_approvedResultRow()])
-            elif tableName == "result_releases" and callOrder.count("result_releases") == 1:
-                return _makeChain([])
-            elif tableName == "result_releases" and callOrder.count("result_releases") == 2:
-                return _makeChain([_releaseRow()])
-            elif tableName == "analysis_results" and callOrder.count("analysis_results") == 2:
-                return _makeChain([_approvedResultRow(status="RELEASED")])
-            return _makeChain([])
-
-        db = MagicMock()
-        db.table.side_effect = tableSideEffect
+        ar = _analysisResultRow()
+        spec = _specimenRow()
+        getMap = {
+            (AnalysisResult, TEST_RESULT_ID): ar,
+            (Specimen, TEST_SPECIMEN_ID): spec,
+        }
+        db = _makeDb(getMap)
         _service, auditLogger, _notificationService = _makeService(db)
 
         response = await _service.releaseResult(
@@ -135,26 +166,20 @@ class TestPhysicalRelease:
 
         assert response.resultId == TEST_RESULT_ID
         assert response.releaseMethod == "PHYSICAL"
-        assert response.releaseId is not None
+        assert response.releaseId == TEST_RELEASE_ID
+        assert ar.status == "RELEASED"
+        assert spec.status == "COMPLETED"
+        db.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_physicalReleaseNoNotificationsSent(self):
-        callOrder: list[str] = []
-
-        def tableSideEffect(tableName: str):
-            callOrder.append(tableName)
-            if tableName == "analysis_results" and callOrder.count("analysis_results") == 1:
-                return _makeChain([_approvedResultRow()])
-            elif tableName == "result_releases" and callOrder.count("result_releases") == 1:
-                return _makeChain([])
-            elif tableName == "result_releases" and callOrder.count("result_releases") == 2:
-                return _makeChain([_releaseRow()])
-            elif tableName == "analysis_results":
-                return _makeChain([_approvedResultRow(status="RELEASED")])
-            return _makeChain([])
-
-        db = MagicMock()
-        db.table.side_effect = tableSideEffect
+        ar = _analysisResultRow()
+        spec = _specimenRow()
+        getMap = {
+            (AnalysisResult, TEST_RESULT_ID): ar,
+            (Specimen, TEST_SPECIMEN_ID): spec,
+        }
+        db = _makeDb(getMap)
         _service, auditLogger, _notificationService = _makeService(db)
 
         await _service.releaseResult(
@@ -174,31 +199,17 @@ class TestPhysicalRelease:
 class TestDigitalRelease:
     @pytest.mark.asyncio
     async def test_digitalReleaseNotifiesPatientAndPhysician(self):
-        callOrder: list[str] = []
-
-        def tableSideEffect(tableName: str):
-            callOrder.append(tableName)
-            idx = callOrder.count(tableName)
-            if tableName == "analysis_results" and idx == 1:
-                return _makeChain([_approvedResultRow()])
-            elif tableName == "result_releases" and idx == 1:
-                return _makeChain([])
-            elif tableName == "result_releases" and idx == 2:
-                r = _releaseRow()
-                r["release_method"] = "DIGITAL"
-                return _makeChain([r])
-            elif tableName == "analysis_results" and idx == 2:
-                return _makeChain([_approvedResultRow(status="RELEASED")])
-            elif tableName == "patients":
-                return _makeChain([{"user_id": str(TEST_PATIENT_USER_ID)}])
-            elif tableName == "specimens":
-                return _makeChain([{"lab_request_id": str(TEST_LAB_REQUEST_ID)}])
-            elif tableName == "lab_requests":
-                return _makeChain([{"physician_id": str(TEST_PHYSICIAN_ID)}])
-            return _makeChain([])
-
-        db = MagicMock()
-        db.table.side_effect = tableSideEffect
+        ar = _analysisResultRow()
+        spec = _specimenRow()
+        patient = _patientRow()
+        labRequest = _labRequestRow()
+        getMap = {
+            (AnalysisResult, TEST_RESULT_ID): ar,
+            (Specimen, TEST_SPECIMEN_ID): spec,
+            (Patient, TEST_PATIENT_ID): patient,
+            (LabRequest, TEST_LAB_REQUEST_ID): labRequest,
+        }
+        db = _makeDb(getMap)
         _service, auditLogger, _notificationService = _makeService(db)
 
         await _service.releaseResult(
@@ -223,8 +234,8 @@ class TestResultNotApproved:
     @pytest.mark.asyncio
     async def test_nonApprovedStatusRaises422(self):
         for badStatus in ("PENDING_CONFIRM", "RELEASED", "RETURNED_FOR_CORRECTION"):
-            db = MagicMock()
-            db.table.return_value = _makeChain([_approvedResultRow(status=badStatus)])
+            ar = _analysisResultRow(resultStatus=badStatus)
+            db = _makeDb({(AnalysisResult, TEST_RESULT_ID): ar})
             _service, auditLogger, _ = _makeService(db)
 
             with pytest.raises(HTTPException) as excInfo:
@@ -242,18 +253,10 @@ class TestResultNotApproved:
 class TestAlreadyReleased:
     @pytest.mark.asyncio
     async def test_alreadyReleasedRaises422(self):
-        callOrder: list[str] = []
-
-        def tableSideEffect(tableName: str):
-            callOrder.append(tableName)
-            if tableName == "analysis_results":
-                return _makeChain([_approvedResultRow()])
-            elif tableName == "result_releases":
-                return _makeChain([{"release_id": str(TEST_RELEASE_ID)}])
-            return _makeChain([])
-
-        db = MagicMock()
-        db.table.side_effect = tableSideEffect
+        ar = _analysisResultRow()
+        db = _makeDb(
+            {(AnalysisResult, TEST_RESULT_ID): ar}, existingReleaseId=TEST_RELEASE_ID
+        )
         _service, auditLogger, _ = _makeService(db)
 
         with pytest.raises(HTTPException) as excInfo:
@@ -264,6 +267,23 @@ class TestAlreadyReleased:
         assert excInfo.value.status_code == 422
         assert excInfo.value.detail["error"]["code"] == "ALREADY_RELEASED"
         auditLogger.record.assert_not_awaited()
+
+
+# ── Result not found ───────────────────────────────────────────────────────────
+
+class TestResultNotFound:
+    @pytest.mark.asyncio
+    async def test_missingResultRaises404(self):
+        db = _makeDb({})
+        _service, auditLogger, _ = _makeService(db)
+
+        with pytest.raises(HTTPException) as excInfo:
+            await _service.releaseResult(
+                TEST_RESULT_ID, "PHYSICAL", _currentUser(), _fakeRequest()
+            )
+
+        assert excInfo.value.status_code == 404
+        assert excInfo.value.detail["error"]["code"] == "NOT_FOUND"
 
 
 # ── Scenario 5: RBAC — SUPERVISOR forbidden on approved queue ─────────────────

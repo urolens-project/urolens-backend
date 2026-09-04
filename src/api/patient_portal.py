@@ -4,13 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from supabase import AsyncClient
 
 from src.core.audit_logger import AuditLogger, getAuditLogger
 from src.core.database import getDb
 from src.core.enums import UserRole
 from src.core.rbac import RequireRole
-from src.core.supabase import getSupabase
 from src.schemas.patient_portal import (
     PatientResultDetailResponse,
     PatientResultItem,
@@ -23,7 +21,7 @@ router = APIRouter()
 
 
 async def getPatientResultService(
-    db: AsyncClient = Depends(getSupabase),
+    db: AsyncSession = Depends(getDb),
     auditLogger: AuditLogger = Depends(getAuditLogger),
 ) -> PatientResultService:
     """FastAPI dependency constructing a request-scoped `PatientResultService`."""
