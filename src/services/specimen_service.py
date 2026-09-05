@@ -18,6 +18,7 @@ from ..core.exceptions import (
     ConflictException,
     NotFoundException,
     SpecimenNotFoundError,
+    UnprocessableException,
 )
 from ..models.lab_request import LabRequest
 from ..models.patient import Patient
@@ -48,7 +49,12 @@ async def _generateSampleUid(db: AsyncSession) -> str:
         existing = await db.execute(select(Specimen.specimenId).where(Specimen.sampleUid == uid))
         if existing.scalar_one_or_none() is None:
             return uid
-    raise HTTPException(status_code=500, detail="Failed to generate a unique sample UID.")
+    exc = HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Failed to generate a unique sample UID.",
+    )
+    exc.errorCode = "SAMPLE_UID_GENERATION_FAILED"
+    raise exc
 
 
 async def receiveSpecimen(
@@ -115,14 +121,16 @@ async def receiveSpecimen(
 
     if not payload.visualCheckPassed:
         if not payload.rejectionReason:
-            raise HTTPException(
-                status_code=400, detail="A rejection reason code is required."
-            )
+            exc = HTTPException(status_code=400, detail="A rejection reason code is required.")
+            exc.errorCode = "REJECTION_REASON_REQUIRED"
+            raise exc
         if payload.rejectionReason not in _VALID_REJECTION_REASONS:
-            raise HTTPException(
+            exc = HTTPException(
                 status_code=400,
                 detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
             )
+            exc.errorCode = "INVALID_REJECTION_REASON"
+            raise exc
         db.add(
             SpecimenRejection(
                 specimenId=specimen.specimenId,
@@ -220,9 +228,8 @@ async def rejectSpecimen(
         ConflictException: the specimen is already rejected.
     """
     if reasonCode not in _VALID_REJECTION_REASONS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid rejection reason: {reasonCode}.",
+        raise UnprocessableException(
+            code="INVALID_REJECTION_REASON", message=f"Invalid rejection reason: {reasonCode}."
         )
 
     specimen = await db.get(Specimen, specimenId)
@@ -230,10 +237,12 @@ async def rejectSpecimen(
         raise SpecimenNotFoundError(str(specimenId))
 
     if specimen.medtechId != userId:
-        raise HTTPException(
+        exc = HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Specimen is not assigned to you.",
         )
+        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
+        raise exc
     if specimen.status == "REJECTED":
         raise ConflictException(
             code="SPECIMEN_ALREADY_REJECTED", message="Specimen is already rejected."
