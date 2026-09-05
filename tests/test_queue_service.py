@@ -218,7 +218,7 @@ class TestAssignSpecimen:
             await _service.assignSpecimen(data, assignedBy, request)
 
         assert excInfo.value.status_code == 404
-        assert excInfo.value.detail["error"]["code"] == "SPECIMEN_NOT_FOUND"
+        assert excInfo.value.errorCode == "SPECIMEN_NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_assignSpecimenInvalidStatus(self):
@@ -256,7 +256,7 @@ class TestAssignSpecimen:
             await _service.assignSpecimen(data, assignedBy, request)
 
         assert excInfo.value.status_code == 422
-        assert excInfo.value.detail["error"]["code"] == "INVALID_SPECIMEN_STATUS"
+        assert excInfo.value.errorCode == "INVALID_SPECIMEN_STATUS"
 
     @pytest.mark.asyncio
     async def test_assignSpecimenMedtechNotFound(self):
@@ -296,7 +296,7 @@ class TestAssignSpecimen:
             await _service.assignSpecimen(data, assignedBy, request)
 
         assert excInfo.value.status_code == 404
-        assert excInfo.value.detail["error"]["code"] == "MEDTECH_NOT_FOUND"
+        assert excInfo.value.errorCode == "MEDTECH_NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_assignSpecimenAlreadyAssigned(self):
@@ -343,7 +343,7 @@ class TestAssignSpecimen:
             await _service.assignSpecimen(data, assignedBy, request)
 
         assert excInfo.value.status_code == 422
-        assert excInfo.value.detail["error"]["code"] == "SPECIMEN_ALREADY_ASSIGNED"
+        assert excInfo.value.errorCode == "SPECIMEN_ALREADY_ASSIGNED"
 
     @pytest.mark.asyncio
     async def test_assignSpecimenRollbackOnStatusUpdateFailure(self):

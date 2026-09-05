@@ -1,12 +1,13 @@
 """In-app notification routes and Expo push-token registration."""
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import getDb
 from ..core.enums import UserRole
+from ..core.exceptions import NotFoundException
 from ..core.rbac import RequireRole, getCurrentUser
 from ..models.notification import Notification
 from ..models.user import User
@@ -58,7 +59,7 @@ async def markNotificationRead(
     )
     result = await db.execute(stmt)
     if result.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found.")
+        raise NotFoundException(message="Notification not found.")
     await db.commit()
 
 
