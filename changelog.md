@@ -64,6 +64,184 @@ service layer survives, which RBAC import wins), and were live security gaps.
   in full, including its `__init__.py` files and `__pycache__` artifacts.
   Route count unchanged (50) and `pytest` still 72 passed post-move.
 
+## Fix `errorCode`/`.error_code` casing mismatch — error codes never reached HTTP clients
+
+A prior investigation found `main.py`'s global `HTTPException` handler read
+`getattr(exc, "error_code", None)` (snake_case) while every service sets `.errorCode`
+(camelCase, per rule 17's naming convention) — so `getattr` always returned `None` and every
+error response fell back to the generic status-based code (`FORBIDDEN`, `NOT_FOUND`, ...),
+regardless of which specific error the service actually raised. Re-verified before fixing:
+grepped the whole repo for `.error_code` reads (found exactly one — `main.py:63`) and spot-
+checked several services' exception-raising code directly; root cause matched the prior
+finding exactly, no surprises there.
+
+### Fixed
+- **`main.py:63`**: `getattr(exc, "error_code", ...)` → `getattr(exc, "errorCode", ...)`. This
+  was the only place in the codebase reading `.error_code` off an exception object (confirmed
+  via repo-wide grep) — the one other `error_code` hit, in `src/models/engine_error_log.py`,
+  is an unrelated SQLAlchemy DB column name, not this bug.
+- **`tests/integration/test_patient_portal.py`**: this file's own module docstring documented
+  a deliberate workaround — asserting on the error *message* instead of `error.code`, because
+  the code never survived the trip over HTTP. Both `TestStatusGateAppliesToDetailRoute` and
+  `TestStatusGateAppliesToPdfRoute` now additionally assert
+  `response.json()["error"]["code"] == "RESULT_NOT_RELEASED"`; docstring updated to describe
+  the fix instead of the workaround. No other test in the suite was found asserting on the
+  generic fallback in a way that needed correcting (`test_image_upload_and_inference.py`'s two
+  format/resolution tests asserted only on message text, never on a wrong/generic code, so
+  they weren't "workarounds" in the same sense — left as-is, strengthened separately below).
+
+### Added — real HTTP-level proof (3 new tests, 3 different services)
+Every previous test asserting on an error code did so by catching the raised Python exception
+object directly (`pytest.raises(...) as excInfo; excInfo.value.errorCode`) — never through the
+actual HTTP response path, which is exactly how this bug went undetected. Added:
+- `tests/integration/test_patient_portal.py::TestAccessDeniedCodeSurfacesOverHttp` — 403
+  `ACCESS_DENIED` (`PatientResultService`), a distinct code from the two existing
+  `RESULT_NOT_RELEASED` tests in the same file.
+- `tests/integration/test_image_upload_and_inference.py::test_uploadUnsupportedFormatReturnsErrorCodeInResponseBody`
+  — 422 `INVALID_IMAGE_FORMAT` (`ImageFormatError` / `ai_integration_service`).
+- `tests/integration/test_lab_requests_http.py` (new file) — 404 `PATIENT_NOT_FOUND`
+  (`lab_request_service.createLabRequest`, via `NotFoundException`), hit through the real
+  receptionist-facing `POST /api/v1/lab-requests` route with a mocked `Depends(getDb)`.
+
+All three assert on `response.json()["error"]["code"]` from a real `httpx.AsyncClient` +
+`ASGITransport` call, not on the raised exception — closing the exact coverage gap that let
+this bug ship silently.
+
+### Found while verifying, not fixed here — a related but distinct bug
+Task 3's brief suggested a 422 `RESULT_NOT_APPROVED` case as one of the proof tests (from
+`result_releasing_service.py`). Investigating it surfaced a **second, separate bug** the
+`errorCode` fix does *not* solve: `result_releasing_service.py` and `queue_service.py` don't
+use the `.errorCode`-attribute pattern at all — they raise `HTTPException` with the *entire*
+`{"error": {"code": ..., "message": ..., "details": {}}}` envelope already built into `detail`.
+`main.py`'s handler then wraps that dict *again* as the `message` of a new envelope, producing
+a double-nested, malformed response — confirmed by direct invocation of `httpExceptionHandler`
+with a `queue_service`-shaped exception:
+`{"error":{"code":"NOT_FOUND","message":{"error":{"code":"SPECIMEN_NOT_FOUND","message":"Specimen not found.","details":{}}}}}`.
+This is why `RESULT_NOT_APPROVED` was **not** used as one of Task 3's proof tests — it would
+have demonstrated this bug, not the fix. Left unfixed and unreported-on further here — genuinely
+out of scope for a task about the `.error_code`/`.errorCode` casing mismatch specifically — but
+flagged prominently since it affects real HTTP clients of the queue-assignment and
+result-releasing endpoints today, independent of this fix.
+
+### Cross-repo integration risk — check against `urolens-web` (and mobile) before shipping
+This fix is a real behavior change to what HTTP clients receive: error response bodies that
+previously always carried a generic `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`,
+...) will now carry the specific code the service actually raised (`ACCESS_DENIED`,
+`RESULT_NOT_RELEASED`, `PATIENT_NOT_FOUND`, ...). If any frontend/mobile consumer was ever
+coded around the old broken shape — e.g. branching on `error.message` text instead of a
+structured `error.code`, which is exactly the workaround this backend's own
+`test_patient_portal.py` used until this task — this could be a breaking change for that
+consumer. This backend-only task cannot verify `urolens-web` or the mobile app; check both
+before this ships.
+
+### Verification
+- `python -c "import main"` — boots clean.
+- Full test suite: **99 passed, 0 failed** (96 baseline + 3 new HTTP-level tests), including
+  the 2 corrected `test_patient_portal.py` assertions now passing for the real reason.
+- Grep-confirmed no remaining `.error_code` (snake_case) reads anywhere in the exception-
+  handling path.
+
+## Scope Ruff's `D`/`ANN` enforcement to match documented policy, regenerate baseline
+
+Re-enabling `D`/`ANN` (previous entry) surfaced 709 violations, but that number was inflated:
+`docs/backend-standards.md` already exempts several directories from docstring/typing
+conventions (rules 9, 13, 17), and Ruff had no config telling it so. This entry scopes
+`pyproject.toml`'s per-file-ignores to match documented policy and regenerates
+`docs/ruff-baseline-report.md` with the real, accurately-scoped number.
+
+### Changed
+- **`tests/**` gains a `D` per-file-ignore** (not `ANN`). Standards rule 9's "Current state"
+  note says explicitly that docstrings on `test_*` functions "aren't a convention this
+  codebase follows" — no equivalent statement exists for annotations, so `ANN` stays enforced
+  in `tests/`; its 196 current violations there are a real, uncovered gap, not scoping noise.
+- **`alembic/versions/*.py` gains `D` and `ANN`** (scoped narrower than all of `alembic/**`) —
+  rules 13/17 state migration bodies are "DB schema, not application code." `alembic/env.py`
+  deliberately stays enforced (it's real config code, not schema) — its 3 remaining
+  violations are legitimate.
+- **`seed_*.py` gains `D` and `ANN`.** For `D`, this formalizes existing documented policy —
+  rule 9's note already groups `seed_*.py` with `tests/` as never having been in the
+  docstring pass's scope. For `ANN`, no equivalent statement exists in the docs; applied by
+  analogy (dev tooling, same reasoning as below).
+- **`scripts/*.py` gains `D` and `ANN`** (already had `T201`). **This is a recommendation, not
+  established policy** — nothing in the standards docs addresses docstrings/annotations for
+  `scripts/`. Applied on the same "standalone hand-run dev tool, not shipped application code"
+  reasoning already used for its `T201` exemption. Flagged explicitly in
+  `docs/ruff-baseline-report.md` as a decision to revisit if this project later wants
+  dev-tooling held to the `src/` bar.
+- **Regenerated `docs/ruff-baseline-report.md`** with the corrected scope and real count.
+
+### The real number
+`ruff check .` now reports **474 violations** (down from the unscoped 709), concentrated in
+`src/` (270 — `D205`×137, `D417`×32, `ANN201`×31, `ANN001`×28, `D107`×22, `ANN204`×12, `D415`×3,
+`ANN401`×4, `D105`×1) and `tests/`'s intentionally-still-enforced `ANN` (196). `main.py` (5)
+and `alembic/env.py` (3) contribute the rest. `seed/`, `scripts/`, and `alembic/versions/` are
+now correctly at 0. Not fixed in this task — measurement and scoping only; closing this gap
+(`src/` first, since it's what the earlier docstring pass was meant to cover) is a follow-up.
+
+### Verification
+- `python -c "import main"` — boots clean.
+- Full test suite: **96 passed, 0 failed**, unchanged (this task only touches `pyproject.toml`
+  config and docs, no application logic — confirmed rather than assumed).
+
+## Ruff cleanup — fixed 15 violations, re-enabled `D`/`ANN` enforcement
+
+A fresh `ruff check .` (part of a separate CI-readiness investigation) found 15 violations
+repo-wide, and found `pyproject.toml`'s `[tool.ruff.lint]` had `D` (docstrings) and `ANN`
+(annotations) both `select`ed and `ignore`d — fully neutralizing both despite the docstring
+pass and typing work already done. This entry fixes the 15 and re-enables `D`/`ANN`.
+
+### Fixed
+- **`T201` (4× `print()`), reviewed individually, not bulk-cleaned.** All 4 are in
+  `scripts/check_naming.py`, a standalone hand-run CLI tool (module docstring: "run it by hand
+  before opening a PR") whose entire job is printing its findings to stdout. Traced each: one
+  prints a static "clean" message, one prints `{relative file path}:{line number}: {kind}
+  \`{identifier name}\` should be camelCase` (file paths, line numbers, and Python identifier
+  names from AST-walking this repo's own source — never runtime/patient data), one prints a
+  finding count, one prints a static usage hint. **None are PHI/PII/secret-adjacent — no
+  security finding here.** Converting them to `logging.debug(...)` would break the tool's
+  actual purpose (always-visible CLI output, not opt-in log noise), so added
+  `"scripts/*.py" = ["T201"]` to `[tool.ruff.lint.per-file-ignores]`, mirroring the existing
+  `seed_*.py` precedent for the same kind of intentional-print CLI script.
+- **Safe autofix (`ruff check --fix .`)**: resolved `I001` (unsorted imports, 2), `F401`
+  (unused import, 1 — confirmed `sqlalchemy as sa` in
+  `alembic/versions/0032_specimens_lab_requests_labeling_schema.py` was genuinely unused
+  elsewhere in the file before letting the fixer remove it), `UP035` (deprecated
+  `typing.Sequence`/`Union` import, 1), `UP007` (non-PEP604 union syntax, 3). `T201`, `B904`,
+  `B017` confirmed untouched by this step, as expected.
+- **`B904` (raise-without-from, 2)**: `src/core/rbac.py`'s JWT-decode-failure handler and
+  `src/services/patient_auth_service.py`'s credential-derivation-failure handler both re-raised
+  a fresh, generic exception (`_unauthorized()` / `_invalidCreds()`) inside a bare
+  `except Exception:` without chaining. Both now `raise ... from err`. Both target exceptions
+  return a hardcoded generic `detail` string with no interpolation of `err`, so this only
+  restores the server-side traceback chain for debugging — nothing new reaches the client.
+- **`B017` (blind-assert-exception, 1)**: `tests/test_auth_service.py::test_decodeInvalidTokenRaises`
+  asserted on bare `Exception`. `decodeJwt`'s own docstring documents it raises
+  `jwt.PyJWTError` (or a subclass); narrowed the assertion to that.
+- **`F841` (unused variable, 1)**: `tests/test_queue_service.py`'s
+  `test_assignSpecimenAlreadyAssigned` declared `callCount = [0]` and never read it anywhere in
+  that test (grep-confirmed — a same-named variable *is* used in a different, earlier test in
+  the same file, which is presumably where this was copy-pasted from). Removed.
+
+### Changed
+- **Re-enabled `D` and `ANN` in `[tool.ruff.lint]`** by removing them from `ignore` (kept
+  `E501` ignored — untouched, no evidence it's accidental). Re-running `ruff check .`
+  afterward surfaced **709 new violations** (mostly `D205`/`ANN201`/`ANN001`/`D103` — see
+  `docs/ruff-baseline-report.md` for the full breakdown by rule and by directory), not the
+  near-zero count assumed going in. Left unfixed, deliberately: fixing an unscoped
+  709-violation backlog (98 of them in Alembic `upgrade()`/`downgrade()` functions alone) isn't
+  something to absorb silently inside a lint-cleanup task — it needs its own scoping pass.
+  `pyproject.toml` now genuinely enforces both rule sets; the resulting backlog is tracked, not
+  hidden.
+- **Added `docs/ruff-baseline-report.md`** — a real, freshly-generated baseline (enabled rule
+  sets, verbatim `ruff check .` output, violation counts by rule and by directory), replacing
+  the previously-referenced report of the same name that never actually existed in this repo.
+
+### Verification
+- `python -c "import main"` — boots clean.
+- Full test suite: **96 passed, 0 failed**, unchanged from the pre-cleanup baseline (confirmed
+  before and after; also re-ran the specific tests touched by the `B904`/`B017` fixes in
+  isolation).
+
 ## Pyright scan + code review: 5 crash bugs from a merge conflict
 
 A follow-up Pyright scan (same method as the earlier "Full-codebase
