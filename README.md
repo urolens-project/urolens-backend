@@ -59,7 +59,7 @@ alembic upgrade head
 
 Sanity check after pulling new migrations or before opening a PR that adds one:
 `alembic heads` should print exactly one revision. More than one means a branch needs
-merging (see `CONTRIBUTING.md`).
+merging (see `docs/CONTRIBUTING.md`).
 
 ### 5️⃣ 🚀 Run the dev server
 
@@ -72,12 +72,13 @@ uvicorn main:app --reload
 
 ### 6️⃣ 🌱 (Optional) Seed test data
 
-Run in this exact order — `seed_results.py` depends on data the first two create:
+Run in this exact order from the repo root — `seed_results.py` depends on data the first two
+create:
 
 ```bash
-python seed_users.py       # test staff accounts (e.g. a MEDTECH login)
-python seed_specimens.py   # test specimen records
-python seed_results.py     # analysis results + Smart Diagnosis output + manual overrides
+python seed/seed_users.py       # test staff accounts (e.g. a MEDTECH login)
+python seed/seed_specimens.py   # test specimen records
+python seed/seed_results.py     # analysis results + Smart Diagnosis output + manual overrides
 ```
 
 ### 7️⃣ 🧪 Run the test suite
@@ -86,11 +87,9 @@ python seed_results.py     # analysis results + Smart Diagnosis output + manual 
 pytest
 ```
 
-> 📍 The suite currently holds at a known baseline of pre-existing failures (integration
-> tests that need real infra, and a couple of sync-tests-calling-async-functions bugs)
-> alongside a larger and growing set of passing unit tests — a failure count that doesn't
-> match what you started with means something changed, not that the whole suite is expected
-> to be green.
+> 📍 The suite is expected to pass fully — no real infra required, no known pre-existing
+> failures. If `pytest` reports any failures on a clean checkout, that's a real regression,
+> not a baseline to ignore.
 
 When working on a specific area, scope the run instead of reading the whole-suite count,
 e.g.:
@@ -116,7 +115,7 @@ See `docs/ruff-baseline-report.md` for the current violation baseline.
 
 ## 🧭 Next steps
 
-- 🤝 **Adding a feature?** See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required
+- 🤝 **Adding a feature?** See [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) for the required
   sequence and pre-PR checklist.
 - 📋 **Coding standards and security rules:** see
   [`docs/backend-standards.md`](./docs/backend-standards.md).
