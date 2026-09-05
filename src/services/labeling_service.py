@@ -185,10 +185,12 @@ async def confirmLabelAffixed(
 
     if label is None:
         if not offlineOverride:
-            raise HTTPException(
+            exc = HTTPException(
                 status_code=400,
                 detail="No label found. Print label first, or enable offline override.",
             )
+            exc.errorCode = "LABEL_NOT_FOUND"
+            raise exc
 
         specimen = await db.get(Specimen, specimenId)
         if specimen is None:
