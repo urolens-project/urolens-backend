@@ -18,17 +18,17 @@ from src.api import (
     queue,
 )
 from src.api.image import router as images_router
+from src.api.lab_requests import router as lab_requests_router
+from src.api.labeling import router as labeling_router
 from src.api.notifications import router as notifications_router  # Epic 8
 from src.api.result_releasing import router as result_releasing_router
 
 # Mobile developer routers
 from src.api.results import router as results_router
-from src.api.sync import router as sync_router
-from src.api.labeling import router as labeling_router
 
 # Web developer routers
 from src.api.specimens import router as src_specimens_router
-from src.api.lab_requests import router as lab_requests_router
+from src.api.sync import router as sync_router
 
 app = FastAPI(title="UroLens LIS Engine")
 

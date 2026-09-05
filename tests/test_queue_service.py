@@ -308,8 +308,6 @@ class TestAssignSpecimen:
         db = MagicMock()
         db.table = MagicMock()
 
-        callCount = [0]
-
         def tableSideEffect(tableName):
             chain = MagicMock()
             chain.select.return_value = chain
