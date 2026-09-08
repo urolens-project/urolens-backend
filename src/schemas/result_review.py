@@ -73,6 +73,7 @@ class PendingResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -98,6 +99,7 @@ class ApprovedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -120,6 +122,7 @@ class EscalatedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -154,6 +157,7 @@ class FullResultDetail(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -169,6 +173,7 @@ class FullResultDetail(BaseModel):
     modelVersion: str
     manualOverrides: list[ManualOverrideItem]
     imageUrl: str | None = None
+    smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str
     annotationNotes: str | None = None
