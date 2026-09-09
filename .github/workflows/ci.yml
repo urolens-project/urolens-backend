@@ -1,0 +1,117 @@
+name: CI
+
+"on":
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, development, v1.0.0]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # None of these point at anything real. src/core/config.py validates
+      # every one of these at import time (fails fast if unset/invalid) and
+      # the test suite is fully mocked, so no live DB or Supabase project is
+      # needed to run it. DATABASE_URL only needs to be syntactically valid
+      # (alembic heads doesn't connect either — it just reads local
+      # migration script metadata). JWT_SIGNING_KEY only needs to be
+      # non-empty and not equal to the app's known placeholder string.
+      DATABASE_URL: postgresql://ci_user:ci_pass@localhost:5432/ci_test_db
+      JWT_SIGNING_KEY: ci-only-signing-key-not-used-in-production-1234567890
+      SUPABASE_URL: https://ci-placeholder.supabase.co
+      SUPABASE_SERVICE_KEY: ci-placeholder-service-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate a throwaway ENCRYPTION_KEY
+        # Must be a real, parseable Fernet key, not just a non-empty string —
+        # config.py's startup check does Fernet(key.encode()) and raises if
+        # that fails, not just a truthiness check. Generated fresh per run,
+        # discarded with the runner; encrypts nothing that outlives this job.
+        run: |
+          echo "ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
+      - name: Alembic — single migration head
+        run: alembic heads
+
+      - name: Ruff — hard-fail categories (E, F, I, T20, B, UP, S)
+        # Explicit --ignore E501 is required here: pyproject.toml's
+        # `ignore = ["E501"]` is NOT applied when --select is passed on the
+        # CLI (verified directly — ruff check . --select E alone reports
+        # E501 hits despite the config; --ignore E501 must be repeated
+        # explicitly, or this gate would hard-fail on 283 pre-existing,
+        # deliberately-ignored long lines). Per-file-ignores (tests/**,
+        # alembic/versions/*.py, etc.) DO still apply correctly under an
+        # explicit --select — also verified directly, not assumed.
+        run: ruff check . --select E,F,I,T20,B,UP,S --ignore E501
+
+      - name: Ruff — docstring/typing backlog (report only)
+        # D (docstrings) and ANN (type annotations): ~517 known, pre-existing
+        # violations (see docs/ruff-baseline-report.md). Visible in CI output
+        # so the backlog doesn't grow invisibly, but not build-blocking yet —
+        # closing it is separate, already-identified follow-up work.
+        continue-on-error: true
+        run: ruff check . --select D,ANN
+
+      - name: mypy --strict (report only)
+        # Never run in CI before this workflow — this wires the measurement,
+        # it doesn't fix anything. --explicit-package-bases is required: bare
+        # `mypy --strict src` fails immediately with "Source file found twice
+        # under different module names" (src/ is imported both as `src.x` and
+        # as `x` across the codebase's mixed absolute/relative import style)
+        # and never reaches real type-checking — verified directly.
+        continue-on-error: true
+        run: |
+          pip install mypy
+          mypy --strict --explicit-package-bases src
+
+      - name: Run tests
+        # No known-failure baseline, no tolerance for a partial pass — the
+        # suite is fully green (108 passed, 0 failed, twice-verified stable).
+        # Any failure here is a real regression.
+        run: pytest -q
+
+      - name: OpenAPI sanity check
+        run: python -m scripts.check_openapi
+
+  check-commit-authorship:
+    # Merged trigger above includes push; this job is PR-only (it reads
+    # github.event.pull_request.base.sha), so it's guarded here rather than
+    # by widening/duplicating the on: block.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Block AI co-authored commits
+        run: |
+          RANGE="${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
+
+          # Keep this pattern identical to .pre-commit-config.yaml's
+          # no-ai-co-authored hook.
+          PATTERN='co-authored-by:.*(claude|copilot|chatgpt|openai|anthropic|gpt-|cursor|codeium)'
+          OFFENDERS=$(git log "$RANGE" --pretty=format:'%H' | while read -r sha; do
+            if git log -1 --pretty=format:'%B' "$sha" | grep -qiE "$PATTERN"; then
+              echo "$sha"
+            fi
+          done)
+
+          if [ -n "$OFFENDERS" ]; then
+            echo "Blocked: AI co-authored commit trailer found in:"
+            echo "$OFFENDERS" | while read -r sha; do
+              echo "--- $sha ---"
+              git log -1 --pretty=format:'%B' "$sha"
+              echo
+            done
+            exit 1
+          fi
