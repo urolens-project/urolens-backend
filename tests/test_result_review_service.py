@@ -25,18 +25,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import ConflictException, UnprocessableException
+from src.core.exceptions import ConflictException, NotFoundException, UnprocessableException
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.escalation import Escalation
+from src.models.manual_override import ManualOverride
+from src.models.patient import Patient
 from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
 from src.models.specimen import Specimen
-from src.services.result_review_service import ResultReviewService
+from src.models.user import User
+from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")
@@ -287,3 +291,249 @@ async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     assert existingReview.annotationNotes == "updated notes only"
     # Not overwritten with None just because this call didn't supply a value.
     assert existingReview.spatialAnnotations == [{"x": 1, "y": 2, "label": "prior"}]
+
+
+# ── getFullResult (previously entirely untested — flagged as a gap in this
+#    file's own module docstring) ────────────────────────────────────────
+
+def _makeOverride(paramName: str, overriddenAt: datetime) -> MagicMock:
+    o = MagicMock(spec=ManualOverride)
+    o.overrideId = uuid.uuid4()
+    o.parameterName = paramName
+    o.originalAiValue = "10"
+    o.correctedValue = "12"
+    o.rationale = "recount"
+    o.overriddenAt = overriddenAt
+    return o
+
+
+@pytest.mark.asyncio
+async def test_getFullResultRaisesNotFoundForMissingResult():
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+
+    _service = ResultReviewService(db=db)
+    with pytest.raises(NotFoundException) as excInfo:
+        await _service.getFullResult(RESULT_ID)
+    assert excInfo.value.errorCode == "RESULT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
+    """Baseline assembly with no patient_uid on the specimen (so the Patient
+    lookup — and its known `.sex` gap, see the dedicated test below — is
+    never reached), no image, no medtech, no overrides, no annotation, no
+    smart diagnosis output.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+    ar.confirmedAt = None
+    ar.aiFindings = {"RBC": 12}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])  # AnalysisResult, then Specimen
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarsResult([]),       # manual_overrides
+            _makeScalarOneResult(None),   # latest ResultReview
+            _makeScalarOneResult(None),   # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert detail["resultId"] == RESULT_ID
+    assert detail["manualOverrides"] == []
+    assert detail["medtechName"] == ""
+    assert detail["imageUrl"] is None
+    assert detail["smartDiagnosisUnavailable"] is True  # no attached output
+    assert detail["confirmationNotes"] is None  # documented schema-drift field
+
+
+@pytest.mark.asyncio
+async def test_getFullResultOrdersManualOverridesByOverriddenAt():
+    """Regression guard: the manual_overrides query must sort by
+    overridden_at. Without an explicit ORDER BY, Postgres does not
+    guarantee insertion order on a plain SELECT, so the supervisor's
+    override history could render out of sequence.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+
+    overrides = [
+        _makeOverride("RBC", datetime(2026, 1, 1, tzinfo=UTC)),
+        _makeOverride("WBC", datetime(2026, 1, 2, tzinfo=UTC)),
+    ]
+
+    capturedStatements = []
+
+    async def _executeSideEffect(stmt):
+        capturedStatements.append(stmt)
+        if len(capturedStatements) == 1:
+            return _makeScalarsResult(overrides)
+        return _makeScalarOneResult(None)
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(side_effect=_executeSideEffect)
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert [o["parameterName"] for o in detail["manualOverrides"]] == ["RBC", "WBC"]
+    overridesStmt = capturedStatements[0]
+    assert "ORDER BY manual_overrides.overridden_at" in str(overridesStmt)
+
+
+@pytest.mark.asyncio
+async def test_getFullResultPatientSexRaisesAttributeErrorKnownGap():
+    """Documents a known, already-flagged gap (changelog.md, "Pyright scan"
+    entry: "Patient model has no sex column, but it's read as .sex in 4
+    places... deciding whether to add the column or remove the reads is a
+    product call, not something to guess at here") — not fixed in this
+    change, per that same standing policy. This test locks in the *current*
+    (broken) behavior so a silent, accidental fix doesn't go unnoticed
+    either: if this starts failing, someone made the product decision and
+    this test should be updated to assert the real value instead.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = "PT-001"
+    specimen.medtechId = None
+
+    patient = MagicMock(spec=Patient)  # spec= enforces the real model's attribute set
+    patient.firstName = None
+    patient.lastName = None
+    patient.dateOfBirth = None
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(return_value=_makeScalarOneResult(patient))  # Patient lookup
+
+    _service = ResultReviewService(db=db)
+    with pytest.raises(AttributeError):
+        await _service.getFullResult(RESULT_ID)
+
+
+# ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──
+
+class _FakeSupabaseQuery:
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    def select(self, *_a, **_kw):
+        return self
+
+    def eq(self, *_a, **_kw):
+        return self
+
+    async def execute(self):
+        return SimpleNamespace(data=self._rows)
+
+
+class _FakeSupabaseForSmartDiagnosis:
+    def __init__(self, analysisRows: list[dict], outputRows: list[dict]):
+        self._analysisRows = analysisRows
+        self._outputRows = outputRows
+
+    def table(self, name: str):
+        if name == "analysis_results":
+            return _FakeSupabaseQuery(self._analysisRows)
+        if name == "smart_diagnosis_outputs":
+            return _FakeSupabaseQuery(self._outputRows)
+        return _FakeSupabaseQuery([])
+
+
+@pytest.mark.asyncio
+async def test_getSmartDiagnosisNotFoundRaises404():
+    fakeSb = _FakeSupabaseForSmartDiagnosis(analysisRows=[], outputRows=[])
+    with patch("src.services.result_review_service.supabase", fakeSb):
+        with pytest.raises(Exception) as excInfo:
+            await getSmartDiagnosis(str(RESULT_ID))
+    assert getattr(excInfo.value, "status_code", None) == 404
+
+
+@pytest.mark.asyncio
+async def test_getSmartDiagnosisPrefersAuthoritativeOutputsTable():
+    analysisRows = [{
+        "result_id": str(RESULT_ID),
+        "smart_diagnosis_unavailable": False,
+        "smart_diagnosis": {"gout": {"level": "LOW"}},  # denormalized fallback, should be ignored
+    }]
+    outputRows = [{
+        "output_id": str(uuid.uuid4()),
+        "status": "ATTACHED",
+        "gout_score": "HIGH",
+        "gn_score": "MODERATE",
+        "nephro_score": "LOW",
+        "no_significant_indicators": False,
+        "evidence_map": {"gout": ["uric_acid_crystals"]},
+        "engine_version": "mvp-v1.0",
+    }]
+    fakeSb = _FakeSupabaseForSmartDiagnosis(analysisRows=analysisRows, outputRows=outputRows)
+
+    with patch("src.services.result_review_service.supabase", fakeSb):
+        result = await getSmartDiagnosis(str(RESULT_ID))
+
+    assert result["status"] == "ATTACHED"
+    assert result["gout_score"] == "HIGH"  # from the authoritative table, not the JSONB fallback
+
+
+@pytest.mark.asyncio
+async def test_getSmartDiagnosisFallsBackToDenormalizedJsonb():
+    analysisRows = [{
+        "result_id": str(RESULT_ID),
+        "smart_diagnosis_unavailable": False,
+        "smart_diagnosis": {
+            "gout": {"level": "HIGH"},
+            "glomerulonephritis": {"level": "LOW"},
+            "nephrolithiasis": {"level": "MODERATE"},
+            "no_significant_indicators": False,
+            "engine_version": "mvp-v1.0",
+        },
+    }]
+    fakeSb = _FakeSupabaseForSmartDiagnosis(analysisRows=analysisRows, outputRows=[])
+
+    with patch("src.services.result_review_service.supabase", fakeSb):
+        result = await getSmartDiagnosis(str(RESULT_ID))
+
+    assert result["status"] == "ATTACHED"
+    assert result["gout_score"] == "HIGH"
+    assert result["gn_score"] == "LOW"
+    assert result["nephro_score"] == "MODERATE"
+
+
+@pytest.mark.asyncio
+async def test_getSmartDiagnosisNoDataReturnsFlaggedUnavailable():
+    analysisRows = [{
+        "result_id": str(RESULT_ID),
+        "smart_diagnosis_unavailable": True,
+        "smart_diagnosis": None,
+    }]
+    fakeSb = _FakeSupabaseForSmartDiagnosis(analysisRows=analysisRows, outputRows=[])
+
+    with patch("src.services.result_review_service.supabase", fakeSb):
+        result = await getSmartDiagnosis(str(RESULT_ID))
+
+    assert result == {"result_id": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
