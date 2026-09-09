@@ -30,6 +30,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Then install the git hooks — both commands are required:
+
+```bash
+pre-commit install
+pre-commit install --hook-type commit-msg
+```
+
+> 🪝 `commit-msg` is a separate hook type from the default `pre-commit` stage and is **not**
+> installed by the first command alone — skipping the second means the AI-co-author-trailer
+> and conventional-commit checks defined in `.pre-commit-config.yaml` silently never run for
+> you.
+
 ### 3️⃣ ⚙️ Configure environment variables
 
 Copy `.env.example` to `.env` and fill in real values:
