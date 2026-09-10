@@ -30,7 +30,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import ConflictException, NotFoundException, UnprocessableException
+from src.core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.escalation import Escalation
 from src.models.manual_override import ManualOverride
@@ -39,7 +43,6 @@ from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
 from src.models.specimen import Specimen
-from src.models.user import User
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
