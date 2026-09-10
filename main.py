@@ -60,7 +60,7 @@ _STATUS_TO_CODE = {
 
 @app.exception_handler(HTTPException)
 async def httpExceptionHandler(request: Request, exc: HTTPException) -> JSONResponse:
-    code = getattr(exc, "error_code", None) or _STATUS_TO_CODE.get(exc.status_code, "ERROR")
+    code = getattr(exc, "errorCode", None) or _STATUS_TO_CODE.get(exc.status_code, "ERROR")
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": code, "message": exc.detail}},
