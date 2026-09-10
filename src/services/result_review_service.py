@@ -431,7 +431,9 @@ class ResultReviewService:
 
         overridesRows = (
             await self.db.execute(
-                select(ManualOverride).where(ManualOverride.resultId == resultId)
+                select(ManualOverride)
+                .where(ManualOverride.resultId == resultId)
+                .order_by(ManualOverride.overriddenAt)
             )
         ).scalars().all()
         overrides = [
