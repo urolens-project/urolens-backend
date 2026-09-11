@@ -247,6 +247,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -315,6 +316,7 @@ class ResultReviewService:
                 {
                     "resultId": resultId,
                     "specimenId": ar.specimenId if ar else None,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -379,6 +381,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -485,6 +488,7 @@ class ResultReviewService:
         return {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),
             "patientSex": sex,
@@ -497,6 +501,7 @@ class ResultReviewService:
             "modelVersion": ar.modelVersion,
             "manualOverrides": overrides,
             "imageUrl": imageUrl,
+            "smartDiagnosis": smartDiagnosis,
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,
             "annotationNotes": latestAnnotation,
@@ -576,7 +581,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes))
+        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
         ar.status = ResultStatus.APPROVED
 
         specimen = await self.db.get(Specimen, ar.specimenId)
@@ -609,7 +614,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason))
+        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
         ar.status = ResultStatus.RETURNED_FOR_CORRECTION
 
         await self.db.commit()
@@ -661,6 +666,7 @@ class ResultReviewService:
                 escalatedBy=userId,
                 escalationPath=escalationPath,
                 escalationNote=escalationNote,
+                escalatedAt=now,
             )
         )
         ar.status = ResultStatus.CRITICAL_ESCALATED
@@ -690,7 +696,7 @@ async def getSmartDiagnosis(resultId: str) -> dict:
 
     Returns:
         A dict with `status` `"ATTACHED"` (with scores/evidence) if found via
-        either source, or `{"result_id": ..., "status": "FLAGGED_UNAVAILABLE"}`
+        either source, or `{"resultId": ..., "status": "FLAGGED_UNAVAILABLE"}`
         if neither has usable data.
 
     Raises:
