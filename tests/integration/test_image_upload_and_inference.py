@@ -165,7 +165,7 @@ async def test_uploadUnsupportedFormatReturnsErrorCodeInResponseBody(
         "/api/v1/images/upload",
         headers={"Authorization": f"Bearer {medtechToken}"},
         files={"file": ("specimen.gif", gifBytes, "image/gif")},
-        data={"specimenId": str(testSpecimen)},
+        data={"specimen_id": str(testSpecimen)},
     )
 
     assert response.status_code == 422
