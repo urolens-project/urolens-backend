@@ -8,6 +8,8 @@ extraPaths = ["."]
 select = ["E", "F", "I", "D", "T20", "ANN", "B", "UP", "S"]
 ignore = [
     "E501",
+    "D",
+    "ANN",
 ]
 
 [tool.ruff.lint.pydocstyle]

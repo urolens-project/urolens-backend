@@ -11,7 +11,11 @@ from supabase import AsyncClient
 from src.core.audit_logger import AuditLogger
 from src.core.encryption import decryptPii
 from src.core.enums import UserRole
-from src.core.exceptions import NotFoundException, SpecimenNotFoundError, UnprocessableException
+from src.core.exceptions import (
+    NotFoundException,
+    SpecimenNotFoundError,
+    UnprocessableException,
+)
 from src.schemas.queue import (
     MedTechWorkload,
     MedTechWorkloadItem,
