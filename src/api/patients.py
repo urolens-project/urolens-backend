@@ -9,7 +9,7 @@ from src.core.rbac import RequireRole
 from src.schemas.patient import PatientCreateRequest, PatientResponse
 from src.services.patient_service import PatientService
 
-router = APIRouter()
+router = APIRouter(tags=["Patients"])
 
 
 async def getPatientService(

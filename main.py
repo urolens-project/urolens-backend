@@ -18,17 +18,18 @@ from src.api import (
     queue,
 )
 from src.api.image import router as images_router
+from src.api.lab_requests import router as lab_requests_router
+from src.api.labeling import router as labeling_router
 from src.api.notifications import router as notifications_router  # Epic 8
 from src.api.result_releasing import router as result_releasing_router
 
 # Mobile developer routers
 from src.api.results import router as results_router
-from src.api.sync import router as sync_router
-from src.api.labeling import router as labeling_router
 
 # Web developer routers
 from src.api.specimens import router as src_specimens_router
-from src.api.lab_requests import router as lab_requests_router
+from src.api.sync import router as sync_router
+from src.schemas.system import HealthCheckResponse
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -103,6 +104,7 @@ app.include_router(images_router)
 app.include_router(notifications_router)
 
 
-@app.get("/")
-def rootHealthCheck():
-    return {"status": "healthy", "service": "UroLens Core Platform Architecture"}
+@app.get("/", response_model=HealthCheckResponse, tags=["health"])
+def rootHealthCheck() -> HealthCheckResponse:
+    """Liveness check — confirms the process is up, not that its dependencies are."""
+    return HealthCheckResponse(status="healthy", service="UroLens Core Platform Architecture")
