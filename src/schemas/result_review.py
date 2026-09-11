@@ -32,7 +32,14 @@ class OverrideRequest(BaseModel):
     NOT NULL column, so an explicit `"rationale": null` in the request must
     be rejected by Pydantic (a clean 422) rather than reach the service and
     fail as an unhandled IntegrityError."""
-    originalAiValue: float = Field(..., ge=0)
+    originalAiValue: float | None = Field(
+        None,
+        ge=0,
+        description=(
+            "Accepted for API-contract compatibility but ignored — the service "
+            "always re-derives the original value from the stored ai_findings."
+        ),
+    )
 
     @field_validator("parameter")
     @classmethod
@@ -68,11 +75,38 @@ class SupervisorStatsResponse(BaseModel):
     escalatedCount: int
 
 
+class MedtechPendingResultItem(BaseModel):
+    """One result awaiting this MedTech's confirmation (or re-confirmation,
+    if a supervisor returned it), for the MedTech's own queue list.
+    """
+
+    resultId: UUID
+    specimenId: UUID
+    patientUid: str = ""
+    patientName: str
+    patientAge: int | None = None
+    patientSex: str | None = None
+    status: str
+    returnReason: str | None = None
+    """The supervisor's reason, present only when status is
+    RETURNED_FOR_CORRECTION."""
+
+
+class MedtechPendingListResponse(BaseModel):
+    """Response body for the MedTech's paginated confirmation queue."""
+
+    items: list[MedtechPendingResultItem]
+    total: int
+    page: int
+    pageSize: int
+
+
 class PendingResultItem(BaseModel):
     """One result awaiting supervisor approval, for the pending queue list."""
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -98,6 +132,7 @@ class ApprovedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -120,6 +155,7 @@ class EscalatedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -154,6 +190,7 @@ class FullResultDetail(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    patientUid: str = ""
     patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
@@ -169,6 +206,7 @@ class FullResultDetail(BaseModel):
     modelVersion: str
     manualOverrides: list[ManualOverrideItem]
     imageUrl: str | None = None
+    smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str
     annotationNotes: str | None = None

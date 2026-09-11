@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -16,6 +16,18 @@ if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
     from .image import Image
 
+# specimens.status is a native Postgres enum (type specimen_status), not a
+# plain VARCHAR — mapping it as String(30) let SQLAlchemy send status
+# updates as a bare VARCHAR bind param, which Postgres refuses to
+# implicitly cast ("column is of type specimen_status but expression is of
+# type character varying"). create_type=False: the type already exists in
+# the DB (created by its migration), so this must never try to CREATE TYPE.
+_SPECIMEN_STATUS = PgEnum(
+    "RECEIVED", "LABELED", "ASSIGNED", "IN_QUEUE", "PROCESSING", "REJECTED", "COMPLETED",
+    name="specimen_status",
+    create_type=False,
+)
+
 
 class Specimen(Base):
     """Physical urine specimen record.
@@ -24,15 +36,15 @@ class Specimen(Base):
 
     __tablename__ = "specimens"
 
-    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id", 
+    specimenId: Mapped[uuid.UUID] = mapped_column("specimen_id",
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    labRequestId: Mapped[uuid.UUID] = mapped_column("lab_request_id", 
+    labRequestId: Mapped[uuid.UUID] = mapped_column("lab_request_id",
         UUID(as_uuid=True), nullable=False, index=True
     )
     sampleUid: Mapped[str | None] = mapped_column("sample_uid", String(30), nullable=True, unique=True)
     status: Mapped[str] = mapped_column(
-        String(30), nullable=False, default="RECEIVED"
+        _SPECIMEN_STATUS, nullable=False, default="RECEIVED"
     )
     visualCheckPassed: Mapped[bool] = mapped_column("visual_check_passed", 
         Boolean, nullable=False, default=True
