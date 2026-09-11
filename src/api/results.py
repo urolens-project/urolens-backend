@@ -217,10 +217,14 @@ async def listPendingResults(
 async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
-    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
-    """Save a supervisor's annotation on a result; see
+    """Save an annotation (notes + drawn regions) on a result. Open to
+    MEDTECH too — marking up the image while reviewing/correcting it is
+    just as much their job as the Supervisor's; each user's annotation is
+    stored under their own `reviewed_by`, and `get_full_result` surfaces
+    whichever is most recently updated. See
     `ResultReviewService.save_annotation`.
     """
     result = await _service.saveAnnotation(
