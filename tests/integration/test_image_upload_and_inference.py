@@ -118,7 +118,7 @@ async def test_uploadValidImageReturns201(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
@@ -142,7 +142,7 @@ async def test_uploadUnsupportedFormatReturns422(
         "/api/v1/images/upload",
         headers={"Authorization": f"Bearer {medtechToken}"},
         files={"file": ("specimen.gif", gifBytes, "image/gif")},
-        data={"specimenId": str(testSpecimen)},
+        data={"specimen_id": str(testSpecimen)},
     )
 
     assert response.status_code == 422
@@ -162,7 +162,7 @@ async def test_uploadBelowMinimumResolutionReturns422(
         "/api/v1/images/upload",
         headers={"Authorization": f"Bearer {medtechToken}"},
         files={"file": ("tiny.jpg", smallJpeg, "image/jpeg")},
-        data={"specimenId": str(testSpecimen)},
+        data={"specimen_id": str(testSpecimen)},
     )
 
     assert response.status_code == 422
@@ -196,7 +196,7 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
@@ -229,7 +229,7 @@ async def test_uploadSucceedsWhenAiInferenceFails(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text

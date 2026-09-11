@@ -721,36 +721,36 @@ async def getSmartDiagnosis(resultId: str) -> dict:
         row = outputRows[0]
         evidenceRaw = row.get("evidence_map") or {}
         return {
-            "output_id": str(row["output_id"]),
-            "result_id": resultId,
+            "outputId": str(row["output_id"]),
+            "resultId": resultId,
             "status": "ATTACHED",
-            "gout_score":   row["gout_score"],
-            "gn_score":     row["gn_score"],
-            "nephro_score": row["nephro_score"],
-            "evidence_map": evidenceRaw,
-            "no_significant_indicators": row.get("no_significant_indicators", False),
-            "engine_version": row.get("engine_version", ""),
-            "generated_at": str(row.get("generated_at", "")),
+            "goutScore":   row["gout_score"],
+            "gnScore":     row["gn_score"],
+            "nephroScore": row["nephro_score"],
+            "evidenceMap": evidenceRaw,
+            "noSignificantIndicators": row.get("no_significant_indicators", False),
+            "engineVersion": row.get("engine_version", ""),
+            "generatedAt": str(row.get("generated_at", "")),
         }
 
     # Fall back to the denormalized JSONB on analysis_results
     smartDiag = ar.get("smart_diagnosis")
     if smartDiag:
         return {
-            "output_id": resultId,
-            "result_id": resultId,
+            "outputId": resultId,
+            "resultId": resultId,
             "status": "ATTACHED",
-            "gout_score":   smartDiag.get("gout", {}).get("level", "LOW"),
-            "gn_score":     smartDiag.get("glomerulonephritis", {}).get("level", "LOW"),
-            "nephro_score": smartDiag.get("nephrolithiasis", {}).get("level", "LOW"),
-            "evidence_map": {
+            "goutScore":   smartDiag.get("gout", {}).get("level", "LOW"),
+            "gnScore":     smartDiag.get("glomerulonephritis", {}).get("level", "LOW"),
+            "nephroScore": smartDiag.get("nephrolithiasis", {}).get("level", "LOW"),
+            "evidenceMap": {
                 "gout":               smartDiag.get("gout", {}),
                 "glomerulonephritis": smartDiag.get("glomerulonephritis", {}),
                 "nephrolithiasis":    smartDiag.get("nephrolithiasis", {}),
             },
-            "no_significant_indicators": smartDiag.get("no_significant_indicators", False),
-            "engine_version": smartDiag.get("engine_version", ""),
-            "generated_at": "",
+            "noSignificantIndicators": smartDiag.get("no_significant_indicators", False),
+            "engineVersion": smartDiag.get("engine_version", ""),
+            "generatedAt": "",
         }
 
-    return {"result_id": resultId, "status": "FLAGGED_UNAVAILABLE"}
+    return {"resultId": resultId, "status": "FLAGGED_UNAVAILABLE"}

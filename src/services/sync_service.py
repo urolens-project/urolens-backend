@@ -49,8 +49,8 @@ async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
 
     Returns:
         A dict with `timestamp` (server time of this sync) and `changes`,
-        keyed by table name (`specimens`, `queue_assignments`,
-        `analysis_results`), each holding `{"created": [...], "updated": [...]}`
+        keyed by table name (`specimens`, `queueAssignments`,
+        `analysisResults`), each holding `{"created": [...], "updated": [...]}`
         with the DB primary key column remapped to `"id"`.
     """
     isDelta = lastSyncedAt is not None
@@ -101,8 +101,8 @@ async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "changes": {
-            "specimens":         makeChanges(specimens),
-            "queue_assignments": makeChanges(queueAssignments),
-            "analysis_results":  makeChanges(analysisResults),
+            "specimens":        makeChanges(specimens),
+            "queueAssignments": makeChanges(queueAssignments),
+            "analysisResults":  makeChanges(analysisResults),
         },
     }

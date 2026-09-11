@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, SmallInteger, String, Text
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -67,8 +68,10 @@ class Image(Base):
     fileSizeBytes: Mapped[int] = mapped_column("file_size_bytes", Integer, nullable=False)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=ImageStatus.ACTIVE
+    status: Mapped[ImageStatus] = mapped_column(
+        PgEnum(ImageStatus, name="image_status", create_type=False),
+        nullable=False,
+        default=ImageStatus.ACTIVE,
     )
     uploadedAt: Mapped[datetime] = mapped_column("uploaded_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
