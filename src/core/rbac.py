@@ -49,10 +49,10 @@ async def getCurrentUser(
 
     try:
         claims = decodeJwt(token)
-    except Exception:
+    except Exception as err:
         logger.warning("JWT decode failed from %s", ipAddress, exc_info=True)
         await audit_logger.logAccessDenied(ipAddress)
-        raise _unauthorized()
+        raise _unauthorized() from err
 
     sessionId = claims.get("session_id")
     if not sessionId or not await isSessionActive(sessionId):

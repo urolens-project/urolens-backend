@@ -28,9 +28,11 @@ extend-immutable-calls = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105"]
+"tests/**" = ["S101", "S105", "D"]
 "alembic/**" = ["E402"]
-"seed_*.py" = ["T201", "S101", "E402"]
+"alembic/versions/*.py" = ["D", "ANN"]
+"seed_*.py" = ["T201", "S101", "E402", "D", "ANN"]
+"scripts/*.py" = ["T201", "D", "ANN"]
 "test_image_upload.py" = ["S311", "T201", "S105"]
 "src/schemas/auth.py" = ["S105"]
 "main.py" = ["E402"]
