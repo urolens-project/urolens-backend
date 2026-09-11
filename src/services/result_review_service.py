@@ -581,7 +581,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes))
+        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
         ar.status = ResultStatus.APPROVED
 
         specimen = await self.db.get(Specimen, ar.specimenId)
@@ -614,7 +614,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason))
+        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
         ar.status = ResultStatus.RETURNED_FOR_CORRECTION
 
         await self.db.commit()
@@ -666,6 +666,7 @@ class ResultReviewService:
                 escalatedBy=userId,
                 escalationPath=escalationPath,
                 escalationNote=escalationNote,
+                escalatedAt=now,
             )
         )
         ar.status = ResultStatus.CRITICAL_ESCALATED
