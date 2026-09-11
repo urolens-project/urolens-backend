@@ -1,5 +1,7 @@
-"""Specimen labeling routes (MedTech-facing): label search, generation, and
-affixed confirmation.
+"""Specimen labeling routes (receptionist-facing): label search, generation,
+and affixed confirmation — part of the receptionist intake pipeline
+(receive -> label -> queue assignment), not a MedTech task; a MedTech only
+sees a specimen after it's queued to them.
 """
 import uuid
 from uuid import UUID
@@ -23,13 +25,17 @@ router = APIRouter(
     tags=["Sample Labeling Tracking"]
 )
 
-_medtech = RequireRole([UserRole.MEDTECH])
+# Matches the frontend's /intake route guard (App.tsx) — the Sample Labeling
+# screen there is reachable by Receptionist/Supervisor/Administrator, not
+# MedTech. This was previously MEDTECH-only, which 403'd every single call
+# the intake labeling screen made, for every role that could ever reach it.
+_intake = RequireRole([UserRole.RECEPTIONIST, UserRole.SUPERVISOR, UserRole.ADMINISTRATOR])
 
 
 @router.get("/search-received", response_model=list[ReceivedSpecimenSearchItem])
 async def searchReceivedSpecimens(
     q: str,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_intake),
     db: AsyncSession = Depends(getDb),
 ):
     """Search `RECEIVED` specimens by name/UID; see
@@ -41,7 +47,7 @@ async def searchReceivedSpecimens(
 @router.post("/{id}/label", response_model=PrintLabelResponse, status_code=201)
 async def generateSpecimenLabelEndpoint(
     id: UUID,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_intake),
     db: AsyncSession = Depends(getDb),
 ):
     """Generate a specimen label; see `labeling_service.generate_label`."""
@@ -52,7 +58,7 @@ async def generateSpecimenLabelEndpoint(
 @router.post("/{id}/label/confirm", response_model=LabelConfirmResponse)
 async def confirmLabelAffixedEndpoint(
     id: UUID,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_intake),
     db: AsyncSession = Depends(getDb),
     payload: LabelConfirmRequest = Body(...),
 ):

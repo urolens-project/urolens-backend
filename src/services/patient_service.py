@@ -146,14 +146,25 @@ class PatientService:
             q: Case-insensitive substring to match against first or last name.
 
         Returns:
-            Matching patients, most-recently-created-first is not guaranteed
-            (same unordered-scan behavior as the prior implementation).
+            Up to `_SEARCH_LIMIT` matching patients, most-recently-created-first
+            is not guaranteed (same unordered-scan behavior as the prior
+            implementation).
         """
-        rows = (await self.db.execute(select(Patient).limit(_SEARCH_LIMIT))).scalars().all()
+        # Scan up to _DUPLICATE_CHECK_LIMIT candidates (PII is encrypted, so
+        # matching has to happen in Python after decrypting), then cap the
+        # *filtered* results at _SEARCH_LIMIT. Capping the initial scan at
+        # _SEARCH_LIMIT instead — as this previously did — silently missed
+        # real matches once there were more than _SEARCH_LIMIT patients in
+        # the table at all, regardless of whether they matched `q`.
+        rows = (
+            await self.db.execute(select(Patient).limit(_DUPLICATE_CHECK_LIMIT))
+        ).scalars().all()
         qLower = q.lower()
 
         responses: list[PatientResponse] = []
         for row in rows:
+            if len(responses) == _SEARCH_LIMIT:
+                break
             try:
                 first = decryptPii(row.firstName)
                 last = decryptPii(row.lastName)
