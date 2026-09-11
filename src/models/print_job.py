@@ -4,12 +4,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base
+
+# print_jobs.status is a native Postgres enum (type print_job_status), not
+# VARCHAR — same fix as Specimen.status/Image.status: a plain String mapping
+# 500s on write. create_type=False since the type already exists in the DB.
+_PRINT_JOB_STATUS = PgEnum("SENT", "PRINTED", "FAILED", name="print_job_status", create_type=False)
 
 
 class PrintJob(Base):
@@ -36,7 +41,7 @@ class PrintJob(Base):
         nullable=False,
         index=True,
     )
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="SENT")
+    status: Mapped[str] = mapped_column(_PRINT_JOB_STATUS, nullable=False, default="SENT")
     createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
