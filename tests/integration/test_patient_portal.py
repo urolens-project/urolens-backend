@@ -11,14 +11,14 @@ this migration's own test coverage behind an unrelated bug; these tests
 instead confirm the non-released case is rejected before
 `generateResultPdf` is ever reached — the actual gate under test.
 
-Assertions below check the error message, not error.code — a second,
-unrelated pre-existing mismatch: main.py's HTTPException handler reads
-`exc.error_code` (snake_case) but every service's custom exceptions set
-`.errorCode` (camelCase, matching this codebase's attribute-naming
-convention) — so a specific code like RESULT_NOT_RELEASED never survives
-the trip over HTTP; the client only ever sees the generic status-based
-fallback (FORBIDDEN, NOT_FOUND, ...). Confirmed present before this
-migration touched anything; out of scope to fix here.
+main.py's HTTPException handler used to read `exc.error_code` (snake_case)
+while every service's custom exceptions set `.errorCode` (camelCase,
+matching this codebase's attribute-naming convention) — so a specific code
+like RESULT_NOT_RELEASED never survived the trip over HTTP; the client only
+ever saw the generic status-based fallback (FORBIDDEN, NOT_FOUND, ...).
+Fixed in main.py; the assertions below now check `error.code` directly,
+proving the real code reaches the actual JSON response body (not just the
+raised exception object).
 """
 from __future__ import annotations
 
@@ -86,6 +86,7 @@ class TestStatusGateAppliesToDetailRoute:
             app.dependency_overrides.pop(getPatientResultService, None)
 
         assert response.status_code == 403
+        assert response.json()["error"]["code"] == "RESULT_NOT_RELEASED"
         assert "not yet released" in response.json()["error"]["message"].lower()
 
 
@@ -105,7 +106,41 @@ class TestStatusGateAppliesToPdfRoute:
             app.dependency_overrides.pop(getPatientResultService, None)
 
         assert response.status_code == 403
+        assert response.json()["error"]["code"] == "RESULT_NOT_RELEASED"
         assert "not yet released" in response.json()["error"]["message"].lower()
+
+
+class TestAccessDeniedCodeSurfacesOverHttp:
+    """Real HTTP-level proof for main.py's errorCode fix: a distinct
+    service-raised code (ACCESS_DENIED, from `PatientResultService`'s
+    own-record check) reaching the actual JSON response body, not just the
+    raised exception object.
+    """
+
+    @pytest.mark.asyncio
+    async def test_detailRouteSurfacesAccessDeniedCode(self, asyncClient):
+        fakeService = MagicMock()
+
+        async def _raiseAccessDenied(*args, **kwargs):
+            exc = HTTPException(status_code=403, detail="Access denied.")
+            exc.errorCode = "ACCESS_DENIED"
+            raise exc
+
+        fakeService.getResultDetail = AsyncMock(side_effect=_raiseAccessDenied)
+        app.dependency_overrides[getPatientResultService] = lambda: fakeService
+        token = _mintToken(PATIENT_USER_ID)
+        try:
+            with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
+                response = await asyncClient.get(
+                    f"/api/v1/patient/results/{RESULT_ID}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        finally:
+            app.dependency_overrides.pop(getPatientResultService, None)
+
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "ACCESS_DENIED"
+        assert response.json()["error"]["message"] == "Access denied."
 
 
 class TestRBAC:

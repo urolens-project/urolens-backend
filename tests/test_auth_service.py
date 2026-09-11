@@ -74,7 +74,7 @@ class TestJWT:
         assert delta == timedelta(hours=1)
 
     def test_decodeInvalidTokenRaises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(jwt.PyJWTError):
             decodeJwt("not.a.valid.token")
 
     def test_decodeExpiredTokenRaises(self):

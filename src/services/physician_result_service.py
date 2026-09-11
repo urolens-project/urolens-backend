@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.audit_logger import AuditLogger
 from src.core.config import settings
 from src.core.encryption import decryptPii
+from src.core.exceptions import NotFoundException
 from src.models.analysis_result import AnalysisResult
 from src.models.image import Image
 from src.models.lab_request import LabRequest
@@ -190,9 +191,7 @@ class PhysicianResultService:
         """
         ar = await self.db.get(AnalysisResult, resultId)
         if ar is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Analysis result not found."
-            )
+            raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
 
         # Ownership check: previously skipped entirely when patient_id was
         # falsy (`if patient_id:` guarded the whole block), which let any
@@ -202,7 +201,9 @@ class PhysicianResultService:
         patientId = ar.patientId
         physicianPatientIds = await self._getPhysicianPatientIds(physicianId)
         if not patientId or patientId not in physicianPatientIds:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+            exc = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+            exc.errorCode = "ACCESS_DENIED"
+            raise exc
 
         if ar.status != "RELEASED":
             exc = HTTPException(

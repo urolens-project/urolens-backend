@@ -8,12 +8,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
 from src.core.encryption import decryptPii
+from src.core.exceptions import NotFoundException, UnprocessableException
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
 from src.models.patient import Patient
@@ -148,42 +149,19 @@ class ResultReleasingService:
         row = await self.db.get(AnalysisResult, resultId)
 
         if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": {
-                        "code": "NOT_FOUND",
-                        "message": "Result not found.",
-                        "details": {},
-                    }
-                },
-            )
+            raise NotFoundException(message="Result not found.")
 
         if row.status != "APPROVED":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "error": {
-                        "code": "RESULT_NOT_APPROVED",
-                        "message": "Result is not in APPROVED status.",
-                        "details": {},
-                    }
-                },
+            raise UnprocessableException(
+                code="RESULT_NOT_APPROVED", message="Result is not in APPROVED status."
             )
 
         existing = await self.db.execute(
             select(ResultRelease.releaseId).where(ResultRelease.resultId == resultId)
         )
         if existing.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "error": {
-                        "code": "ALREADY_RELEASED",
-                        "message": "Result has already been released.",
-                        "details": {},
-                    }
-                },
+            raise UnprocessableException(
+                code="ALREADY_RELEASED", message="Result has already been released."
             )
 
         release = ResultRelease(

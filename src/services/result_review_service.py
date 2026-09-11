@@ -24,7 +24,6 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -695,7 +694,7 @@ async def getSmartDiagnosis(resultId: str) -> dict:
         if neither has usable data.
 
     Raises:
-        HTTPException: 404, if `result_id` doesn't exist.
+        NotFoundException: 404, if `result_id` doesn't exist.
     """
     # Fetch result including the denormalized smart_diagnosis JSONB column
     result = await (
@@ -706,7 +705,7 @@ async def getSmartDiagnosis(resultId: str) -> dict:
     )
     rows = result.data or []
     if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis result not found.")
+        raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
 
     ar = rows[0]
 
