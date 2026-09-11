@@ -68,6 +68,11 @@ class Image(Base):
     fileSizeBytes: Mapped[int] = mapped_column("file_size_bytes", Integer, nullable=False)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
+    # Native Postgres enum (type image_status), not VARCHAR — a plain String
+    # mapping sends updates as a VARCHAR bind param, which Postgres refuses to
+    # implicitly cast, 500ing every status change (e.g. image_retake_service's
+    # `image.status = ImageStatus.DISCARDED`). create_type=False since the
+    # type already exists in the DB.
     status: Mapped[ImageStatus] = mapped_column(
         PgEnum(ImageStatus, name="image_status", create_type=False),
         nullable=False,

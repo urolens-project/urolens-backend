@@ -4,12 +4,22 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base
+
+# specimen_rejections.reason_code is a native Postgres enum (type
+# rejection_reason), not VARCHAR — same fix as Specimen.status/Image.status:
+# a plain String mapping 500s on write. create_type=False since the type
+# already exists in the DB.
+_REJECTION_REASON = PgEnum(
+    "INSUFFICIENT_VOLUME", "WRONG_CONTAINER", "UNLABELED", "OTHER",
+    name="rejection_reason",
+    create_type=False,
+)
 
 
 class SpecimenRejection(Base):
@@ -38,7 +48,7 @@ class SpecimenRejection(Base):
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    reasonCode: Mapped[str] = mapped_column("reason_code", String(30), nullable=False)
+    reasonCode: Mapped[str] = mapped_column("reason_code", _REJECTION_REASON, nullable=False)
     freeTextNote: Mapped[str | None] = mapped_column("free_text_note", Text, nullable=True)
     createdAt: Mapped[datetime] = mapped_column("created_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
