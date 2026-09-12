@@ -90,11 +90,14 @@ class NotificationService:
         """Notify every active receptionist that a physician submitted a new
         lab request needing follow-up (e.g. specimen collection).
         """
+        # physician_name is the physician's display name/username, which
+        # already carries a "Dr." prefix where relevant (e.g. "Dr. Wendell")
+        # — don't add a second one.
         receptionistIds = await self._getActiveUserIds(UserRole.RECEPTIONIST)
         for recId in receptionistIds:
             await self.notify(
                 userId=recId,
-                message=f"New lab request {requestUid} submitted by Dr. {physicianName}.",
+                message=f"New lab request {requestUid} submitted by {physicianName}.",
                 notificationType="LAB_REQUEST_SUBMITTED",
                 entityId=labRequestId,
             )
