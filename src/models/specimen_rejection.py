@@ -50,7 +50,12 @@ class SpecimenRejection(Base):
     )
     reasonCode: Mapped[str] = mapped_column("reason_code", _REJECTION_REASON, nullable=False)
     freeTextNote: Mapped[str | None] = mapped_column("free_text_note", Text, nullable=True)
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    # The live table's column is `rejected_at`, not `created_at` — same
+    # pre-Alembic-history situation as sample_labels/print_jobs (see class
+    # docstring, which already correctly refers to this as `rejected_at`).
+    # Not serialized in any response schema, so safe to rename the Python
+    # attribute to match rather than keep a misleading `createdAt`.
+    rejectedAt: Mapped[datetime] = mapped_column("rejected_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
