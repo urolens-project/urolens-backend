@@ -96,7 +96,6 @@ async def test_confirmNonexistentResultRaisesNotFound():
         ResultStatus.PENDING_SUPERVISOR_APPROVAL,
         ResultStatus.APPROVED,
         ResultStatus.RELEASED,
-        ResultStatus.RETURNED_FOR_CORRECTION,
         ResultStatus.CRITICAL_ESCALATED,
     ],
 )
@@ -104,6 +103,9 @@ async def test_confirmNonexistentResultRaisesNotFound():
 async def test_confirmAlreadyConfirmedStatusRaisesConflict(status):
     """Every status that means the medtech-confirmation step already
     happened must reject a second confirm — not just PENDING_SUPERVISOR_APPROVAL.
+
+    RETURNED_FOR_CORRECTION is deliberately excluded: it's a resubmit, not a
+    double-confirm — see test_confirmReturnedForCorrectionResubmitsSuccessfully.
     """
     result = _makeResult(status=status)
     db = _makeDbMock(getResultReturn=result)
@@ -115,6 +117,24 @@ async def test_confirmAlreadyConfirmedStatusRaisesConflict(status):
     assert excInfo.value.errorCode == "RESULT_ALREADY_CONFIRMED"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmReturnedForCorrectionResubmitsSuccessfully():
+    """A result a supervisor sent back (RETURNED_FOR_CORRECTION) is one of
+    the two confirmable statuses — confirming it again resubmits it for
+    supervisor approval, same as the first confirm.
+    """
+    result = _makeResult(status=ResultStatus.RETURNED_FOR_CORRECTION, aiFindings={"RBC": 12, "WBC": 4})
+    db = _makeDbMock(getResultReturn=result)
+    service = _makeService(db)
+
+    await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert result.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL
+    assert result.confirmedBy == MEDTECH_ID
+    assert result.confirmedAt is not None
+    db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
