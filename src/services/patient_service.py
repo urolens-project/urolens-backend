@@ -252,7 +252,8 @@ class PatientService:
                     and decryptPii(dobEnc) == str(data.dateOfBirth)
                 ):
                     raise ConflictException(
-                        message="A patient with this name and date of birth already exists."
+                        code="DUPLICATE_PATIENT",
+                        message="A patient with this name and date of birth already exists.",
                     )
             except HTTPException:
                 raise
