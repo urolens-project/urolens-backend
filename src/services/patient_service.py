@@ -140,17 +140,32 @@ class PatientService:
         )
 
     async def searchPatients(self, q: str) -> list[PatientResponse]:
-        """Search patients by decrypted first/last name substring match.
+        """Search patients by Patient ID (patient_uid) substring match only.
+
+        Deliberately does NOT match on name: letting staff type an arbitrary
+        name and see whether that person has a record here is exactly the
+        kind of "does this named individual have a record" privacy leak a
+        Patient-ID-only search is meant to prevent. A receptionist attaching
+        a lab request or specimen to a patient is expected to have that
+        patient's ID on hand (from their registration receipt or portal
+        login), not to browse by name.
 
         Args:
-            q: Case-insensitive substring to match against first or last name.
+            q: Case-insensitive substring to match against patient_uid.
 
         Returns:
-            Matching patients, most-recently-created-first is not guaranteed
-            (same unordered-scan behavior as the prior implementation).
+            Up to `_SEARCH_LIMIT` matching patients, most-recently-created-first
+            is not guaranteed (same unordered-scan behavior as the prior
+            implementation).
         """
-        rows = (await self.db.execute(select(Patient).limit(_SEARCH_LIMIT))).scalars().all()
-        qLower = q.lower()
+        # patient_uid isn't encrypted, so this can filter in SQL directly —
+        # no need to scan-then-decrypt the way name matching used to.
+        stmt = (
+            select(Patient)
+            .where(Patient.patientUid.ilike(f"%{q}%"))
+            .limit(_SEARCH_LIMIT)
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
 
         responses: list[PatientResponse] = []
         for row in rows:
@@ -161,24 +176,23 @@ class PatientService:
                 logger.exception("PII decrypt failed for patient row %s", row.patientId)
                 continue
 
-            if qLower in first.lower() or qLower in last.lower():
-                responses.append(
-                    PatientResponse(
-                        patientId=row.patientId,
-                        patientUid=row.patientUid,
-                        firstName=first,
-                        middleName=decryptPii(row.middleName) if row.middleName else None,
-                        lastName=last,
-                        dateOfBirth=decryptPii(row.dateOfBirth),
-                        sex=row.sex,
-                        contactNo=decryptPii(row.contactNo) if row.contactNo else None,
-                        address=decryptPii(row.address) if row.address else None,
-                        clinicalHistory=row.clinicalHistory,
-                        isWalkin=row.isWalkin,
-                        recordFlag=row.recordFlag,
-                        createdAt=row.createdAt,
-                    )
+            responses.append(
+                PatientResponse(
+                    patientId=row.patientId,
+                    patientUid=row.patientUid,
+                    firstName=first,
+                    middleName=decryptPii(row.middleName) if row.middleName else None,
+                    lastName=last,
+                    dateOfBirth=decryptPii(row.dateOfBirth),
+                    sex=row.sex,
+                    contactNo=decryptPii(row.contactNo) if row.contactNo else None,
+                    address=decryptPii(row.address) if row.address else None,
+                    clinicalHistory=row.clinicalHistory,
+                    isWalkin=row.isWalkin,
+                    recordFlag=row.recordFlag,
+                    createdAt=row.createdAt,
                 )
+            )
         return responses
 
     async def getPatientByUserId(self, userId: str) -> PatientResponse:
@@ -238,7 +252,8 @@ class PatientService:
                     and decryptPii(dobEnc) == str(data.dateOfBirth)
                 ):
                     raise ConflictException(
-                        message="A patient with this name and date of birth already exists."
+                        code="DUPLICATE_PATIENT",
+                        message="A patient with this name and date of birth already exists.",
                     )
             except HTTPException:
                 raise

@@ -49,23 +49,29 @@ def _decryptPatientNameOrRaise(specimen: Specimen) -> str:
 
 
 async def searchReceivedSpecimens(db: AsyncSession, q: str) -> list[ReceivedSpecimenSearchItem]:
-    """Search `RECEIVED`-status specimens by decrypted patient name, patient
-    UID, or sample UID (case-insensitive substring match).
-
-    Fetches up to 200 candidate rows and decrypts/filters in Python, since
-    patient names are encrypted at rest. A row that fails to decrypt is
-    logged and excluded rather than returned with ciphertext.
+    """Search `RECEIVED`-status specimens by Patient ID or Sample ID only —
+    deliberately not by patient name, for the same reason patient search
+    (patient_service.searchPatients) doesn't match on name: it would let
+    staff type an arbitrary name to check whether that person has a record
+    here at all, which is a real privacy leak. Both IDs are plain
+    (non-encrypted) columns, so this filters in SQL directly.
 
     Args:
-        q: search text, matched against name/patient UID/sample UID.
+        q: search text, matched against patient_uid or sample_uid.
 
     Returns:
-        Up to `_MAX_SEARCH_RESULTS` matches, in the order scanned.
+        Up to `_MAX_SEARCH_RESULTS` matches.
     """
-    stmt = select(Specimen).where(Specimen.status == "RECEIVED").limit(200)
+    stmt = (
+        select(Specimen)
+        .where(
+            Specimen.status == "RECEIVED",
+            (Specimen.patientUid.ilike(f"%{q}%")) | (Specimen.sampleUid.ilike(f"%{q}%")),
+        )
+        .limit(_MAX_SEARCH_RESULTS)
+    )
     rows = (await db.execute(stmt)).scalars().all()
 
-    qLower = q.strip().lower()
     results: list[ReceivedSpecimenSearchItem] = []
     for spec in rows:
         try:
@@ -78,21 +84,16 @@ async def searchReceivedSpecimens(db: AsyncSession, q: str) -> list[ReceivedSpec
             )
             continue
 
-        uid = spec.patientUid or ""
-        sampleUid = spec.sampleUid or ""
-        if qLower in name.lower() or qLower in uid.lower() or qLower in sampleUid.lower():
-            results.append(
-                ReceivedSpecimenSearchItem(
-                    specimenId=spec.specimenId,
-                    sampleUid=spec.sampleUid,
-                    patientName=name,
-                    patientUid=spec.patientUid,
-                    testType=spec.testType,
-                    status=spec.status,
-                )
+        results.append(
+            ReceivedSpecimenSearchItem(
+                specimenId=spec.specimenId,
+                sampleUid=spec.sampleUid,
+                patientName=name,
+                patientUid=spec.patientUid,
+                testType=spec.testType,
+                status=spec.status,
             )
-        if len(results) == _MAX_SEARCH_RESULTS:
-            break
+        )
     return results
 
 
