@@ -6,25 +6,30 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import getDb
-from ..core.enums import UserRole
 from ..core.exceptions import NotFoundException
-from ..core.rbac import RequireRole, getCurrentUser
+from ..core.rbac import getCurrentUser
 from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.notifications import NotificationOut, PushTokenRequest
 
-_REQUIRE_MEDTECH = RequireRole([UserRole.MEDTECH])
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+# Every route here is scoped to the caller's own user_id in the query itself
+# (never trusted from the request), so any authenticated role can call
+# these — there's nothing MedTech-specific about "list my notifications".
+# Previously hardcoded to MEDTECH only, which meant every other role's
+# notifications (RESULT_READY_FOR_REVIEW to Supervisors, RESULT_RELEASED to
+# Patients/Physicians, LAB_REQUEST_SUBMITTED to Receptionists) were created
+# but unreadable by anyone but a mobile push landing on a registered device.
 
 @router.get("/notifications", response_model=list[NotificationOut])
 async def listNotifications(
-    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    currentUser: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
 ):
-    """List the authenticated MedTech's 50 most recent notifications, newest first."""
+    """List the authenticated user's 50 most recent notifications, newest first."""
     userId = uuid.UUID(currentUser["user_id"])
     stmt = (
         select(Notification)
@@ -39,10 +44,10 @@ async def listNotifications(
 @router.patch("/notifications/{notification_id}/read", status_code=204)
 async def markNotificationRead(
     notification_id: uuid.UUID,
-    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    currentUser: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
 ):
-    """Mark one of the authenticated MedTech's own notifications read.
+    """Mark one of the authenticated user's own notifications read.
 
     Raises:
         HTTPException: 404, if `notification_id` doesn't exist or doesn't
@@ -60,6 +65,22 @@ async def markNotificationRead(
     result = await db.execute(stmt)
     if result.rowcount == 0:
         raise NotFoundException(message="Notification not found.")
+    await db.commit()
+
+
+@router.patch("/notifications/read-all", status_code=204)
+async def markAllNotificationsRead(
+    currentUser: dict = Depends(getCurrentUser),
+    db: AsyncSession = Depends(getDb),
+):
+    """Mark all of the authenticated user's unread notifications read."""
+    userId = uuid.UUID(currentUser["user_id"])
+    stmt = (
+        update(Notification)
+        .where(Notification.userId == userId, Notification.isRead.is_(False))
+        .values(is_read=True)
+    )
+    await db.execute(stmt)
     await db.commit()
 
 
