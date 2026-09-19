@@ -85,7 +85,7 @@ class SmartDiagnosisService:
                         "gout_score":   engineOutput.gout.level.value,
                         "gn_score":     engineOutput.glomerulonephritis.level.value,
                         "nephro_score": engineOutput.nephrolithiasis.level.value,
-                        "no_significant_indicators": engineOutput.noSignificantIndicators,
+                        "no_significant_indicators": engineOutput.no_significant_indicators,
                     },
                     db=db,
                     request=None,
@@ -133,9 +133,9 @@ class SmartDiagnosisService:
             goutScore=engineOutput.gout.level.value,
             gnScore=engineOutput.glomerulonephritis.level.value,
             nephroScore=engineOutput.nephrolithiasis.level.value,
-            noSignificantIndicators=engineOutput.noSignificantIndicators,
+            noSignificantIndicators=engineOutput.no_significant_indicators,
             evidenceMap=evidenceMap,
-            engineVersion=engineOutput.engineVersion,
+            engineVersion=engineOutput.engine_version,
             status="ATTACHED",
         )
         db.add(record)
@@ -150,7 +150,7 @@ class SmartDiagnosisService:
                 "gout":               evidenceMap["gout"],
                 "glomerulonephritis": evidenceMap["glomerulonephritis"],
                 "nephrolithiasis":    evidenceMap["nephrolithiasis"],
-                "no_significant_indicators": engineOutput.noSignificantIndicators,
+                "no_significant_indicators": engineOutput.no_significant_indicators,
             }
 
         return record

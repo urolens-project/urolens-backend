@@ -321,7 +321,7 @@ class AIIntegrationService:
             evidenceMap = _buildEvidenceMap(engineOutput)
             smartDiagnosis = {
                 **evidenceMap,
-                "no_significant_indicators": engineOutput.noSignificantIndicators,
+                "no_significant_indicators": engineOutput.no_significant_indicators,
             }
             result.smartDiagnosis = smartDiagnosis
             await self.db.flush([result])

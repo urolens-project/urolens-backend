@@ -48,7 +48,7 @@ async def getImageRetakeService(
 )
 async def uploadImage(
     request: Request,
-    specimenId: uuid.UUID = Form(...),
+    specimen_id: uuid.UUID = Form(...),
     file: UploadFile = File(..., description="JPEG or PNG, minimum 640×480"),
     claims: dict = Depends(_medtech),
     _service: AIIntegrationService = Depends(getAiIntegrationService),
@@ -57,7 +57,7 @@ async def uploadImage(
     `AIIntegrationService.handle_upload`.
     """
     uploaderId = uuid.UUID(claims["user_id"])
-    result = await _service.handleUpload(specimenId, uploaderId, file, request)
+    result = await _service.handleUpload(specimen_id, uploaderId, file, request)
     return AnalysisResultResponse(
         id=result.resultId,
         resultId=result.resultId,

@@ -29,6 +29,7 @@ class Patient(Base):
     """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
     lastName = Column("last_name", Text, nullable=False)
     dateOfBirth = Column("date_of_birth", Text, nullable=False)
+    sex = Column(VARCHAR(10), nullable=False)
     contactNo = Column("contact_no", Text)
     address = Column(Text)
     clinicalHistory = Column("clinical_history", Text, nullable=True)
@@ -38,7 +39,7 @@ class Patient(Base):
     out-of-band-schema pattern found and documented in migration 0032)."""
     isWalkin = Column("is_walkin", Boolean, nullable=False, server_default="false")
     recordFlag = Column("record_flag", VARCHAR(50))
-    createdBy = Column("created_by", UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    createdBy = Column("registered_by", UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     userId = Column("user_id", UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, unique=True)
     createdAt = Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updatedAt = Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now())

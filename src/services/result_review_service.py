@@ -247,6 +247,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -315,6 +316,7 @@ class ResultReviewService:
                 {
                     "resultId": resultId,
                     "specimenId": ar.specimenId if ar else None,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -379,6 +381,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
@@ -485,6 +488,7 @@ class ResultReviewService:
         return {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),
             "patientSex": sex,
@@ -497,6 +501,7 @@ class ResultReviewService:
             "modelVersion": ar.modelVersion,
             "manualOverrides": overrides,
             "imageUrl": imageUrl,
+            "smartDiagnosis": smartDiagnosis,
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,
             "annotationNotes": latestAnnotation,
@@ -576,7 +581,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes))
+        self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
         ar.status = ResultStatus.APPROVED
 
         specimen = await self.db.get(Specimen, ar.specimenId)
@@ -609,7 +614,7 @@ class ResultReviewService:
         ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
-        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason))
+        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
         ar.status = ResultStatus.RETURNED_FOR_CORRECTION
 
         await self.db.commit()
@@ -661,6 +666,7 @@ class ResultReviewService:
                 escalatedBy=userId,
                 escalationPath=escalationPath,
                 escalationNote=escalationNote,
+                escalatedAt=now,
             )
         )
         ar.status = ResultStatus.CRITICAL_ESCALATED
@@ -690,7 +696,7 @@ async def getSmartDiagnosis(resultId: str) -> dict:
 
     Returns:
         A dict with `status` `"ATTACHED"` (with scores/evidence) if found via
-        either source, or `{"result_id": ..., "status": "FLAGGED_UNAVAILABLE"}`
+        either source, or `{"resultId": ..., "status": "FLAGGED_UNAVAILABLE"}`
         if neither has usable data.
 
     Raises:
@@ -722,36 +728,36 @@ async def getSmartDiagnosis(resultId: str) -> dict:
         row = outputRows[0]
         evidenceRaw = row.get("evidence_map") or {}
         return {
-            "output_id": str(row["output_id"]),
-            "result_id": resultId,
+            "outputId": str(row["output_id"]),
+            "resultId": resultId,
             "status": "ATTACHED",
-            "gout_score":   row["gout_score"],
-            "gn_score":     row["gn_score"],
-            "nephro_score": row["nephro_score"],
-            "evidence_map": evidenceRaw,
-            "no_significant_indicators": row.get("no_significant_indicators", False),
-            "engine_version": row.get("engine_version", ""),
-            "generated_at": str(row.get("generated_at", "")),
+            "goutScore":   row["gout_score"],
+            "gnScore":     row["gn_score"],
+            "nephroScore": row["nephro_score"],
+            "evidenceMap": evidenceRaw,
+            "noSignificantIndicators": row.get("no_significant_indicators", False),
+            "engineVersion": row.get("engine_version", ""),
+            "generatedAt": str(row.get("generated_at", "")),
         }
 
     # Fall back to the denormalized JSONB on analysis_results
     smartDiag = ar.get("smart_diagnosis")
     if smartDiag:
         return {
-            "output_id": resultId,
-            "result_id": resultId,
+            "outputId": resultId,
+            "resultId": resultId,
             "status": "ATTACHED",
-            "gout_score":   smartDiag.get("gout", {}).get("level", "LOW"),
-            "gn_score":     smartDiag.get("glomerulonephritis", {}).get("level", "LOW"),
-            "nephro_score": smartDiag.get("nephrolithiasis", {}).get("level", "LOW"),
-            "evidence_map": {
+            "goutScore":   smartDiag.get("gout", {}).get("level", "LOW"),
+            "gnScore":     smartDiag.get("glomerulonephritis", {}).get("level", "LOW"),
+            "nephroScore": smartDiag.get("nephrolithiasis", {}).get("level", "LOW"),
+            "evidenceMap": {
                 "gout":               smartDiag.get("gout", {}),
                 "glomerulonephritis": smartDiag.get("glomerulonephritis", {}),
                 "nephrolithiasis":    smartDiag.get("nephrolithiasis", {}),
             },
-            "no_significant_indicators": smartDiag.get("no_significant_indicators", False),
-            "engine_version": smartDiag.get("engine_version", ""),
-            "generated_at": "",
+            "noSignificantIndicators": smartDiag.get("no_significant_indicators", False),
+            "engineVersion": smartDiag.get("engine_version", ""),
+            "generatedAt": "",
         }
 
-    return {"result_id": resultId, "status": "FLAGGED_UNAVAILABLE"}
+    return {"resultId": resultId, "status": "FLAGGED_UNAVAILABLE"}

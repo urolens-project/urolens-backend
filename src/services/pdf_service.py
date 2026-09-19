@@ -14,14 +14,17 @@ def _safeVal(value: int | None, fallback: int = 0) -> int:
     return value if value is not None else fallback
 
 
-def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
+def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -> bytes:
     """Render a one-page A4 PDF lab report for a patient result.
 
     Args:
-        result: the result detail to render (cell counts, interpretation,
+        result: the result detail to render (particle counts, notes,
             signatures, etc.).
         patient_name: decrypted patient name to display; passed separately
             since `result` doesn't carry PII.
+        result_id: the result's UUID; passed separately since
+            `PatientResultDetail` doesn't carry it either (it's a response
+            body keyed by the URL's :result_id, not a field of its own).
 
     Returns:
         The generated PDF as raw bytes.
@@ -99,10 +102,10 @@ def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
 
     # ── Patient Information ──────────────────────────────────────────────────
     elements.append(Paragraph("Patient Information", headingStyle))
-    testDate = result.confirmedAt or result.createdAt
+    testDate = result.confirmedAt or result.releasedAt
     infoData = [
         ["Patient Name:", patientName],
-        ["Result ID:", str(result.resultId)],
+        ["Result ID:", str(resultId)],
         ["Date of Test:", testDate.strftime("%B %d, %Y") if testDate else "N/A"],
         ["Status:", result.status],
     ]
@@ -123,15 +126,19 @@ def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
 
     # ── Cell Count Results ───────────────────────────────────────────────────
     elements.append(Paragraph("Cell Count Results", headingStyle))
-    cc = result.cellCounts
+    # result.particleCounts is a list[ParticleCount] (label/count pairs, per
+    # PARTICLE_LABELS) — not the "cellCounts" object with named fields
+    # (.rbc/.wbc/etc.) this function used to assume; that shape doesn't exist
+    # on PatientResultDetail and made every PDF download 500.
+    counts = {pc.label: pc.count for pc in result.particleCounts}
     params = [
-        ("Red Blood Cells (RBC)", _safeVal(cc.rbc if cc else None)),
-        ("White Blood Cells (WBC)", _safeVal(cc.wbc if cc else None)),
-        ("Epithelial Cells", _safeVal(cc.epithelial_cells if cc else None)),
-        ("Casts", _safeVal(cc.casts if cc else None)),
-        ("Bacteria", _safeVal(cc.bacteria if cc else None)),
-        ("Crystals", _safeVal(cc.crystals if cc else None)),
-        ("Mucus Threads", _safeVal(cc.mucus_threads if cc else None)),
+        ("Red Blood Cells (RBC)", _safeVal(counts.get("erythrocytes"))),
+        ("White Blood Cells (WBC)", _safeVal(counts.get("leukocytes"))),
+        ("Epithelial Cells", _safeVal(counts.get("epithelial_cells"))),
+        ("Casts", _safeVal(counts.get("urinary_casts"))),
+        ("Bacteria", _safeVal(counts.get("bacteria"))),
+        ("Crystals", _safeVal(counts.get("crystals"))),
+        ("Mucus Threads", _safeVal(counts.get("mucus_threads"))),
     ]
     cellData = [["Parameter", "Count"]]
     for param, count in params:
@@ -158,7 +165,7 @@ def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
 
     # ── Interpretation ───────────────────────────────────────────────────────
     elements.append(Paragraph("Interpretation", headingStyle))
-    interpretationText = result.interpretation or "Pending review"
+    interpretationText = result.confirmationNotes or "Pending review"
     elements.append(Paragraph(interpretationText, bodyStyle))
     elements.append(Spacer(1, 10 * mm))
 
@@ -174,8 +181,11 @@ def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
                 Paragraph("______________________", sigLabelStyle),
             ],
             [
-                Paragraph(_safeStr(result.medtechName), sigLabelStyle),
-                Paragraph(_safeStr(result.pathologistName), sigLabelStyle),
+                Paragraph(_safeStr(result.analyzedBy), sigLabelStyle),
+                # No pathologist-review concept exists in the data model yet —
+                # always blank rather than referencing fields that were never
+                # real (result.pathologistName/pathologistLicense).
+                Paragraph(_safeStr(None), sigLabelStyle),
             ],
             [
                 Paragraph("Medical Technologist", sigLabelStyle),
@@ -183,10 +193,7 @@ def generateResultPdf(result: PatientResultDetail, patientName: str) -> bytes:
             ],
             [
                 Paragraph("", sigLabelStyle),
-                Paragraph(
-                    f"License No: {_safeStr(result.pathologistLicense)}",
-                    sigLabelStyle,
-                ),
+                Paragraph(f"License No: {_safeStr(None)}", sigLabelStyle),
             ],
         ],
         colWidths=[75 * mm, 75 * mm],

@@ -38,6 +38,7 @@ from ..schemas.result_review import (
     EscalateRequest,
     EscalateResponse,
     FullResultDetail,
+    MedtechPendingListResponse,
     OverrideRequest,
     OverrideResponse,
     PendingResultListResponse,
@@ -147,6 +148,24 @@ async def overrideParameter(
     return OverrideResponse.model_validate(override)
 
 
+@router.get("/medtech/pending", response_model=MedtechPendingListResponse)
+async def listMedtechPending(
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    _service: ResultConfirmationService = Depends(getConfirmationService),
+) -> MedtechPendingListResponse:
+    """List results awaiting this MedTech's confirmation (or re-confirmation,
+    for ones a supervisor returned); see
+    `ResultConfirmationService.list_pending_for_medtech`.
+    """
+    return MedtechPendingListResponse(
+        **await _service.listPendingForMedtech(
+            medtechId=uuid.UUID(currentUser["user_id"]), page=page, pageSize=pageSize
+        )
+    )
+
+
 # ── Supervisor review/approval routes (plan row 7) ─────────────────────────────
 # Literal paths first — see module docstring on why order matters here.
 
@@ -198,10 +217,14 @@ async def listPendingResults(
 async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
-    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
-    """Save a supervisor's annotation on a result; see
+    """Save an annotation (notes + drawn regions) on a result. Open to
+    MEDTECH too — marking up the image while reviewing/correcting it is
+    just as much their job as the Supervisor's; each user's annotation is
+    stored under their own `reviewed_by`, and `get_full_result` surfaces
+    whichever is most recently updated. See
     `ResultReviewService.save_annotation`.
     """
     result = await _service.saveAnnotation(
@@ -269,10 +292,11 @@ async def escalateResult(
 )
 async def getSmartDiagnosisRoute(
     result_id: str,
-    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    currentUser: dict = Depends(_REQUIRE_BOTH),
 ) -> dict:
-    """Fetch a result's Smart Diagnosis output; see
-    `result_review_service.get_smart_diagnosis`.
+    """Fetch a result's Smart Diagnosis output. Open to MEDTECH too — they
+    need this while reviewing a result they're about to confirm, not just
+    the supervisor. See `result_review_service.get_smart_diagnosis`.
     """
     return await getSmartDiagnosis(resultId=result_id)
 
@@ -280,10 +304,12 @@ async def getSmartDiagnosisRoute(
 @router.get("/{result_id}", response_model=FullResultDetail)
 async def getFullResult(
     result_id: uuid.UUID,
-    currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
+    currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> FullResultDetail:
-    """Fetch a result's full supervisor-review detail; see
-    `ResultReviewService.get_full_result`.
+    """Fetch a result's full detail (patient info, AI findings, overrides,
+    image, Smart Diagnosis). Open to MEDTECH too — the same detail view
+    backs both the MedTech's pre-confirmation review and the Supervisor's
+    review/approval workspace. See `ResultReviewService.get_full_result`.
     """
     return FullResultDetail(**await _service.getFullResult(result_id))
