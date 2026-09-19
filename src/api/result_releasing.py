@@ -18,7 +18,7 @@ from src.schemas.result_releasing import (
 from src.services.notification_service import NotificationService
 from src.services.result_releasing_service import ResultReleasingService
 
-router = APIRouter()
+router = APIRouter(tags=["Result Releasing"])
 
 
 async def getResultReleasingService(
