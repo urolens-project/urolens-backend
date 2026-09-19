@@ -29,6 +29,7 @@ from ..schemas.specimen import (
     SpecimenReceiveRequest,
     SpecimenReceiveResponse,
     SpecimenRejectResponse,
+    SpecimenStartAnalysisResponse,
 )
 
 log = logging.getLogger(__name__)
@@ -259,3 +260,54 @@ async def rejectSpecimen(
     return SpecimenRejectResponse(
         specimenId=specimenId, status="REJECTED", rejectedAt=rejectedAt.isoformat()
     )
+
+
+_STARTABLE_STATUSES = {"ASSIGNED", "IN_QUEUE"}
+
+
+async def startAnalysis(
+    db: AsyncSession,
+    specimenId: uuid.UUID,
+    userId: uuid.UUID,
+) -> SpecimenStartAnalysisResponse:
+    """Move a MedTech's assigned specimen to `PROCESSING` (mobile "Begin Analysis").
+
+    Idempotent: a specimen already `PROCESSING` is returned as-is, so a
+    replayed offline sync action is harmless.
+
+    Args:
+        user_id: the authenticated MedTech; must match the specimen's
+            `medtech_id` (ownership check) or the call is rejected.
+
+    Raises:
+        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        HTTPException: 403, if the specimen isn't assigned to `user_id`.
+        ConflictException: `SPECIMEN_NOT_STARTABLE`, if the specimen is in
+            a status that can't move to `PROCESSING` (e.g. rejected or
+            completed).
+    """
+    specimen = await db.get(Specimen, specimenId)
+    if specimen is None:
+        raise SpecimenNotFoundError(str(specimenId))
+
+    if specimen.medtechId != userId:
+        exc = HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Specimen is not assigned to you.",
+        )
+        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
+        raise exc
+
+    if specimen.status == "PROCESSING":
+        return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")
+
+    if specimen.status not in _STARTABLE_STATUSES:
+        raise ConflictException(
+            code="SPECIMEN_NOT_STARTABLE",
+            message=f"Specimen in status {specimen.status} cannot be started.",
+        )
+
+    specimen.status = "PROCESSING"
+    await db.commit()
+
+    return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")

@@ -17,6 +17,7 @@ from src.schemas.specimen import (
     SpecimenReceiveResponse,
     SpecimenRejectRequest,
     SpecimenRejectResponse,
+    SpecimenStartAnalysisResponse,
 )
 from src.services import lab_request_service, specimen_service
 
@@ -83,3 +84,16 @@ async def rejectSpecimenEndpoint(
     return await specimen_service.rejectSpecimen(
         db, specimen_id, userId, body.reasonCode, body.freeTextNote
     )
+
+
+@router.post("/{specimen_id}/start-analysis", response_model=SpecimenStartAnalysisResponse)
+async def startAnalysisEndpoint(
+    specimen_id: UUID,
+    currentUser: dict = Depends(_medtech),
+    db: AsyncSession = Depends(getDb),
+):
+    """Mark an assigned specimen as being analyzed; see
+    `specimen_service.startAnalysis`.
+    """
+    userId = uuid.UUID(currentUser["user_id"])
+    return await specimen_service.startAnalysis(db, specimen_id, userId)
