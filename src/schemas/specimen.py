@@ -63,3 +63,10 @@ class SpecimenRejectResponse(BaseModel):
     specimenId: UUID
     status: str
     rejectedAt: str
+
+
+class SpecimenStartAnalysisResponse(BaseModel):
+    """Response body confirming a specimen is now being analyzed."""
+
+    specimenId: UUID
+    status: str
