@@ -500,7 +500,7 @@ async def test_getSmartDiagnosisPrefersAuthoritativeOutputsTable():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result["status"] == "ATTACHED"
-    assert result["gout_score"] == "HIGH"  # from the authoritative table, not the JSONB fallback
+    assert result["goutScore"] == "HIGH"  # from the authoritative table, not the JSONB fallback
 
 
 @pytest.mark.asyncio
@@ -522,9 +522,9 @@ async def test_getSmartDiagnosisFallsBackToDenormalizedJsonb():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result["status"] == "ATTACHED"
-    assert result["gout_score"] == "HIGH"
-    assert result["gn_score"] == "LOW"
-    assert result["nephro_score"] == "MODERATE"
+    assert result["goutScore"] == "HIGH"
+    assert result["gnScore"] == "LOW"
+    assert result["nephroScore"] == "MODERATE"
 
 
 @pytest.mark.asyncio
@@ -539,4 +539,4 @@ async def test_getSmartDiagnosisNoDataReturnsFlaggedUnavailable():
     with patch("src.services.result_review_service.supabase", fakeSb):
         result = await getSmartDiagnosis(str(RESULT_ID))
 
-    assert result == {"result_id": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
+    assert result == {"resultId": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
