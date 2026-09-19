@@ -78,7 +78,7 @@ async def downloadResultPdf(
     )
     patient = await _patientService.getPatientByUserId(currentUser["user_id"])
     patientName = f"{patient.firstName} {patient.lastName}"
-    pdfBytes = generateResultPdf(result, patientName)
+    pdfBytes = generateResultPdf(result, patientName, result_id)
     return Response(
         content=pdfBytes,
         media_type="application/pdf",
