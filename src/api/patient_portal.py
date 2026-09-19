@@ -17,7 +17,7 @@ from src.services.patient_result_service import PatientResultService
 from src.services.patient_service import PatientService
 from src.services.pdf_service import generateResultPdf
 
-router = APIRouter()
+router = APIRouter(tags=["Patient Portal"])
 
 
 async def getPatientResultService(
@@ -60,7 +60,11 @@ async def getResultDetail(
     return await _service.getResultDetail(result_id, currentUser["user_id"], request)
 
 
-@router.get("/api/v1/patient/results/{result_id}/pdf")
+@router.get(
+    "/api/v1/patient/results/{result_id}/pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}}},
+)
 async def downloadResultPdf(
     result_id: UUID,
     request: Request,

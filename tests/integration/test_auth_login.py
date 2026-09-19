@@ -17,6 +17,7 @@ run for real.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,10 +25,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from src.core.auth_service import decodeJwt, hashPassword
-
 from main import app
-
+from src.core.auth_service import decodeJwt, hashPassword
 
 # ── Fake Supabase (in-memory, stateful) ──────────────────────────────────────
 
@@ -284,13 +283,15 @@ async def test_login08_logoutClosesSessionAndIsAudited(client):
 
 @pytest.mark.asyncio
 async def test_login09_expiredJwtRejectedOnSubsequentRequest(client):
+    from datetime import datetime, timedelta
+
     import jwt as pyjwt
-    from datetime import datetime, timedelta, timezone
+
     from src.core.config import settings
 
     c, fakeSb = client
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expiredPayload = {
         "user_id": str(uuid.uuid4()),
         "username": "medtech1",

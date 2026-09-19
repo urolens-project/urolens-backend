@@ -17,7 +17,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from src.core.exceptions import ConflictException, NotFoundException, UnprocessableException
+from src.core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService

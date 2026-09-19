@@ -30,7 +30,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import ConflictException, NotFoundException, UnprocessableException
+from src.core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.escalation import Escalation
 from src.models.manual_override import ManualOverride
@@ -39,7 +43,6 @@ from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
 from src.models.specimen import Specimen
-from src.models.user import User
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
@@ -497,7 +500,7 @@ async def test_getSmartDiagnosisPrefersAuthoritativeOutputsTable():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result["status"] == "ATTACHED"
-    assert result["gout_score"] == "HIGH"  # from the authoritative table, not the JSONB fallback
+    assert result["goutScore"] == "HIGH"  # from the authoritative table, not the JSONB fallback
 
 
 @pytest.mark.asyncio
@@ -519,9 +522,9 @@ async def test_getSmartDiagnosisFallsBackToDenormalizedJsonb():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result["status"] == "ATTACHED"
-    assert result["gout_score"] == "HIGH"
-    assert result["gn_score"] == "LOW"
-    assert result["nephro_score"] == "MODERATE"
+    assert result["goutScore"] == "HIGH"
+    assert result["gnScore"] == "LOW"
+    assert result["nephroScore"] == "MODERATE"
 
 
 @pytest.mark.asyncio
@@ -536,4 +539,4 @@ async def test_getSmartDiagnosisNoDataReturnsFlaggedUnavailable():
     with patch("src.services.result_review_service.supabase", fakeSb):
         result = await getSmartDiagnosis(str(RESULT_ID))
 
-    assert result == {"result_id": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
+    assert result == {"resultId": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
