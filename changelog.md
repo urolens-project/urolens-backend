@@ -3,6 +3,23 @@
 ## Unreleased
 
 ### Fixed
+- **A rejected specimen could still reach the supervisor for approval.** Nothing
+  connected specimen rejection to the result workflow, so a MedTech could reject a
+  specimen after confirming its result (or confirm a result after rejecting the
+  specimen) and leave a result awaiting supervisor approval on a `REJECTED`
+  specimen. Now:
+  - `POST /specimens/{id}/reject` returns `409 RESULT_ALREADY_SUBMITTED` once the
+    specimen's result is `PENDING_SUPERVISOR_APPROVAL`, `RETURNED_FOR_CORRECTION`,
+    `CRITICAL_ESCALATED`, `APPROVED` or `RELEASED`.
+  - `POST /results/{id}/confirm` returns `409 SPECIMEN_REJECTED` for a rejected
+    specimen (this also stops a queued offline confirm from being replayed after
+    a rejection).
+  - Supervisor approval (`approveResult`) returns `409 SPECIMEN_REJECTED`, and the
+    pending-approval list, its total and the dashboard `pendingCount` exclude
+    results of rejected specimens, so rows created before this fix don't sit in
+    the queue unapprovable.
+  Not changed: re-uploading an image (`ai_integration_service._getOrCreateResult`)
+  still resets any existing result to `PENDING_CONFIRM` regardless of its status.
 - **CORS misconfiguration**: `main.py` combined `allow_origins=["*"]` with
   `allow_credentials=True`, which lets any origin read authenticated responses made
   with the browser's ambient credentials. The API only authenticates via a Bearer

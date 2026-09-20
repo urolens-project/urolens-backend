@@ -172,7 +172,11 @@ class ResultReviewService:
             await self.db.execute(
                 select(func.count())
                 .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+                .where(
+                    AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+                    Specimen.status != "REJECTED",
+                )
             )
         ).scalar_one()
 
@@ -216,17 +220,26 @@ class ResultReviewService:
         """
         offset = (page - 1) * pageSize
 
+        # Results of rejected specimens never show up for approval (approveResult
+        # would refuse them anyway) — same filter as getSupervisorStats.
+        awaitingApproval = (
+            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            Specimen.status != "REJECTED",
+        )
+
         total = (
             await self.db.execute(
                 select(func.count())
                 .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+                .where(*awaitingApproval)
             )
         ).scalar_one()
 
         stmt = (
             select(AnalysisResult)
-            .where(AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .where(*awaitingApproval)
             .order_by(AnalysisResult.confirmedAt.asc())
             .offset(offset)
             .limit(pageSize)
@@ -576,15 +589,24 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`,
+                or its specimen has been rejected (`SPECIMEN_REJECTED`).
         """
         ar = await self._requirePending(resultId)
+
+        # A rejected specimen's result must never be approved, even if a row
+        # slipped into the queue before rejection was blocked after confirmation.
+        specimen = await self.db.get(Specimen, ar.specimenId)
+        if specimen is not None and specimen.status == "REJECTED":
+            raise ConflictException(
+                code="SPECIMEN_REJECTED",
+                message="This specimen was rejected, so its result can't be approved.",
+            )
 
         now = datetime.now(_PHT)
         self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
         ar.status = ResultStatus.APPROVED
 
-        specimen = await self.db.get(Specimen, ar.specimenId)
         if specimen is not None:
             specimen.status = "COMPLETED"
             specimen.completedAt = now
