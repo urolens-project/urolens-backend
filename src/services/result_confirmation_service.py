@@ -99,6 +99,8 @@ class ResultConfirmationService:
                 because it already passed confirmation, or because a
                 concurrent double-submit hit the DB's unique constraint
                 first.
+            ConflictException: (`SPECIMEN_REJECTED`) the result's specimen has
+                been rejected.
             UnprocessableException: a pending image retake blocks confirmation.
         """
         result = await self._getResult(resultId)
@@ -115,6 +117,20 @@ class ResultConfirmationService:
             raise ConflictException(
                 code="RESULT_ALREADY_CONFIRMED",
                 message="This result has already been confirmed.",
+            )
+
+        # Guard: a rejected specimen must never reach the supervisor. Without
+        # this, a MedTech who rejects the specimen after the AI ran could still
+        # confirm (or replay a queued offline confirm of) its result, putting it
+        # in the approval queue for a specimen the lab has thrown out.
+        specimen = await self.db.get(Specimen, result.specimenId)
+        if specimen is not None and specimen.status == "REJECTED":
+            raise ConflictException(
+                code="SPECIMEN_REJECTED",
+                message=(
+                    "This specimen was rejected, so its result can't be confirmed "
+                    "or sent for supervisor approval."
+                ),
             )
 
         wasReturned = result.status == ResultStatus.RETURNED_FOR_CORRECTION

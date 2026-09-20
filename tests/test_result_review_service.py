@@ -188,6 +188,54 @@ async def test_approveResultRejectsResultNotPending():
     db.commit.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_approveResultRefusesResultOfRejectedSpecimen():
+    """A rejected specimen's result must never be approved, even if a row
+    reached the queue before rejection was blocked after confirmation.
+    """
+    result = _makeResult()
+    specimen = _makeSpecimen()
+    specimen.status = "REJECTED"
+    db = _makeDbMock(getSideEffect=[result, specimen])
+
+    _service = ResultReviewService(db=db)
+    with pytest.raises(ConflictException) as excInfo:
+        await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes=None)
+
+    assert excInfo.value.errorCode == "SPECIMEN_REJECTED"
+    assert result.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL
+    assert specimen.status == "REJECTED"
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pendingQueueAndStatsExcludeRejectedSpecimens():
+    """The supervisor's pending list, its total and the dashboard badge must
+    all leave out results whose specimen was rejected.
+    """
+    executed: list[str] = []
+
+    async def _execute(stmt):
+        executed.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
+        emptyResult = MagicMock()
+        emptyResult.scalar_one.return_value = 0
+        emptyResult.scalars.return_value.all.return_value = []
+        return emptyResult
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    _service = ResultReviewService(db=db)
+
+    await _service.getPending(page=1, pageSize=10)
+    await _service.getSupervisorStats()
+
+    pendingStatements = [s for s in executed if "PENDING_SUPERVISOR_APPROVAL" in s]
+    assert pendingStatements, "expected pending-approval queries to have run"
+    for sql in pendingStatements:
+        assert "specimens.status != 'REJECTED'" in sql
+
+
 # ── Regression test: spatial_annotations write-then-drop bug ──────────────
 
 
