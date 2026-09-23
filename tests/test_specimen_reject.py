@@ -12,7 +12,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from src.core.exceptions import ConflictException, SpecimenNotFoundError, UnprocessableException
+from src.core.exceptions import (
+    ConflictException,
+    SpecimenNotFoundError,
+    UnprocessableException,
+)
 from src.models.analysis_result import ResultStatus
 from src.models.specimen import Specimen
 from src.services import specimen_service
