@@ -32,7 +32,6 @@ from httpx import ASGITransport, AsyncClient
 from main import app
 from src.core.config import settings
 from src.core.database import getDb
-from src.core.encryption import encryptPii
 from src.models.patient import Patient
 
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
