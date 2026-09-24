@@ -21,6 +21,10 @@ jobs:
       JWT_SIGNING_KEY: ci-only-signing-key-not-used-in-production-1234567890
       SUPABASE_URL: https://ci-placeholder.supabase.co
       SUPABASE_SERVICE_KEY: ci-placeholder-service-key
+      # Unlike ENCRYPTION_KEY, this only needs to be non-empty (config.py does
+      # no format validation on it), so it's a static placeholder like
+      # JWT_SIGNING_KEY rather than a generated step.
+      DEDUP_HASH_KEY: ci-only-dedup-hash-key-not-used-in-production-1234567890
     steps:
       - uses: actions/checkout@v4
 
