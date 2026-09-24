@@ -6,21 +6,50 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Matches the widened lab_requests.test_type / specimens.test_type column
+# width (migration 0037) — testType is now stored verbatim (see
+# lab_request_service.create_lab_request), so this caps free-typed "Other"
+# text with a clean 422 instead of a DB-level DataError on insert.
+_TEST_TYPE_MAX_LENGTH = 255
 
 
 class LabRequestCreateRequest(BaseModel):
     """Request body for creating a lab request.
 
-    `physician_id`/`physician_name` are both optional; if `physician_id` is
-    given without a name, the name is looked up server-side.
+    At least one of `physician_id`/`physician_name` is required — every lab
+    request must have a requesting physician. If `physician_id` is given
+    without a name, the name is looked up server-side.
     """
 
     patientId: UUID
     physicianId: UUID | None = None
     physicianName: str | None = None
-    testType: str
+    testType: str = Field(max_length=_TEST_TYPE_MAX_LENGTH)
     clinicalNotes: str | None = None
+    specialInstructions: str | None = None
+
+    @field_validator("testType")
+    @classmethod
+    def testTypeNotBlank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("physicianName")
+    @classmethod
+    def physicianNameTrimmed(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return v.strip() or None
+
+    @model_validator(mode="after")
+    def requirePhysicianIdentifier(self) -> LabRequestCreateRequest:
+        if self.physicianId is None and not self.physicianName:
+            raise ValueError("physicianId or physicianName is required")
+        return self
 
 
 class LabRequestCreateResponse(BaseModel):
@@ -37,6 +66,7 @@ class LabRequestCreateResponse(BaseModel):
     physicianName: str | None = None
     testType: str
     clinicalNotes: str | None = None
+    specialInstructions: str | None = None
     status: str
     createdAt: datetime
 

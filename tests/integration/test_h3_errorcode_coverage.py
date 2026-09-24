@@ -143,7 +143,11 @@ async def test_createLabRequestUidExhaustionReturnsFlatEnvelope(asyncClient):
             response = await asyncClient.post(
                 "/api/v1/lab-requests",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"patientId": str(TEST_PATIENT_ID), "testType": "Urinalysis"},
+                json={
+                    "patientId": str(TEST_PATIENT_ID),
+                    "testType": "Urinalysis",
+                    "physicianName": "Dr. Santos",
+                },
             )
     finally:
         _clearDbOverride()

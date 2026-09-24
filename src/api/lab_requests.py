@@ -49,6 +49,7 @@ async def createLabRequestEndpoint(
         clinicalNotes=payload.clinicalNotes,
         physicianId=payload.physicianId,
         physicianName=payload.physicianName,
+        specialInstructions=payload.specialInstructions,
         notifyReceptionists=False,
         ipAddress=ipAddress,
     )

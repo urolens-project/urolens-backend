@@ -80,7 +80,9 @@ class Specimen(Base):
     patientName: Mapped[str | None] = mapped_column("patient_name", Text, nullable=True)
     """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
     patientUid: Mapped[str | None] = mapped_column("patient_uid", String(30), nullable=True)
-    testType: Mapped[str | None] = mapped_column("test_type", String(50), nullable=True)
+    testType: Mapped[str | None] = mapped_column("test_type", String(255), nullable=True)
+    """Copied verbatim from the originating LabRequest.testType (see
+    specimen_service.py) — widened alongside it by migration 0037."""
     priorityLevel: Mapped[str] = mapped_column("priority_level", 
         String(20), nullable=False, default="ROUTINE"
     )

@@ -37,6 +37,18 @@ class PatientCreateRequest(BaseModel):
     consent: ConsentData
 
 
+class PatientSearchItem(BaseModel):
+    """One patient search result for `GET /api/v1/patients?q=` — deliberately
+    minimal (RA 10173 data minimization): no name, DOB, or contact info. The
+    caller already has `q` (what they typed) and only needs an identifier to
+    select a patient and act on it (e.g. as `patientId` on a lab request);
+    see `PatientService.search_patients`.
+    """
+
+    patientId: UUID
+    patientUid: str
+
+
 class PatientResponse(BaseModel):
     """Response body for a patient record. `portal_username`/`portal_password`
     are populated only on creation (the one-time plaintext password isn't

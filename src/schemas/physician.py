@@ -5,7 +5,11 @@ listing/detail shapes; see `services/physician_service.py` and
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+# Kept identical to schemas.lab_request's constant — both feed the same
+# lab_requests.test_type column (migration 0037).
+_TEST_TYPE_MAX_LENGTH = 255
 
 
 class PhysicianPatientItem(BaseModel):
@@ -23,12 +27,23 @@ class PhysicianPatientItem(BaseModel):
 class LabRequestCreateRequest(BaseModel):
     """Request body for a physician creating a lab request. Unlike
     `schemas.lab_request.LabRequestCreateRequest`, the physician is implicit
-    (from the authenticated caller), so there's no `physician_id` field.
+    (from the authenticated caller), so there's no `physician_id` field —
+    and no physician-identifier validator either, since one is always
+    present.
     """
 
     patientId: UUID
-    testType: str
+    testType: str = Field(max_length=_TEST_TYPE_MAX_LENGTH)
     clinicalNotes: str | None = None
+    specialInstructions: str | None = None
+
+    @field_validator("testType")
+    @classmethod
+    def testTypeNotBlank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 # The response schema for lab-request creation lives in schemas/lab_request.py
