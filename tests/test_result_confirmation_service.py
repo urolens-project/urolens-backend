@@ -23,6 +23,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import SmartDiagnosisService
@@ -139,6 +140,33 @@ async def test_confirmReturnedForCorrectionResubmitsSuccessfully():
     assert result.confirmedBy == MEDTECH_ID
     assert result.confirmedAt is not None
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "resultStatus",
+    [ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION],
+)
+@pytest.mark.asyncio
+async def test_confirmIsBlockedWhenSpecimenWasRejected(resultStatus):
+    """A rejected specimen's result must never reach the supervisor's queue —
+    even from a confirmable status (e.g. a queued offline confirm replayed
+    after the MedTech rejected the specimen).
+    """
+    result = _makeResult(status=resultStatus)
+    db = _makeDbMock(getResultReturn=result)
+    rejectedSpecimen = MagicMock(spec=Specimen)
+    rejectedSpecimen.status = "REJECTED"
+    db.get = AsyncMock(return_value=rejectedSpecimen)
+    service = _makeService(db)
+
+    with pytest.raises(ConflictException) as excInfo:
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert excInfo.value.errorCode == "SPECIMEN_REJECTED"
+    assert result.status == resultStatus
+    assert result.confirmedBy is None
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

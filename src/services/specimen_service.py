@@ -20,6 +20,7 @@ from ..core.exceptions import (
     SpecimenNotFoundError,
     UnprocessableException,
 )
+from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.lab_request import LabRequest
 from ..models.patient import Patient
 from ..models.specimen import Specimen
@@ -37,6 +38,18 @@ log = logging.getLogger(__name__)
 _PHT = timezone(timedelta(hours=8))
 _VALID_REJECTION_REASONS = {"INSUFFICIENT_VOLUME", "WRONG_CONTAINER", "UNLABELED", "OTHER"}
 _UID_GENERATION_ATTEMPTS = 5
+
+# Result statuses that mean the result has left the MedTech's hands: it was
+# confirmed and sent to the supervisor, or the supervisor has already acted on
+# it. Past this point a rejection would strand a result the supervisor is
+# reviewing (or has approved/released) on a REJECTED specimen.
+_SUBMITTED_RESULT_STATUSES = {
+    ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+    ResultStatus.RETURNED_FOR_CORRECTION,
+    ResultStatus.CRITICAL_ESCALATED,
+    ResultStatus.APPROVED,
+    ResultStatus.RELEASED,
+}
 
 
 async def _generateSampleUid(db: AsyncSession) -> str:
@@ -226,7 +239,9 @@ async def rejectSpecimen(
         HTTPException: 422, if `reason_code` isn't a valid reason. 403, if
             the specimen isn't assigned to `user_id`.
         SpecimenNotFoundError: `specimen_id` doesn't exist.
-        ConflictException: the specimen is already rejected.
+        ConflictException: the specimen is already rejected
+            (`SPECIMEN_ALREADY_REJECTED`), or its result has already been
+            confirmed and sent to the supervisor (`RESULT_ALREADY_SUBMITTED`).
     """
     if reasonCode not in _VALID_REJECTION_REASONS:
         raise UnprocessableException(
@@ -247,6 +262,21 @@ async def rejectSpecimen(
     if specimen.status == "REJECTED":
         raise ConflictException(
             code="SPECIMEN_ALREADY_REJECTED", message="Specimen is already rejected."
+        )
+
+    resultStatus = (
+        await db.execute(
+            select(AnalysisResult.status).where(AnalysisResult.specimenId == specimenId)
+        )
+    ).scalar_one_or_none()
+    if resultStatus in _SUBMITTED_RESULT_STATUSES:
+        raise ConflictException(
+            code="RESULT_ALREADY_SUBMITTED",
+            message=(
+                "This specimen's result has already been submitted for supervisor "
+                "review, so the specimen can no longer be rejected. Ask the "
+                "supervisor to return the result if the specimen is unsuitable."
+            ),
         )
 
     rejectedAt = datetime.now(_PHT)
