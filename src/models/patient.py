@@ -29,6 +29,11 @@ class Patient(Base):
     """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
     lastName = Column("last_name", Text, nullable=False)
     dateOfBirth = Column("date_of_birth", Text, nullable=False)
+    dedupHash = Column("dedup_hash", VARCHAR(64), nullable=False, unique=True)
+    """HMAC-SHA256 of normalized first_name|last_name|date_of_birth (see
+    core.encryption / PatientService._computeDedupHash) — a one-way keyed
+    fingerprint for exact-match duplicate lookups, not Fernet ciphertext and
+    not reversible to plaintext."""
     sex = Column(VARCHAR(10), nullable=False)
     contactNo = Column("contact_no", Text)
     address = Column(Text)
