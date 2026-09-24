@@ -1,3 +1,5 @@
+import logging
+
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -30,6 +32,8 @@ from src.api.results import router as results_router
 from src.api.specimens import router as src_specimens_router
 from src.api.sync import router as sync_router
 from src.schemas.system import HealthCheckResponse
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="UroLens LIS Engine")
 
@@ -80,6 +84,19 @@ async def validationExceptionHandler(request: Request, exc: RequestValidationErr
                 "details": errors,
             }
         },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandledExceptionHandler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort handler so an unexpected error (e.g. a DB race not covered
+    by an explicit HTTPException) still returns the standard envelope instead
+    of Starlette's default plain-text 500.
+    """
+    logger.exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred."}},
     )
 
 

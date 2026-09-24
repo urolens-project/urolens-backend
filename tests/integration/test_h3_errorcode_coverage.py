@@ -159,9 +159,8 @@ async def test_createLabRequestUidExhaustionReturnsFlatEnvelope(asyncClient):
 @pytest.mark.asyncio
 async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
     db = AsyncMock()
-    existingRow = (encryptPii("Jane"), encryptPii("Doe"), encryptPii("2000-01-01"))
     duplicateCheck = MagicMock()
-    duplicateCheck.all.return_value = [existingRow]
+    duplicateCheck.scalar_one_or_none.return_value = uuid.uuid4()
     db.execute = AsyncMock(return_value=duplicateCheck)
 
     _overrideDb(db)
@@ -180,7 +179,7 @@ async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
                     "consent": {
                         "consentGiven": True,
                         "consentStorage": True,
-                        "consentResearch": False,
+                        "consentResearch": True,
                     },
                 },
             )
@@ -189,7 +188,7 @@ async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
 
     assert response.status_code == 409
     body = response.json()
-    assert body["error"]["code"] == "CONFLICT"
+    assert body["error"]["code"] == "DUPLICATE_PATIENT"
     assert isinstance(body["error"]["message"], str)
 
 
