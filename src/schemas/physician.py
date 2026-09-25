@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 # Kept identical to schemas.lab_request's constant — both feed the same
-# lab_requests.test_type column (migration 0037).
+# lab_requests.test_type column (migration 0035).
 _TEST_TYPE_MAX_LENGTH = 255
 
 
