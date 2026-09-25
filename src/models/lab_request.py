@@ -40,12 +40,12 @@ class LabRequest(Base):
     testType: Mapped[str] = mapped_column("test_type", String(255), nullable=False)
     """Stored verbatim as entered (no case/space mangling) — see
     services/lab_request_service.py:createLabRequest. Widened from
-    VARCHAR(50) by migration 0037 to fit free-typed "Other" text without a
+    VARCHAR(50) by migration 0035 to fit free-typed "Other" text without a
     DB-level truncation error; Specimen.testType is widened alongside it
     since specimen_service.py copies this value into it verbatim."""
     clinicalNotes: Mapped[str | None] = mapped_column("clinical_notes", Text, nullable=True)
     specialInstructions: Mapped[str | None] = mapped_column("special_instructions", Text, nullable=True)
-    """Added by migration 0037 — previously the frontend merged this into
+    """Added by migration 0035 — previously the frontend merged this into
     `clinicalNotes`; now a distinct field."""
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="PENDING_SAMPLE"

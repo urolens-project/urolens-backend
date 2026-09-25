@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Matches the widened lab_requests.test_type / specimens.test_type column
-# width (migration 0037) — testType is now stored verbatim (see
+# width (migration 0035) — testType is now stored verbatim (see
 # lab_request_service.create_lab_request), so this caps free-typed "Other"
 # text with a clean 422 instead of a DB-level DataError on insert.
 _TEST_TYPE_MAX_LENGTH = 255

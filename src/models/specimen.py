@@ -82,7 +82,7 @@ class Specimen(Base):
     patientUid: Mapped[str | None] = mapped_column("patient_uid", String(30), nullable=True)
     testType: Mapped[str | None] = mapped_column("test_type", String(255), nullable=True)
     """Copied verbatim from the originating LabRequest.testType (see
-    specimen_service.py) — widened alongside it by migration 0037."""
+    specimen_service.py) — widened alongside it by migration 0035."""
     priorityLevel: Mapped[str] = mapped_column("priority_level", 
         String(20), nullable=False, default="ROUTINE"
     )
