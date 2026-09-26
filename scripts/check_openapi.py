@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 
-EXPECTED_ROUTE_COUNT = 49
+EXPECTED_ROUTE_COUNT = 50
 _HTTP_METHODS = ("get", "post", "put", "delete", "patch")
 
 
