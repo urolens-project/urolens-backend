@@ -412,6 +412,54 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
 
 
 @pytest.mark.asyncio
+async def test_getFullResultGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
+    """SEC-0b: the microscopy bucket is private, so the supervisor's image
+    link must be a signed URL — a permanent /object/public/ link would 400
+    against a private bucket and, while the bucket was public, exposed the
+    image to anyone holding the link.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = uuid.uuid4()
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    storageKey = f"specimens/{specimen.specimenId}/images/{ar.imageId}.jpg"
+    image = SimpleNamespace(storageKey=storageKey)
+    signedUrl = f"https://example.supabase.co/storage/v1/object/sign/microscopy/{storageKey}?token=t"
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen, image])  # AnalysisResult, Specimen, Image
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarsResult([]),       # manual_overrides
+            _makeScalarOneResult(None),   # latest ResultReview
+            _makeScalarOneResult(None),   # smart_diagnosis_output
+        ]
+    )
+    bucket = MagicMock()
+    bucket.create_signed_url = AsyncMock(return_value={"signedURL": signedUrl, "signedUrl": signedUrl})
+    fakeSb = MagicMock()
+    fakeSb.storage.from_.return_value = bucket
+
+    with patch("src.core.storage.supabase", fakeSb):
+        detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["imageUrl"] == signedUrl
+    assert "/object/public/" not in detail["imageUrl"]
+    bucket.create_signed_url.assert_awaited_once()
+    assert bucket.create_signed_url.await_args.args[0] == storageKey
+
+
+@pytest.mark.asyncio
 async def test_getFullResultOrdersManualOverridesByOverriddenAt():
     """Regression guard: the manual_overrides query must sort by
     overridden_at. Without an explicit ORDER BY, Postgres does not
