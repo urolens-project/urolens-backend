@@ -156,9 +156,14 @@ Never `detail=str(e)`. Log server-side, return a generic message plus the shared
 
 `psycopg2` for Alembic's migration runner, `asyncpg` for the app's runtime queries — this is
 why `psycopg2-binary` is a real, required dependency even though no application code imports
-it by name (SQLAlchemy resolves the driver from the connection-string scheme). RLS disabled
-per-table must be explicit in the migration and compensated for by rule 2 — verify it holds
-before shipping the table. Use `op.execute()` for triggers. Always run `alembic heads` before
+it by name (SQLAlchemy resolves the driver from the connection-string scheme). Every new
+table gets `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY` in the migration that creates it,
+with no policies and never `FORCE` — the backend reaches data as the table owner or the
+service-role key, both of which bypass RLS, while Supabase's `anon`/`authenticated` roles are
+locked out (migration 0035, SEC-0). Never `DISABLE ROW LEVEL SECURITY`; that and model tables
+left unlocked are caught by `tests/test_rls_migration.py`. Rule 2 still applies on top. After
+applying migrations to any environment, run `python -m scripts.check_rls` against it. Use
+`op.execute()` for triggers. Always run `alembic heads` before
 authoring a new migration — single head only. No `CREATE DATABASE`/`CREATE USER`/`GRANT`/`\c`
 in any migration SQL. No out-of-band hand-applied SQL, ever — if it's not in a migration, it
 doesn't exist as far as this codebase's history is concerned. The migration filename must
