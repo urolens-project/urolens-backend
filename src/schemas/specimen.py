@@ -24,6 +24,7 @@ class SpecimenReceiveResponse(BaseModel):
     sampleUid: str | None = None
     status: str
     message: str
+    patientUid: str | None = None
 
 
 class SpecimenListItem(BaseModel):
@@ -41,13 +42,21 @@ class SpecimenListItem(BaseModel):
 
 
 class LabRequestSearchItem(BaseModel):
-    """One `PENDING_SAMPLE` lab request, for the specimen-receiving search."""
+    """One `PENDING_SAMPLE` lab request, for the specimen-receiving search.
+
+    `patientUid`/`patientName` are included so the receptionist can check
+    "Label Matches Patient" against the physical specimen without a second,
+    fuller patient lookup (RA 10173 data-minimization — same concern as the
+    physician-portal patient search).
+    """
 
     labRequestId: UUID
     requestUid: str
     testType: str
     physicianName: str | None = None
     patientId: UUID
+    patientUid: str | None = None
+    patientName: str | None = None
 
 
 class SpecimenRejectRequest(BaseModel):

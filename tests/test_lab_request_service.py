@@ -21,11 +21,13 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.exceptions import NotFoundException
+from src.models.lab_request import LabRequest
 from src.models.patient import Patient
 from src.models.user import User
 from src.services.lab_request_service import (
     _generateRequestUid,
     createLabRequest,
+    searchPendingLabRequests,
 )
 
 PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
@@ -217,3 +219,73 @@ async def test_generateRequestUidExhaustsRetriesRaises500():
     with pytest.raises(HTTPException) as excInfo:
         await _generateRequestUid(db)
     assert excInfo.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_searchPendingLabRequestsIncludesPatientUidAndName():
+    """The search item must carry enough to check "Label Matches Patient"
+    without a second, fuller patient lookup (RA 10173 data-minimization —
+    same concern as the physician-portal patient search).
+    """
+    labRequest = MagicMock(spec=LabRequest)
+    labRequest.labRequestId = LAB_REQUEST_ID
+    labRequest.requestUid = "REQ-20260826-12345"
+    labRequest.testType = "URINALYSIS"
+    labRequest.physicianName = "dr_santos"
+    labRequest.patientId = PATIENT_ID
+
+    patient = MagicMock(spec=Patient)
+    patient.patientId = PATIENT_ID
+    patient.patientUid = "PT-000040"
+    patient.firstName = "encrypted-first"
+    patient.lastName = "encrypted-last"
+
+    labRequestResult = MagicMock()
+    labRequestResult.scalars.return_value.all.return_value = [labRequest]
+    patientResult = MagicMock()
+    patientResult.scalars.return_value.all.return_value = [patient]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[labRequestResult, patientResult])
+
+    with patch(
+        "src.services.lab_request_service.decryptPii", side_effect=["Juan", "Dela Cruz"]
+    ):
+        items = await searchPendingLabRequests(db, "REQ-20260826")
+
+    assert len(items) == 1
+    assert items[0].patientId == PATIENT_ID
+    assert items[0].patientUid == "PT-000040"
+    assert items[0].patientName == "Juan Dela Cruz"
+
+
+@pytest.mark.asyncio
+async def test_searchPendingLabRequestsOmitsNameOnDecryptFailureButKeepsUid():
+    labRequest = MagicMock(spec=LabRequest)
+    labRequest.labRequestId = LAB_REQUEST_ID
+    labRequest.requestUid = "REQ-20260826-12345"
+    labRequest.testType = "URINALYSIS"
+    labRequest.physicianName = None
+    labRequest.patientId = PATIENT_ID
+
+    patient = MagicMock(spec=Patient)
+    patient.patientId = PATIENT_ID
+    patient.patientUid = "PT-000040"
+    patient.firstName = "bad-ciphertext"
+    patient.lastName = "bad-ciphertext"
+
+    labRequestResult = MagicMock()
+    labRequestResult.scalars.return_value.all.return_value = [labRequest]
+    patientResult = MagicMock()
+    patientResult.scalars.return_value.all.return_value = [patient]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[labRequestResult, patientResult])
+
+    with patch(
+        "src.services.lab_request_service.decryptPii", side_effect=Exception("bad token")
+    ):
+        items = await searchPendingLabRequests(db, "REQ-20260826")
+
+    assert items[0].patientUid == "PT-000040"
+    assert items[0].patientName is None

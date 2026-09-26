@@ -85,10 +85,15 @@ async def receiveSpecimen(
 
     Returns:
         Confirmation including the specimen's ID, sample UID (if received),
-        and resulting status.
+        resulting status, and the parent lab request's `patientUid` (so
+        Sample Labeling doesn't need a second lookup).
 
     Raises:
         NotFoundException: `payload.lab_request_id` doesn't exist.
+        ConflictException: `SPECIMEN_ALREADY_RECEIVED`, if the lab request
+            is not in `PENDING_SAMPLE` — i.e. its specimen has already been
+            received or rejected at the receiving desk. Checked before any
+            DB write.
         HTTPException: 400, if the visual check failed but
             `payload.rejection_reason` is missing or not one of
             `_VALID_REJECTION_REASONS`. 500, if unique sample UID generation
@@ -98,6 +103,11 @@ async def receiveSpecimen(
     if labRequest is None:
         raise NotFoundException(
             code="LAB_REQUEST_NOT_FOUND", message="Parent laboratory request not found."
+        )
+    if labRequest.status != "PENDING_SAMPLE":
+        raise ConflictException(
+            code="SPECIMEN_ALREADY_RECEIVED",
+            message="This lab request's specimen has already been received.",
         )
 
     patient = await db.get(Patient, labRequest.patientId)
@@ -165,6 +175,7 @@ async def receiveSpecimen(
         sampleUid=sampleUid,
         status=initialStatus,
         message="Specimen received and recorded successfully.",
+        patientUid=pUid if pUid != "N/A" else None,
     )
 
 
