@@ -13,6 +13,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptPii, encryptPii
 from ..core.exceptions import (
     ConflictException,
@@ -96,7 +97,8 @@ async def receiveSpecimen(
             DB write.
         HTTPException: 400, if the visual check failed but
             `payload.rejection_reason` is missing or not one of
-            `_VALID_REJECTION_REASONS`. 500, if unique sample UID generation
+            `_VALID_REJECTION_REASONS`. Checked before any DB write, alongside
+            the status guard above. 500, if unique sample UID generation
             fails (propagated from `_generate_sample_uid`).
     """
     labRequest = await db.get(LabRequest, payload.labRequestId)
@@ -109,6 +111,19 @@ async def receiveSpecimen(
             code="SPECIMEN_ALREADY_RECEIVED",
             message="This lab request's specimen has already been received.",
         )
+
+    if not payload.visualCheckPassed:
+        if not payload.rejectionReason:
+            exc = HTTPException(status_code=400, detail="A rejection reason code is required.")
+            exc.errorCode = "REJECTION_REASON_REQUIRED"
+            raise exc
+        if payload.rejectionReason not in _VALID_REJECTION_REASONS:
+            exc = HTTPException(
+                status_code=400,
+                detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
+            )
+            exc.errorCode = "INVALID_REJECTION_REASON"
+            raise exc
 
     patient = await db.get(Patient, labRequest.patientId)
     pNamePlain = "Unknown"
@@ -144,17 +159,6 @@ async def receiveSpecimen(
     await db.flush([specimen])
 
     if not payload.visualCheckPassed:
-        if not payload.rejectionReason:
-            exc = HTTPException(status_code=400, detail="A rejection reason code is required.")
-            exc.errorCode = "REJECTION_REASON_REQUIRED"
-            raise exc
-        if payload.rejectionReason not in _VALID_REJECTION_REASONS:
-            exc = HTTPException(
-                status_code=400,
-                detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
-            )
-            exc.errorCode = "INVALID_REJECTION_REASON"
-            raise exc
         db.add(
             SpecimenRejection(
                 specimenId=specimen.specimenId,
@@ -165,6 +169,19 @@ async def receiveSpecimen(
         )
 
     labRequest.status = parentUpdateStatus
+
+    await AuditLogger().record(
+        eventType="SPECIMEN_RECEIVED" if payload.visualCheckPassed else "SPECIMEN_REJECTED",
+        entityType="specimen",
+        entityId=specimen.specimenId,
+        userId=receptionistId,
+        detailJson={
+            "lab_request_id": str(payload.labRequestId),
+            "status": initialStatus,
+            "sample_uid": sampleUid,
+            "rejection_reason": payload.rejectionReason if not payload.visualCheckPassed else None,
+        },
+    )
 
     await db.commit()
     await db.refresh(specimen)
