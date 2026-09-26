@@ -3,6 +3,46 @@
 ## Unreleased
 
 ### Fixed
+- **Every database table was readable and writable with the Supabase anon key
+  (SEC-0).** All 27 `public` tables had Row Level Security disabled (confirmed on the
+  live database), and Supabase grants `anon`/`authenticated` full table privileges
+  by default — so anyone with the project's anon key, which is public by design,
+  could read, change or delete patients, users (password hashes), sessions and
+  audit_logs through PostgREST without touching this backend. No client ships the
+  key today (web, mobile and all four repos' full git history checked), so this was
+  exposure-by-design, not a known leak. Migration `0035` enables RLS on every table
+  with no policies and without `FORCE`; the backend is unaffected because it
+  connects as the table owner (SQLAlchemy/Alembic) or with the service-role key
+  (Supabase REST), both of which bypass RLS. Added:
+  - `scripts/check_rls.py` — run against a real database after migrating; fails on
+    any unlocked table or any policy open to `anon`/`authenticated`/`public`. Not in
+    CI (CI has no database).
+  - `tests/test_rls_migration.py` — fails if a model table never gets RLS enabled or
+    a later migration disables it.
+  - `docs/backend-standards.md` rule 13 now requires new tables to enable RLS.
+  Not changed: `anon`/`authenticated` table grants (rule 13 bans `GRANT` in
+  migrations, which a symmetric downgrade would need) — revoking them is optional
+  dashboard-side hardening.
+- **Every microscopy image was publicly readable by link (SEC-0b).** The `microscopy`
+  Storage bucket was public (confirmed live), and the supervisor-review and
+  physician-result details returned permanent `/storage/v1/object/public/...` links —
+  anyone holding one could view that patient's image with no login, no expiry and no
+  way to revoke it. Now:
+  - Both details return a 1-hour signed URL from the new `src.core.storage.
+    signedImageUrl`, which replaces the two identical `_imagePublicUrl` copies in
+    `result_review_service` and `physician_result_service` (rule 14). If signing fails
+    (e.g. the object is missing because its upload failed) `imageUrl` is `null`
+    instead of the request failing.
+  - Migration `0036` makes the image bucket (`SUPABASE_IMAGE_BUCKET`, default
+    `microscopy`) private and limits it to `image/jpeg` / `image/png`, matching the
+    upload endpoint. The bucket name is a bound parameter, so `0036` needs a live
+    connection (no `alembic --sql`). No bucket size limit until the backend
+    has an upload cap (SEC-2).
+  - `scripts/check_rls.py` also fails on any public bucket.
+  Response shape unchanged (`imageUrl` is still a string or `null`), so web needs no
+  change — but the signed URL expires, so a view left open past an hour needs a
+  refresh to reload its image. **Deploy the code together with `0036`**: a build still
+  emitting public links shows broken images once the bucket is private.
 - **A rejected specimen could still reach the supervisor for approval.** Nothing
   connected specimen rejection to the result workflow, so a MedTech could reject a
   specimen after confirming its result (or confirm a result after rejecting the
