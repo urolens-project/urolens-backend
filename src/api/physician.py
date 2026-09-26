@@ -40,7 +40,9 @@ async def searchPatients(
     q: str = Query(default="", min_length=1),
     claims: dict = Depends(_physician),
 ):
-    """Search patients by name; see `physician_service.search_patients`."""
+    """Search patients by Patient ID only, not name — see
+    `physician_service.searchPatients` for why.
+    """
     return await physician_service.searchPatients(q)
 
 

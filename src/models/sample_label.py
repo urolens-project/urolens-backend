@@ -46,7 +46,12 @@ class SampleLabel(Base):
     affixedAt: Mapped[datetime | None] = mapped_column("affixed_at", 
         DateTime(timezone=True), nullable=True
     )
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    # The live table's column is `generated_at`, not `created_at` — this
+    # table predates its Alembic model (see class docstring) and was never
+    # actually created with a `created_at` column, unlike most others in
+    # this app. Keeping the Python attribute name `createdAt` for API
+    # consistency with every other model; only the column mapping differs.
+    createdAt: Mapped[datetime] = mapped_column("generated_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

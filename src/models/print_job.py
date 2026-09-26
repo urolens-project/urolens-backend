@@ -43,7 +43,11 @@ class PrintJob(Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(_PRINT_JOB_STATUS, nullable=False, default="SENT")
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    # The live table's column is `dispatched_at`, not `created_at` — same
+    # pre-Alembic-history situation as sample_labels (see class docstring).
+    # Keeping the Python attribute name `createdAt` for API consistency with
+    # every other model; only the column mapping differs.
+    createdAt: Mapped[datetime] = mapped_column("dispatched_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

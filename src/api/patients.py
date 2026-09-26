@@ -39,5 +39,7 @@ async def searchPatients(
     currentUser: dict = Depends(RequireRole([UserRole.RECEPTIONIST])),
     _service: PatientService = Depends(getPatientService),
 ):
-    """Search patients by name; see `PatientService.search_patients`."""
+    """Search patients by Patient ID only, not name — see
+    `PatientService.searchPatients` for why.
+    """
     return await _service.searchPatients(q)
