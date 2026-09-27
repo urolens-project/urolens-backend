@@ -19,10 +19,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.core.exceptions import NotFoundException
 from src.models.patient import Patient
 from src.models.user import User
+from src.schemas.lab_request import LabRequestCreateRequest
+from src.schemas.physician import (
+    LabRequestCreateRequest as PhysicianLabRequestCreateRequest,
+)
 from src.services.lab_request_service import (
     _generateRequestUid,
     createLabRequest,
@@ -217,3 +222,143 @@ async def test_generateRequestUidExhaustsRetriesRaises500():
     with pytest.raises(HTTPException) as excInfo:
         await _generateRequestUid(db)
     assert excInfo.value.status_code == 500
+
+
+# ── testType: stored verbatim, no case/space mangling (UROLENS-137) ────────────
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestStoresPredefinedTestTypeVerbatim():
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Urinalysis - Complete Suite",
+            clinicalNotes=None,
+            physicianId=None,
+            physicianName="Dr. Santos",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.testType == "Urinalysis - Complete Suite"
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestStoresCustomOtherTestTypeVerbatim():
+    """Custom "Other" free text is exactly as vulnerable to the old
+    mangling as a predefined type — same assertion, different input shape.
+    """
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Culture & Sensitivity, Pre-Op Panel",
+            clinicalNotes=None,
+            physicianId=None,
+            physicianName="Dr. Santos",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.testType == "Culture & Sensitivity, Pre-Op Panel"
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestPersistsSpecialInstructionsSeparateFromClinicalNotes():
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Urinalysis",
+            clinicalNotes="Patient reports mild discomfort.",
+            physicianId=None,
+            physicianName="Dr. Santos",
+            specialInstructions="Handle with care — patient has needle phobia.",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.clinicalNotes == "Patient reports mild discomfort."
+    assert added.specialInstructions == "Handle with care — patient has needle phobia."
+
+
+# ── Schema validation: blank testType, missing physician (UROLENS-137) ─────────
+
+
+def _validLabRequestPayload(**overrides) -> dict:
+    payload = {
+        "patientId": PATIENT_ID,
+        "physicianName": "Dr. Santos",
+        "testType": "Urinalysis",
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schemaCls", [LabRequestCreateRequest, PhysicianLabRequestCreateRequest])
+async def test_blankTestTypeRejected(schemaCls):
+    payload = {"patientId": PATIENT_ID, "testType": "   "}
+    if schemaCls is LabRequestCreateRequest:
+        payload["physicianName"] = "Dr. Santos"
+    with pytest.raises(ValidationError, match="testType"):
+        schemaCls(**payload)
+
+
+def test_testTypeIsTrimmed():
+    req = LabRequestCreateRequest(**_validLabRequestPayload(testType="  Urinalysis  "))
+    assert req.testType == "Urinalysis"
+
+
+def test_testTypeOverMaxLengthRejected():
+    with pytest.raises(ValidationError, match="testType"):
+        LabRequestCreateRequest(**_validLabRequestPayload(testType="x" * 256))
+
+
+def test_missingPhysicianIdentifierRejected():
+    with pytest.raises(ValidationError, match="physicianId or physicianName is required"):
+        LabRequestCreateRequest(
+            patientId=PATIENT_ID, testType="Urinalysis", physicianId=None, physicianName=None
+        )
+
+
+def test_whitespaceOnlyPhysicianNameDoesNotSatisfyRequirement():
+    """Trim-before-validate applies to physicianName too — " " must not
+    count as a provided identifier."""
+    with pytest.raises(ValidationError, match="physicianId or physicianName is required"):
+        LabRequestCreateRequest(
+            patientId=PATIENT_ID, testType="Urinalysis", physicianId=None, physicianName="   "
+        )
+
+
+def test_physicianIdAloneSatisfiesRequirement():
+    req = LabRequestCreateRequest(
+        patientId=PATIENT_ID,
+        testType="Urinalysis",
+        physicianId=PHYSICIAN_ID,
+        physicianName=None,
+    )
+    assert req.physicianId == PHYSICIAN_ID
+
+
+def test_physicianLabRequestSchemaHasNoPhysicianFields():
+    """The physician-portal variant never needs the id-or-name check — the
+    caller's own identity always supplies it server-side."""
+    req = PhysicianLabRequestCreateRequest(patientId=PATIENT_ID, testType="Urinalysis")
+    assert not hasattr(req, "physicianId")

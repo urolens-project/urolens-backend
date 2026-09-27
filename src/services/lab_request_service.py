@@ -112,6 +112,7 @@ async def createLabRequest(
     clinicalNotes: str | None,
     physicianId: uuid.UUID | None,
     physicianName: str | None,
+    specialInstructions: str | None = None,
     notifyReceptionists: bool = False,
     ipAddress: str | None = None,
 ) -> LabRequestCreateResponse:
@@ -126,7 +127,9 @@ async def createLabRequest(
         physician_id: if given without `physician_name`, the name is looked
             up from that physician's user row. The physician-facing caller
             passes its own identity here; the receptionist-facing caller
-            passes whatever physician (if any) was specified on the form.
+            passes whatever physician was specified on the form — at least
+            one of `physician_id`/`physician_name` is required by
+            `LabRequestCreateRequest`'s validator before this is called.
         notify_receptionists: if `True`, every active receptionist is
             notified of the new request (used by the physician-facing route,
             since receptionists still need to act on it — not used when a
@@ -161,8 +164,16 @@ async def createLabRequest(
         patientId=patientId,
         physicianId=computedId,
         physicianName=computedName,
-        testType=testType.upper().replace(" ", "_"),
+        # Stored as entered — previously `.upper().replace(" ", "_")`
+        # mangled this irreversibly (e.g. "Urinalysis - Complete Suite" ->
+        # "URINALYSIS_-_COMPLETE_SUITE"). Nothing downstream (specimen
+        # receiving, labeling, queue) matches/parses this value — every
+        # call site treats it as opaque display text (confirmed by
+        # reading specimen_service.py, labeling_service.py,
+        # queue_service.py) — so verbatim storage needs no call-site changes.
+        testType=testType,
         clinicalNotes=clinicalNotes,
+        specialInstructions=specialInstructions,
         status="PENDING_SAMPLE",
         encodedBy=encodedBy,
     )
@@ -196,6 +207,7 @@ async def createLabRequest(
         physicianName=labRequest.physicianName,
         testType=labRequest.testType,
         clinicalNotes=labRequest.clinicalNotes,
+        specialInstructions=labRequest.specialInstructions,
         status=labRequest.status,
         createdAt=labRequest.createdAt,
     )
