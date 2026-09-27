@@ -34,6 +34,21 @@ class ImageResolutionError(HTTPException):
         self.errorCode = "INVALID_IMAGE_RESOLUTION"
 
 
+class ImageTooLargeError(HTTPException):
+    """413 — an uploaded image is over the size cap.
+
+    `errorCode` is `"IMAGE_TOO_LARGE"`.
+    """
+
+    def __init__(self, message: str = "Image must be 10 MB or smaller.") -> None:
+        """Build the 413 with `message` as the client-facing detail."""
+        super().__init__(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=message,
+        )
+        self.errorCode = "IMAGE_TOO_LARGE"
+
+
 class StorageError(HTTPException):
     """503 — storing/retrieving a file (e.g. Supabase storage) failed.
     `error_code` is `"STORAGE_ERROR"`.
@@ -99,6 +114,24 @@ class NotFoundException(HTTPException):
 
     def __init__(self, code: str = "NOT_FOUND", message: str = "Resource not found."):
         super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+        self.errorCode = code
+
+
+class ForbiddenException(HTTPException):
+    """403, with a caller-supplied `errorCode` (default `"FORBIDDEN"`).
+
+    The caller is authenticated and has the right role, but no access to this
+    particular record (e.g. `SPECIMEN_NOT_ASSIGNED`).
+    """
+
+    def __init__(self, code: str = "FORBIDDEN", message: str = "Access to this resource is not allowed.") -> None:
+        """Build the 403.
+
+        Args:
+            code: sets `errorCode` on the exception.
+            message: the client-facing detail.
+        """
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=message)
         self.errorCode = code
 
 

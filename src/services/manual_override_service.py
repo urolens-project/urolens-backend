@@ -1,6 +1,6 @@
-"""Manual parameter override transaction (T2.6): lets a MedTech correct a
-single AI-generated result parameter, recording both the original and
-corrected values.
+"""Manual parameter override transaction (T2.6): lets a MedTech — or a
+Supervisor during review — correct a single AI-generated result parameter,
+recording both the original and corrected values.
 """
 import uuid
 
@@ -9,9 +9,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
-from ..core.exceptions import NotFoundException, UnprocessableException
+from ..core.enums import UserRole
+from ..core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.manual_override import ManualOverride
+from .specimen_access import MEDTECH_EDITABLE_RESULT_STATUSES, getAssignedSpecimen
+
+# A finalised result is the lab's record of truth (and, once RELEASED, already
+# in the patient's and physician's hands) — nobody may change it.
+_FINALISED_RESULT_STATUSES = frozenset({ResultStatus.APPROVED, ResultStatus.RELEASED})
+
+# A Supervisor overrides only while reviewing — matches the web review screen,
+# which offers actions only for PENDING_SUPERVISOR_APPROVAL.
+_SUPERVISOR_EDITABLE_RESULT_STATUSES = frozenset({ResultStatus.PENDING_SUPERVISOR_APPROVAL})
 
 
 class ManualOverrideService:
@@ -38,6 +52,7 @@ class ManualOverrideService:
         rationale: str,
         originalAiValue: float | None,  # Accepted here to match your router argument contract
         medtechId: uuid.UUID,
+        callerRole: str,
         request: Request,
     ) -> ManualOverride:
         """Records a MedTech correction for a single AI-generated parameter.
@@ -48,27 +63,37 @@ class ManualOverrideService:
                 contract but not trusted (and not required) — the value
                 actually stored is read fresh from the DB via
                 `_extract_original_value`.
-            medtech_id: the authenticated user recorded as the override's author.
+            medtechId: the authenticated user recorded as the override's
+                author (a MedTech or a Supervisor, despite the name).
+            callerRole: the caller's `role` claim. A MedTech may override
+                only a specimen assigned to them, while the result is
+                `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`; a Supervisor
+                only while it is `PENDING_SUPERVISOR_APPROVAL`.
 
         Returns:
             The persisted `ManualOverride` row.
 
         Raises:
-            NotFoundException: `result_id` doesn't match any analysis result.
-            UnprocessableException: the result has already been finalised
-                (`APPROVED`), or `parameter` isn't present in the result's
-                AI findings.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't match
+                any analysis result.
+            UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result
+                is `APPROVED` or `RELEASED`; `PARAMETER_NOT_FOUND`, if
+                `parameter` isn't in the result's AI findings.
+            SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if a MedTech calls on
+                a result whose specimen no longer exists.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech calls on
+                another MedTech's specimen.
+            ConflictException: `RESULT_NOT_EDITABLE`, if the result isn't in
+                a status the caller's role may override.
         """
         result = await self._getResult(resultId)
-
-        # Guard: overrides only allowed before Supervisor approval. Note
-        # RETURNED_FOR_CORRECTION is deliberately allowed — that's exactly
-        # when a MedTech needs to correct a parameter before re-confirming.
-        if result.status == ResultStatus.APPROVED:
-            raise UnprocessableException(
-                code="RESULT_ALREADY_FINALISED",
-                message="Cannot override a parameter after the result has been finalised.",
-            )
+        isSupervisor = callerRole.upper() == UserRole.SUPERVISOR
+        if not isSupervisor:
+            # Ownership before any state check, so a non-owner learns nothing;
+            # then re-read under the specimen lock (see getAssignedSpecimen).
+            await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+            result = await self._getResult(resultId, fresh=True)
+        self._requireOverridable(result, isSupervisor)
 
         # Read original AI value safely from the db findings (Source of Truth)
         dbOriginalValue = await self._extractOriginalValue(result, parameter)
@@ -115,8 +140,27 @@ class ManualOverrideService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _getResult(self, resultId: uuid.UUID) -> AnalysisResult:
+    def _requireOverridable(self, result: AnalysisResult, isSupervisor: bool) -> None:
+        # Finalised is checked first so its specific code wins for everyone.
+        if result.status in _FINALISED_RESULT_STATUSES:
+            raise UnprocessableException(
+                code="RESULT_ALREADY_FINALISED",
+                message="Cannot override a parameter after the result has been finalised.",
+            )
+        allowed = (
+            _SUPERVISOR_EDITABLE_RESULT_STATUSES if isSupervisor else MEDTECH_EDITABLE_RESULT_STATUSES
+        )
+        if result.status not in allowed:
+            raise ConflictException(
+                code="RESULT_NOT_EDITABLE",
+                message="This result can't be changed in its current status.",
+            )
+
+    async def _getResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
+        # `fresh` overwrites the already-loaded object with current DB state.
         stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:

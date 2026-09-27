@@ -38,8 +38,10 @@ from .enums import UserRole  # noqa: F401
 from .exceptions import (  # noqa: F401
     ConflictError,
     ConflictException,
+    ForbiddenException,
     ImageFormatError,
     ImageResolutionError,
+    ImageTooLargeError,
     NotFoundError,
     NotFoundException,
     SpecimenNotFoundError,

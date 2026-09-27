@@ -143,6 +143,7 @@ async def overrideParameter(
         rationale=body.rationale,
         originalAiValue=body.originalAiValue,
         medtechId=uuid.UUID(currentUser["user_id"]),
+        callerRole=currentUser["role"],
         request=request,
     )
     return OverrideResponse.model_validate(override)
