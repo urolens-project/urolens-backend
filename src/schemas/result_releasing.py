@@ -23,10 +23,13 @@ class ResultReleaseResponse(BaseModel):
 
 
 class ApprovedResultItem(BaseModel):
-    """One approved-and-awaiting-release result, for the release queue list."""
+    """One approved-and-awaiting-release result, for the release queue list.
+
+    `patientUid`, not a decrypted name — RA 10173 data minimization.
+    """
 
     resultId: UUID
-    patientName: str
+    patientUid: str | None
     sampleUid: str | None
     testType: str | None
     approvedAt: datetime

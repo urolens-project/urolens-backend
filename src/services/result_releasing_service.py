@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
-from src.core.encryption import decryptPii
 from src.core.exceptions import NotFoundException, UnprocessableException
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
@@ -59,8 +59,8 @@ class ResultReleasingService:
                 `None` starts from the most recent.
 
         Returns:
-            A page of `ApprovedResultItem`s (patient name decrypted, or
-            `"Unknown Patient"` if decryption fails) plus pagination metadata.
+            A page of `ApprovedResultItem`s (`patientUid`, not a decrypted
+            name — RA 10173 data minimization) plus pagination metadata.
         """
         stmt = (
             select(AnalysisResult)
@@ -80,19 +80,14 @@ class ResultReleasingService:
 
         items: list[ApprovedResultItem] = []
         for row in rows:
-            patientName = "Unknown Patient"
+            patientUid: str | None = None
             sampleUid: str | None = None
             testType: str | None = None
 
             if row.patientId:
                 patient = await self.db.get(Patient, row.patientId)
                 if patient is not None:
-                    try:
-                        first = decryptPii(patient.firstName)
-                        last = decryptPii(patient.lastName)
-                        patientName = f"{first} {last}"
-                    except Exception:
-                        patientName = "Unknown Patient"
+                    patientUid = patient.patientUid
 
             if row.specimenId:
                 specimen = await self.db.get(Specimen, row.specimenId)
@@ -103,7 +98,7 @@ class ResultReleasingService:
             items.append(
                 ApprovedResultItem(
                     resultId=row.resultId,
-                    patientName=patientName,
+                    patientUid=patientUid,
                     sampleUid=sampleUid,
                     testType=testType,
                     approvedAt=row.updatedAt,
@@ -141,15 +136,16 @@ class ResultReleasingService:
             Confirmation of the release, including its generated `release_id`.
 
         Raises:
-            HTTPException: 404 (`NOT_FOUND`), if `result_id` doesn't exist.
-                422 (`RESULT_NOT_APPROVED`), if the result isn't in `APPROVED`
-                status. 422 (`ALREADY_RELEASED`), if it's already been
-                released.
+            NotFoundException: `RESULT_NOT_FOUND`, if `result_id` doesn't exist.
+            UnprocessableException: `RESULT_NOT_APPROVED`, if the result
+                isn't in `APPROVED` status. `ALREADY_RELEASED`, if it's
+                already been released — including, atomically, the case
+                where a concurrent request released it a moment ago.
         """
         row = await self.db.get(AnalysisResult, resultId)
 
         if row is None:
-            raise NotFoundException(message="Result not found.")
+            raise NotFoundException(code="RESULT_NOT_FOUND", message="Result not found.")
 
         if row.status != "APPROVED":
             raise UnprocessableException(
@@ -164,17 +160,42 @@ class ResultReleasingService:
                 code="ALREADY_RELEASED", message="Result has already been released."
             )
 
+        # Race-safety (UROLENS-143, mirrors UROLENS-142's assignSpecimen):
+        # the pre-check above can't be race-safe alone — two concurrent
+        # releases for the same result can both pass it before either
+        # writes. Closed at the DB level via a unique constraint on
+        # result_releases.result_id (migration 0040) plus a conditional
+        # UPDATE on the result row itself (WHERE status = 'APPROVED',
+        # checked by rowcount). The insert runs inside a SAVEPOINT so a
+        # constraint violation only rolls back that one statement, not the
+        # whole transaction. Whichever side loses — constraint violation or
+        # rowcount == 0 — gets the same ALREADY_RELEASED the pre-check would
+        # already raise in the non-race case.
         release = ResultRelease(
             resultId=resultId,
             releasedBy=UUID(str(currentUser["user_id"])),
             releaseMethod=releaseMethod,
         )
         self.db.add(release)
-        await self.db.flush([release])
+        try:
+            async with self.db.begin_nested():
+                await self.db.flush([release])
+        except IntegrityError:
+            raise UnprocessableException(
+                code="ALREADY_RELEASED", message="Result has already been released."
+            ) from None
 
         nowUtc = datetime.now(UTC)
-        row.status = "RELEASED"
-        row.releasedAt = nowUtc
+        updateResult = await self.db.execute(
+            update(AnalysisResult)
+            .where(AnalysisResult.resultId == resultId, AnalysisResult.status == "APPROVED")
+            .values(status="RELEASED", releasedAt=nowUtc)
+        )
+        if updateResult.rowcount == 0:
+            await self.db.rollback()
+            raise UnprocessableException(
+                code="ALREADY_RELEASED", message="Result has already been released."
+            )
 
         specimen = await self.db.get(Specimen, row.specimenId)
         if specimen is not None:
