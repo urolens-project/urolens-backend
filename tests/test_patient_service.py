@@ -1,11 +1,17 @@
-"""Unit tests — patient_service.PatientService.create_patient and the
-PatientCreateRequest/ConsentData schema validators added alongside it.
+"""Unit tests — PatientService: searchPatients (UROLENS-137) and
+createPatient plus the PatientCreateRequest/ConsentData schema validators.
 
-Schema-level rules (blank name, future DOB, unconfirmed consent) are pure
-Pydantic validation, so those are exercised directly against the schema
-rather than through the service. Service-level tests cover the duplicate
-check and the success path, following the AsyncMock/MagicMock(spec=Model)
-conventions in tests/test_lab_request_service.py.
+searchPatients coverage is the PII-minimization fix: the search endpoint
+used to return the full decrypted `PatientResponse` (name, DOB, contact,
+address) for every match; it now returns `PatientSearchItem`
+(patientId/patientUid only) and enforces a 3-char minimum query length
+rather than relying on frontend debounce.
+
+createPatient coverage follows the AsyncMock/MagicMock(spec=Model)
+conventions in tests/test_lab_request_service.py. Schema-level rules (blank
+name, future DOB, unconfirmed consent) are pure Pydantic validation, so
+those are exercised directly against the schema rather than through the
+service.
 """
 from __future__ import annotations
 
@@ -17,8 +23,15 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from src.core.encryption import encryptPii
 from src.core.exceptions import ConflictException
-from src.schemas.patient import ConsentData, PatientCreateRequest, SexEnum
+from src.models.patient import Patient
+from src.schemas.patient import (
+    ConsentData,
+    PatientCreateRequest,
+    PatientSearchItem,
+    SexEnum,
+)
 from src.services.patient_service import PatientService
 
 CREATOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000050")
@@ -93,7 +106,70 @@ def test_validPayloadPasses():
     assert req.consent.consentGiven is True
 
 
-# ── Service: duplicate detection ────────────────────────────────────────────
+# ── Search: PatientSearchItem / min-length (UROLENS-137) ───────────────────
+
+
+def _row(patientId: uuid.UUID, firstName: str, lastName: str) -> MagicMock:
+    row = MagicMock(spec=Patient)
+    row.patientId = patientId
+    row.patientUid = f"PAT-{patientId.hex[:6]}"
+    row.firstName = encryptPii(firstName)
+    row.lastName = encryptPii(lastName)
+    return row
+
+
+def _makeSearchDb(rows: list[MagicMock]) -> AsyncMock:
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=result)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_searchPatientsBelowMinLengthReturnsEmptyWithoutQuerying():
+    """Enforced in the service itself, not just the route's
+    `Query(min_length=3)` — this method can be called directly.
+    """
+    db = AsyncMock()
+    service = PatientService(db=db, auditLogger=AsyncMock())
+
+    assert await service.searchPatients("") == []
+    assert await service.searchPatients("Ja") == []
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_searchPatientsAtMinLengthReturnsSlimShapeOnly():
+    patientId = uuid.uuid4()
+    db = _makeSearchDb([_row(patientId, "Jane", "Doe")])
+    service = PatientService(db=db, auditLogger=AsyncMock())
+
+    results = await service.searchPatients("Jan")
+
+    assert len(results) == 1
+    item = results[0]
+    assert isinstance(item, PatientSearchItem)
+    assert item.patientId == patientId
+
+    # PII fields must not exist on the response model at all — not just be
+    # absent from a sample value. This asserts the schema itself carries no
+    # such field, not just that this particular instance omits one.
+    dumped = item.model_dump()
+    for leaked in ("firstName", "lastName", "middleName", "dateOfBirth", "contactNo", "address"):
+        assert leaked not in dumped
+    assert set(dumped.keys()) == {"patientId", "patientUid"}
+
+
+@pytest.mark.asyncio
+async def test_searchPatientsNoMatchReturnsEmpty():
+    db = _makeSearchDb([_row(uuid.uuid4(), "Jane", "Doe")])
+    service = PatientService(db=db, auditLogger=AsyncMock())
+
+    assert await service.searchPatients("xyz") == []
+
+
+# ── Service: create / duplicate detection ───────────────────────────────────
 
 
 def _makeDb(duplicateFound: bool = False) -> AsyncMock:

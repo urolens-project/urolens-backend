@@ -1,8 +1,18 @@
 """patients add sex
 
-Revision ID: 0035
-Revises: 0034
+Revision ID: 0036
+Revises: 0035
 Create Date: 2026-09-23 00:00:00.000000
+
+Renumbered from 0035 to 0036 while merging feat/lab-request into
+development: both branches independently created a migration numbered
+0035 (this one, and 0035_lab_requests_test_type_and_special_instructions.py
+from feat/lab-request/UROLENS-137) with the same down_revision (0034) — a
+literal duplicate revision ID, which alembic can't disambiguate at all
+(unlike two different IDs branching from the same parent, which would at
+least be a legible multi-head error). Chained after the lab-requests
+migration instead; 0037_patients_dedup_hash.py's down_revision was updated
+to match.
 
 Same situation as migrations 0032/0033: `src/models/patient.py` declares
 `sex = Column(VARCHAR(10), nullable=False)` and `PatientCreateRequest.sex`
@@ -27,8 +37,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0035'
-down_revision: str | Sequence[str] | None = '0034'
+revision: str = '0036'
+down_revision: str | Sequence[str] | None = '0035'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

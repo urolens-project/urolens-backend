@@ -1,8 +1,13 @@
 """patients dedup hash
 
-Revision ID: 0036
-Revises: 0035
+Revision ID: 0037
+Revises: 0036
 Create Date: 2026-09-24 00:00:00.000000
+
+Renumbered from 0036 to 0037 alongside 0035_patients_add_sex.py's rename to
+0036 — see that file's docstring for why (a literal duplicate revision ID
+with feat/lab-request's own 0035 migration, hit while merging into
+development).
 
 `PatientService._rejectIfDuplicate` previously decrypted and compared only
 the first `_DUPLICATE_CHECK_LIMIT` (100) rows, unordered — a patient beyond
@@ -43,8 +48,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0036'
-down_revision: str | Sequence[str] | None = '0035'
+revision: str = '0037'
+down_revision: str | Sequence[str] | None = '0036'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
