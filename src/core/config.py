@@ -65,6 +65,11 @@ class Settings(BaseModel):
 
     # ── PHI encryption ────────────────────────────────────────────────────
     encryptionKey: str
+    dedupHashKey: str
+    """HMAC secret for the patient dedup-hash column — deliberately separate
+    from `encryptionKey` (Fernet, reversible) since this key drives a
+    one-way, keyed fingerprint used for exact-match duplicate lookups, not
+    encryption."""
 
     # ── AI integration ────────────────────────────────────────────────────
     aiModelVersion: str = "mvp-v1.0"
@@ -138,6 +143,13 @@ def _loadSettings() -> Settings:
             "Fernet.generate_key() and set it in the environment before starting the app."
         ) from exc
 
+    dedupHashKey = os.getenv("DEDUP_HASH_KEY", "")
+    if not dedupHashKey:
+        raise RuntimeError(
+            "DEDUP_HASH_KEY is unset. Set a long, random secret in the environment "
+            "before starting the app — the patient duplicate-check hash cannot run without it."
+        )
+
     return Settings(
         supabaseUrl=supabaseUrl,
         supabaseServiceKey=supabaseServiceKey,
@@ -150,6 +162,7 @@ def _loadSettings() -> Settings:
         accessTokenExpireMinutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")),
         maxFailedAttempts=int(os.getenv("MAX_FAILED_ATTEMPTS", "5")),
         encryptionKey=encryptionKey,
+        dedupHashKey=dedupHashKey,
         aiModelVersion=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
     )
 
