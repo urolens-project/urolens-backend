@@ -515,3 +515,58 @@ async def test_discardIsRefusedOnceTheResultHasBeenSubmitted(lockedStatus) -> No
     assert excInfo.value.errorCode == "RESULT_NOT_EDITABLE"
     assert image.status == "ACTIVE"
     db.commit.assert_not_awaited()
+
+
+# ── UROLENS-222 / F-22: MedTech reads are limited to their own specimens ──────
+
+@pytest.mark.asyncio
+async def test_smartDiagnosisOfAnotherMedtechsResultReturns403(asyncClient, medtechToken: str) -> None:
+    result = MagicMock(spec=AnalysisResult)
+    result.specimenId = TEST_SPECIMEN_ID
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[result, _makeAssignedSpecimen(medtechId=OTHER_MEDTECH_ID)])
+
+    async def _override():
+        yield db
+
+    app.dependency_overrides[getDb] = _override
+    try:
+        with patch("src.api.results.getSmartDiagnosis", AsyncMock()) as smartDiagnosis:
+            response = await asyncClient.get(
+                f"/api/v1/results/{uuid.uuid4()}/smart-diagnosis",
+                headers={"Authorization": f"Bearer {medtechToken}"},
+            )
+    finally:
+        app.dependency_overrides.pop(getDb, None)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "SPECIMEN_NOT_ASSIGNED"
+    smartDiagnosis.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resultDetailOfAnotherMedtechsResultReturns403BeforeAnyPatientDataIsRead(
+    asyncClient, medtechToken: str
+) -> None:
+    result = MagicMock(spec=AnalysisResult)
+    result.resultId = uuid.uuid4()
+    result.specimenId = TEST_SPECIMEN_ID
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[result, _makeAssignedSpecimen(medtechId=OTHER_MEDTECH_ID)])
+
+    async def _override():
+        yield db
+
+    app.dependency_overrides[getDb] = _override
+    try:
+        response = await asyncClient.get(
+            f"/api/v1/results/{result.resultId}",
+            headers={"Authorization": f"Bearer {medtechToken}"},
+        )
+    finally:
+        app.dependency_overrides.pop(getDb, None)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "SPECIMEN_NOT_ASSIGNED"
+    assert db.get.await_count == 2  # result + specimen only; no Patient lookup
+    db.commit.assert_not_awaited()  # no view logged for a refused read

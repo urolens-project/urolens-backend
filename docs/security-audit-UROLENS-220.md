@@ -321,10 +321,10 @@ All four repos are **public**, so this needs to stay true — see *Recommendatio
 | F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG decoders only, 10 MB cap, migration `0042`) | ✅ Fixed |
 | F-10, F-14, F-16 | **SEC-2** — dependency batch 1 | ✅ Fixed |
 | F-15 | SEC-2 took cryptography to 48.0.1 (OpenSSL fix); the X.509/PKCS#7 advisories need 50.0.0 | 🟡 Partly — batch 2 |
-| F-06, F-07 | SEC-2, or UROLENS-81 (JWT/RBAC hardening) — confirm with its owner | ⏳ Pending that decision |
+| F-06, F-07 | UROLENS-222 — login rate limit (5/5 min per account, 30/min per IP), dummy-hash timing, 15-minute lock expiry | ✅ Fixed |
 | F-12 | Pin the AI engine commit (one line; coordinate with the AI engine owner) | 🔜 Planned |
 | F-11 | UROLENS-222 (`feat/UROLENS-222-ra10173-consent-and-audit`) — audit rows written in the action's transaction | ✅ Fixed |
-| F-22 | Open — decide whether MedTech result-detail reads should be limited to their own specimens | ⏳ Needs decision |
+| F-22 | UROLENS-222 — MedTechs read only their own specimens' results (detail + Smart Diagnosis) | ✅ Fixed |
 | F-13, F-17, F-21 | SEC-5 (`feat/UROLENS-220-sec-5-production-readiness`) | Partly Sprint 5 |
 | F-19, F-20 | SEC-5 cleanup | Next sprint |
 

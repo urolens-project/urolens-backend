@@ -12,8 +12,13 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import ForbiddenException, SpecimenNotFoundError
-from src.models.analysis_result import ResultStatus
+from src.core.enums import UserRole
+from src.core.exceptions import (
+    ForbiddenException,
+    NotFoundException,
+    SpecimenNotFoundError,
+)
+from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.specimen import Specimen
 
 # The only statuses in which a MedTech may still change a result (override a
@@ -72,3 +77,32 @@ async def getAssignedSpecimen(
         raise SpecimenNotFoundError(str(specimenId))
     requireSpecimenAssigned(specimen, medtechId)
     return specimen
+
+
+def isMedtech(role: str) -> bool:
+    """Whether a `role` claim is MEDTECH (claims are compared case-insensitively)."""
+    return role.upper() == UserRole.MEDTECH
+
+
+async def requireResultReadable(
+    db: AsyncSession, resultId: uuid.UUID, viewerId: uuid.UUID, viewerRole: str
+) -> None:
+    """Let a MedTech read a result only for a specimen assigned to them.
+
+    Other roles are already limited by the route's `RequireRole` and pass
+    through (supervisors review every MedTech's work). Security audit F-22.
+
+    Raises:
+        NotFoundException: `RESULT_NOT_FOUND`, if the result doesn't exist.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for a
+            result whose specimen isn't theirs (or no longer exists).
+    """
+    if not isMedtech(viewerRole):
+        return
+    result = await db.get(AnalysisResult, resultId)
+    if result is None:
+        raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
+    specimen = await db.get(Specimen, result.specimenId)
+    if specimen is None:
+        raise ForbiddenException(code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you.")
+    requireSpecimenAssigned(specimen, viewerId)

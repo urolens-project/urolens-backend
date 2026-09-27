@@ -32,6 +32,7 @@ from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptPii
 from ..core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     UnprocessableException,
 )
@@ -49,6 +50,7 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .specimen_access import isMedtech, requireSpecimenAssigned
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -404,7 +406,11 @@ class ResultReviewService:
     # ── Full result detail ────────────────────────────────────────────────
 
     async def getFullResult(
-        self, resultId: uuid.UUID, viewerId: uuid.UUID | None = None, request: Request | None = None
+        self,
+        resultId: uuid.UUID,
+        viewerId: uuid.UUID | None = None,
+        request: Request | None = None,
+        viewerRole: str | None = None,
     ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
         patient/medtech context, AI findings, manual overrides, the latest
@@ -416,13 +422,18 @@ class ResultReviewService:
                 injected), the view is recorded as `RESULT_DETAIL_VIEWED` in
                 the same transaction — no view without an audit row.
             request: the inbound request, for the audit row's client IP.
+            viewerRole: the caller's `role` claim. A MEDTECH may only read
+                results for specimens assigned to them (F-22); checked before
+                any patient data is decrypted.
 
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
             always `None` — see the module docstring's schema-drift note.
 
         Raises:
-            NotFoundException: `result_id` doesn't exist.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
+                another MedTech's result.
         """
         ar = await self.db.get(AnalysisResult, resultId)
         if ar is None:
@@ -431,6 +442,12 @@ class ResultReviewService:
             )
 
         spec = await self.db.get(Specimen, ar.specimenId)
+        if viewerRole is not None and isMedtech(viewerRole):
+            if spec is None:
+                raise ForbiddenException(
+                    code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you."
+                )
+            requireSpecimenAssigned(spec, viewerId)
 
         pat: Patient | None = None
         if spec and spec.patientUid:
