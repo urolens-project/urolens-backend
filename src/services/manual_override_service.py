@@ -36,7 +36,7 @@ class ManualOverrideService:
         parameter: str,
         correctedValue: float,
         rationale: str,
-        originalAiValue: float,  # Accepted here to match your router argument contract
+        originalAiValue: float | None,  # Accepted here to match your router argument contract
         medtechId: uuid.UUID,
         request: Request,
     ) -> ManualOverride:
@@ -45,8 +45,9 @@ class ManualOverrideService:
 
         Args:
             original_ai_value: accepted to match the router's argument
-                contract but not trusted — the value actually stored is
-                read fresh from the DB via `_extract_original_value`.
+                contract but not trusted (and not required) — the value
+                actually stored is read fresh from the DB via
+                `_extract_original_value`.
             medtech_id: the authenticated user recorded as the override's author.
 
         Returns:
@@ -55,13 +56,15 @@ class ManualOverrideService:
         Raises:
             NotFoundException: `result_id` doesn't match any analysis result.
             UnprocessableException: the result has already been finalised
-                (`APPROVED`/`RETURNED_FOR_CORRECTION`), or `parameter` isn't
-                present in the result's AI findings.
+                (`APPROVED`), or `parameter` isn't present in the result's
+                AI findings.
         """
         result = await self._getResult(resultId)
 
-        # Guard: overrides only allowed before Supervisor approval
-        if result.status in (ResultStatus.APPROVED, ResultStatus.RETURNED_FOR_CORRECTION):
+        # Guard: overrides only allowed before Supervisor approval. Note
+        # RETURNED_FOR_CORRECTION is deliberately allowed — that's exactly
+        # when a MedTech needs to correct a parameter before re-confirming.
+        if result.status == ResultStatus.APPROVED:
             raise UnprocessableException(
                 code="RESULT_ALREADY_FINALISED",
                 message="Cannot override a parameter after the result has been finalised.",
@@ -79,6 +82,14 @@ class ManualOverrideService:
             medtechId=medtechId,
         )
         self.db.add(override)
+
+        # Keep particle_classes (the confirmed/effective counts shown to the
+        # Supervisor) in sync — confirm_result only settles it once, at
+        # confirmation time, so any override added afterward must patch it
+        # here too or the two go stale relative to each other. Reassign
+        # (rather than mutate in place) so SQLAlchemy's change tracking
+        # picks up the JSONB column update.
+        result.particleClasses = {**(result.particleClasses or {}), parameter: correctedValue}
 
         # Audit logging entry block
         await self.auditLogger.record(

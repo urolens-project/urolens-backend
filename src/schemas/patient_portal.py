@@ -6,16 +6,21 @@ from pydantic import BaseModel
 
 # The fixed set of particle types every result's particle_counts is normalised
 # against, in display order — see PatientResultService.get_result_detail.
+# Must match the keys AnalysisResult.ai_findings is actually stored under
+# (underscore-separated, e.g. AIFindingsSection.tsx's PARTICLE_CLASSES on the
+# frontend) — these were previously hyphenated, so rawFindings.get(label, 0)
+# silently returned 0 for every one of these five, regardless of the real
+# AI-detected count.
 PARTICLE_LABELS: list[str] = [
     "bacteria",
     "crystals",
-    "epithelial-cells",
+    "epithelial_cells",
     "erythrocytes",
     "leukocytes",
-    "mucus-threads",
-    "sperm-cells",
-    "trichomonas-vaginalis",
-    "urinary-casts",
+    "mucus_threads",
+    "sperm_cells",
+    "trichomonas_vaginalis",
+    "urinary_casts",
     "yeast",
 ]
 

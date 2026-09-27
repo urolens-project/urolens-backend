@@ -118,7 +118,7 @@ async def test_uploadValidImageReturns201(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
@@ -142,11 +142,34 @@ async def test_uploadUnsupportedFormatReturns422(
         "/api/v1/images/upload",
         headers={"Authorization": f"Bearer {medtechToken}"},
         files={"file": ("specimen.gif", gifBytes, "image/gif")},
-        data={"specimenId": str(testSpecimen)},
+        data={"specimen_id": str(testSpecimen)},
     )
 
     assert response.status_code == 422
     assert "format" in response.json()["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_uploadUnsupportedFormatReturnsErrorCodeInResponseBody(
+    asyncClient,
+    medtechToken: str,
+    testSpecimen: uuid.UUID,
+) -> None:
+    """HTTP-level proof for main.py's errorCode fix: `ImageFormatError`'s
+    `INVALID_IMAGE_FORMAT` code (a third, distinct service) must reach the
+    real JSON response body, not just the raised exception object.
+    """
+    gifBytes = b"GIF89a\x01\x00\x01\x00\x00\xff\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"
+
+    response = await asyncClient.post(
+        "/api/v1/images/upload",
+        headers={"Authorization": f"Bearer {medtechToken}"},
+        files={"file": ("specimen.gif", gifBytes, "image/gif")},
+        data={"specimen_id": str(testSpecimen)},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_IMAGE_FORMAT"
 
 
 @pytest.mark.asyncio
@@ -162,7 +185,7 @@ async def test_uploadBelowMinimumResolutionReturns422(
         "/api/v1/images/upload",
         headers={"Authorization": f"Bearer {medtechToken}"},
         files={"file": ("tiny.jpg", smallJpeg, "image/jpeg")},
-        data={"specimenId": str(testSpecimen)},
+        data={"specimen_id": str(testSpecimen)},
     )
 
     assert response.status_code == 422
@@ -196,7 +219,7 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
@@ -229,7 +252,7 @@ async def test_uploadSucceedsWhenAiInferenceFails(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
             files={"file": ("specimen.jpg", jpegBytes, "image/jpeg")},
-            data={"specimenId": str(testSpecimen)},
+            data={"specimen_id": str(testSpecimen)},
         )
 
     assert response.status_code == 201, response.text
