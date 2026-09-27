@@ -160,7 +160,7 @@ it by name (SQLAlchemy resolves the driver from the connection-string scheme). E
 table gets `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY` in the migration that creates it,
 with no policies and never `FORCE` — the backend reaches data as the table owner or the
 service-role key, both of which bypass RLS, while Supabase's `anon`/`authenticated` roles are
-locked out (migration 0035, SEC-0). Never `DISABLE ROW LEVEL SECURITY`; that and model tables
+locked out (migration 0040, SEC-0). Never `DISABLE ROW LEVEL SECURITY`; that and model tables
 left unlocked are caught by `tests/test_rls_migration.py`. Rule 2 still applies on top. After
 applying migrations to any environment, run `python -m scripts.check_rls` against it. Use
 `op.execute()` for triggers. Always run `alembic heads` before

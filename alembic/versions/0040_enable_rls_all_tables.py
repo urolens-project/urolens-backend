@@ -1,8 +1,13 @@
 """enable rls on all tables
 
-Revision ID: 0035
-Revises: 0034
+Revision ID: 0040
+Revises: 0039
 Create Date: 2026-09-26
+
+Renumbered from 0035 to 0040 while retargeting UROLENS-220 onto development:
+development already had its own 0035-0039 (lab-request, patient-sex,
+dedup-hash, sample-label and queue-assignment migrations), so this one
+chains after its tip (0039) instead. Content unchanged.
 
 SEC-0 (Security & Compliance / RA 10173). Every table in the live `public`
 schema had Row Level Security disabled — 27 tables, confirmed against the
@@ -48,8 +53,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0035'
-down_revision: str | Sequence[str] | None = '0034'
+revision: str = '0040'
+down_revision: str | Sequence[str] | None = '0039'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -95,7 +100,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema.
 
-    Restores the pre-0035 state — which re-exposes every table to the anon
+    Restores the pre-0040 state — which re-exposes every table to the anon
     key. Only for rolling back a broken deploy, never as a steady state.
     """
     for table in RLS_TABLES:

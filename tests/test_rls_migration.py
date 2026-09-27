@@ -1,4 +1,4 @@
-"""Unit tests — migration 0035 (SEC-0: RLS on every table) and the guard that
+"""Unit tests — migration 0040 (SEC-0: RLS on every table) and the guard that
 keeps it true for tables added later. No database: the migration's SQL is
 captured by patching its `op`, and later migrations are read via Alembic's
 script directory. The live-database check is `scripts/check_rls.py`.
@@ -18,7 +18,7 @@ import src.models  # noqa: F401 — registers every model on Base.metadata
 from src.models.base import Base
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RLS_REVISION = "0035"
+RLS_REVISION = "0040"
 
 _ENABLE_RE = re.compile(
     r"ALTER TABLE\s+(?:IF EXISTS\s+)?(\w+)\s+ENABLE ROW LEVEL SECURITY", re.IGNORECASE
@@ -39,7 +39,7 @@ def rlsMigration(scriptDir):
 
 
 def _laterRevisions(scriptDir: ScriptDirectory):
-    # Every revision applied after 0035, newest first.
+    # Every revision applied after 0040, newest first.
     return [
         rev for rev in scriptDir.walk_revisions(base=RLS_REVISION, head="heads")
         if rev.revision != RLS_REVISION
@@ -53,8 +53,8 @@ def _runCapturingSql(migration, step: str) -> list[str]:
     return [c.args[0] for c in fakeOp.execute.call_args_list]
 
 
-def test_rlsMigrationDirectlyFollows0034(scriptDir):
-    assert scriptDir.get_revision(RLS_REVISION).down_revision == "0034"
+def test_rlsMigrationChainsAfterDevelopmentsTip(scriptDir):
+    assert scriptDir.get_revision(RLS_REVISION).down_revision == "0039"
 
 
 def test_migrationHistoryStillHasASingleHead(scriptDir):
@@ -112,13 +112,13 @@ def test_everyModelTableHasRlsEnabledByAMigration(scriptDir, rlsMigration):
     assert unlocked == [], (
         f"Model table(s) {unlocked} never get RLS enabled. Add "
         "`ALTER TABLE <name> ENABLE ROW LEVEL SECURITY` to the migration that "
-        "creates them — see 0035."
+        "creates them — see 0040."
     )
 
 
-def test_noMigrationAfter0035DisablesRls(scriptDir):
+def test_noMigrationAfter0040DisablesRls(scriptDir):
     offenders = [
         rev.revision for rev in _laterRevisions(scriptDir)
         if _DISABLE_RE.search(inspect.getsource(rev.module.upgrade))
     ]
-    assert offenders == [], f"Migration(s) {offenders} disable RLS in upgrade() — see 0035."
+    assert offenders == [], f"Migration(s) {offenders} disable RLS in upgrade() — see 0040."

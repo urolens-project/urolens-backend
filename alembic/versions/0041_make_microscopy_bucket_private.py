@@ -1,8 +1,11 @@
 """make microscopy bucket private
 
-Revision ID: 0036
-Revises: 0035
+Revision ID: 0041
+Revises: 0040
 Create Date: 2026-09-26
+
+Renumbered from 0036 to 0041 while retargeting UROLENS-220 onto development
+(see 0040's docstring). Content unchanged.
 
 SEC-0b (Security & Compliance / RA 10173). The `microscopy` Supabase Storage
 bucket — every specimen's urine microscopy image — was public (confirmed
@@ -43,8 +46,8 @@ from alembic import op
 from src.core.config import settings
 
 # revision identifiers, used by Alembic.
-revision: str = '0036'
-down_revision: str | Sequence[str] | None = '0035'
+revision: str = '0041'
+down_revision: str | Sequence[str] | None = '0040'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -76,7 +79,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema.
 
-    Restores the pre-0036 state — which makes every microscopy image public
+    Restores the pre-0041 state — which makes every microscopy image public
     again. Only for rolling back a broken deploy, never as a steady state.
     """
     _updateImageBucket(_MAKE_PUBLIC)

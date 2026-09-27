@@ -1,4 +1,4 @@
-"""Unit tests — migration 0036 (SEC-0b: microscopy bucket private). No
+"""Unit tests — migration 0041 (SEC-0b: microscopy bucket private). No
 database: the migration's connection is mocked and every statement it
 executes is captured. The live-database check is `scripts/check_rls.py`.
 """
@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def bucketMigration():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    return ScriptDirectory.from_config(config).get_revision("0036")
+    return ScriptDirectory.from_config(config).get_revision("0041")
 
 
 def _run(migration, step: str, hasStorageSchema: bool = True) -> list[tuple[str, dict | None]]:
@@ -39,7 +39,7 @@ def _run(migration, step: str, hasStorageSchema: bool = True) -> list[tuple[str,
 
 
 def test_bucketMigrationFollowsTheRlsMigration(bucketMigration):
-    assert bucketMigration.down_revision == "0035"
+    assert bucketMigration.down_revision == "0040"
 
 
 def test_upgradeMakesTheImageBucketPrivate(bucketMigration):
