@@ -33,6 +33,7 @@ from main import app
 from src.core.config import settings
 from src.core.database import getDb
 from src.models.patient import Patient
+from src.models.specimen import Specimen
 
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
 TEST_RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000091")
@@ -99,6 +100,9 @@ async def test_physicianResultDetailNotFoundReturnsFlatEnvelope(asyncClient):
 @pytest.mark.asyncio
 async def test_confirmLabelAffixedNoLabelReturnsFlatEnvelope(asyncClient):
     db = AsyncMock()
+    specimen = MagicMock(spec=Specimen)
+    specimen.status = "RECEIVED"
+    db.get = AsyncMock(return_value=specimen)
     executeResult = MagicMock()
     executeResult.scalars.return_value.first.return_value = None
     db.execute = AsyncMock(return_value=executeResult)
