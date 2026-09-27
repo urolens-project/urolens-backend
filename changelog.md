@@ -10,7 +10,7 @@
   could read, change or delete patients, users (password hashes), sessions and
   audit_logs through PostgREST without touching this backend. No client ships the
   key today (web, mobile and all four repos' full git history checked), so this was
-  exposure-by-design, not a known leak. Migration `0035` enables RLS on every table
+  exposure-by-design, not a known leak. Migration `0040` enables RLS on every table
   with no policies and without `FORCE`; the backend is unaffected because it
   connects as the table owner (SQLAlchemy/Alembic) or with the service-role key
   (Supabase REST), both of which bypass RLS. Added:
@@ -33,15 +33,15 @@
     `result_review_service` and `physician_result_service` (rule 14). If signing fails
     (e.g. the object is missing because its upload failed) `imageUrl` is `null`
     instead of the request failing.
-  - Migration `0036` makes the image bucket (`SUPABASE_IMAGE_BUCKET`, default
+  - Migration `0041` makes the image bucket (`SUPABASE_IMAGE_BUCKET`, default
     `microscopy`) private and limits it to `image/jpeg` / `image/png`, matching the
-    upload endpoint. The bucket name is a bound parameter, so `0036` needs a live
+    upload endpoint. The bucket name is a bound parameter, so `0041` needs a live
     connection (no `alembic --sql`). No bucket size limit until the backend
     has an upload cap (SEC-2).
   - `scripts/check_rls.py` also fails on any public bucket.
   Response shape unchanged (`imageUrl` is still a string or `null`), so web needs no
   change — but the signed URL expires, so a view left open past an hour needs a
-  refresh to reload its image. **Deploy the code together with `0036`**: a build still
+  refresh to reload its image. **Deploy the code together with `0041`**: a build still
   emitting public links shows broken images once the bucket is private.
 - **A rejected specimen could still reach the supervisor for approval.** Nothing
   connected specimen rejection to the result workflow, so a MedTech could reject a

@@ -57,7 +57,7 @@ All 27 `public` tables had RLS disabled; Supabase grants `anon`/`authenticated`
 full table privileges by default. Anyone with the project's anon key (public by
 design) could read, change or delete every row — patients, password hashes,
 sessions, audit logs — through PostgREST, bypassing the backend.
-**Fix:** migration `0035` enables RLS on every table with no policies; the backend
+**Fix:** migration `0040` enables RLS on every table with no policies; the backend
 is unaffected (owner and service role bypass RLS). Verified live by the ticket owner;
 `scripts/check_rls.py` and `tests/test_rls_migration.py` keep it that way.
 
@@ -65,8 +65,8 @@ is unaffected (owner and service role bypass RLS). Verified live by the ticket o
 The `microscopy` bucket was `public = true` and the supervisor-review and
 physician-result details returned permanent `/object/public/` links: no login,
 no expiry, no revocation.
-**Fix:** 1-hour signed URLs via `src/core/storage.signedImageUrl`; migration `0036`
-makes the bucket private and limits it to JPEG/PNG. Deploy code with `0036`.
+**Fix:** 1-hour signed URLs via `src/core/storage.signedImageUrl`; migration `0041`
+makes the bucket private and limits it to JPEG/PNG. Deploy code with `0041`.
 
 ### F-03 🟠 High — A released result can still be changed by a manual override
 **File:** [manual_override_service.py:67](../src/services/manual_override_service.py#L67)
@@ -154,7 +154,7 @@ own name, or discard the active image behind a finalised result.
 ### F-09 🟡 Medium — No upload size limit
 **File:** [ai_integration_service.py:102](../src/services/ai_integration_service.py#L102)
 **Issue:** `await file.read()` loads the whole upload into memory; neither the app
-nor the bucket has a size cap (bucket limit deliberately left unset in `0036` until
+nor the bucket has a size cap (bucket limit deliberately left unset in `0041` until
 this is fixed).
 **Impact:** a few concurrent multi-GB uploads exhaust the API's memory.
 **Fix:** reject on `Content-Length` over a cap (proposal: 15 MB, covers

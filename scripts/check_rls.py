@@ -1,5 +1,5 @@
 """Live-database check that no data is exposed to Supabase's client-facing
-roles or to the open internet (SEC-0 / migration 0035, SEC-0b / 0036).
+roles or to the open internet (SEC-0 / migration 0040, SEC-0b / 0041).
 
 Fails if any `public` table has Row Level Security disabled, if any RLS
 policy grants access to `anon`, `authenticated`, or `public` — the roles the
