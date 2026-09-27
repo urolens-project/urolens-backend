@@ -8,9 +8,10 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptPii
 from ..core.exceptions import SpecimenNotFoundError, UnprocessableException
 from ..models.print_job import PrintJob
@@ -19,6 +20,7 @@ from ..models.specimen import Specimen
 from ..schemas.labeling import (
     LabelConfirmResponse,
     LabelPreviewData,
+    PrintJobResponse,
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )
@@ -26,6 +28,22 @@ from ..schemas.labeling import (
 log = logging.getLogger(__name__)
 
 _MAX_SEARCH_RESULTS = 5
+_LIKE_ESCAPE_CHAR = "\\"
+
+
+def _escapeLikePattern(raw: str) -> str:
+    """Escape LIKE/ILIKE metacharacters (`%`, `_`) so a receptionist's literal
+    search text can't act as a wildcard — a bare `%` would otherwise match
+    every `RECEIVED` specimen up to `_MAX_SEARCH_RESULTS`.
+
+    The backslash itself must be escaped first — escaping `%`/`_` afterwards
+    would double-escape any backslash the caller's text already contained.
+    """
+    return (
+        raw.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace("%", f"{_LIKE_ESCAPE_CHAR}%")
+        .replace("_", f"{_LIKE_ESCAPE_CHAR}_")
+    )
 
 
 def _decryptPatientNameOrRaise(specimen: Specimen) -> str:
@@ -48,52 +66,89 @@ def _decryptPatientNameOrRaise(specimen: Specimen) -> str:
         ) from exc
 
 
-async def searchReceivedSpecimens(db: AsyncSession, q: str) -> list[ReceivedSpecimenSearchItem]:
-    """Search `RECEIVED`-status specimens by decrypted patient name, patient
-    UID, or sample UID (case-insensitive substring match).
-
-    Fetches up to 200 candidate rows and decrypts/filters in Python, since
-    patient names are encrypted at rest. A row that fails to decrypt is
-    logged and excluded rather than returned with ciphertext.
-
-    Args:
-        q: search text, matched against name/patient UID/sample UID.
+async def _labelCountsFor(db: AsyncSession, specimenIds: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """Count `sample_labels` rows (superseded or not) per specimen, in one query.
 
     Returns:
-        Up to `_MAX_SEARCH_RESULTS` matches, in the order scanned.
+        `{specimenId: count}` — a specimen with no labels yet is simply
+        absent (callers should default to 0), not present with a 0 entry.
     """
-    stmt = select(Specimen).where(Specimen.status == "RECEIVED").limit(200)
+    if not specimenIds:
+        return {}
+    stmt = (
+        select(SampleLabel.specimenId, func.count())
+        .where(SampleLabel.specimenId.in_(specimenIds))
+        .group_by(SampleLabel.specimenId)
+    )
+    rows = (await db.execute(stmt)).all()
+    return {specimenId: count for specimenId, count in rows}
+
+
+async def _currentLabelFor(db: AsyncSession, specimenId: uuid.UUID) -> SampleLabel | None:
+    """The specimen's newest, non-superseded label.
+
+    Deterministic replacement for a bare `.first()` with no ordering, which
+    — once `generateLabel` allowed more than one label row per specimen via
+    regenerate — could return whichever of several rows the query happened
+    to return first, not necessarily the current one.
+    """
+    stmt = (
+        select(SampleLabel)
+        .where(SampleLabel.specimenId == specimenId, SampleLabel.superseded.is_(False))
+        .order_by(SampleLabel.createdAt.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def searchReceivedSpecimens(db: AsyncSession, q: str) -> list[ReceivedSpecimenSearchItem]:
+    """Search `RECEIVED`-status specimens by patient UID or sample UID
+    (case-insensitive substring match, done in the database).
+
+    No longer searches or returns patient name (RA 10173 data-minimization):
+    this list only needs to let the MedTech pick the right specimen by its
+    non-PII identifiers — it has no reason to decrypt every `RECEIVED`
+    specimen's name just to do that. `generateLabel`'s preview still carries
+    `patientName` once a specific specimen is selected.
+
+    Args:
+        q: search text, matched against `patientUid`/`sampleUid`. Minimum
+            length is enforced at the route (`Query(min_length=...)`), not
+            re-checked here. `%`/`_` are escaped before use so they're
+            matched literally rather than as SQL wildcards.
+
+    Returns:
+        Up to `_MAX_SEARCH_RESULTS` matches. Each carries `labelCount`
+        (total labels generated so far, superseded or not) so the frontend
+        can show "times regenerated" after selecting a specimen.
+    """
+    pattern = f"%{_escapeLikePattern(q.strip())}%"
+    stmt = (
+        select(Specimen)
+        .where(
+            Specimen.status == "RECEIVED",
+            or_(
+                Specimen.patientUid.ilike(pattern, escape=_LIKE_ESCAPE_CHAR),
+                Specimen.sampleUid.ilike(pattern, escape=_LIKE_ESCAPE_CHAR),
+            ),
+        )
+        .limit(_MAX_SEARCH_RESULTS)
+    )
     rows = (await db.execute(stmt)).scalars().all()
 
-    qLower = q.strip().lower()
-    results: list[ReceivedSpecimenSearchItem] = []
-    for spec in rows:
-        try:
-            name = decryptPii(spec.patientName) if spec.patientName else ""
-        except Exception:
-            log.warning(
-                "Failed to decrypt patient_name for specimen_id=%s during search — "
-                "excluding from results rather than returning ciphertext.",
-                spec.specimenId,
-            )
-            continue
+    labelCounts = await _labelCountsFor(db, [spec.specimenId for spec in rows])
 
-        uid = spec.patientUid or ""
-        sampleUid = spec.sampleUid or ""
-        if qLower in name.lower() or qLower in uid.lower() or qLower in sampleUid.lower():
-            results.append(
-                ReceivedSpecimenSearchItem(
-                    specimenId=spec.specimenId,
-                    sampleUid=spec.sampleUid,
-                    patientName=name,
-                    patientUid=spec.patientUid,
-                    testType=spec.testType,
-                    status=spec.status,
-                )
-            )
-        if len(results) == _MAX_SEARCH_RESULTS:
-            break
-    return results
+    return [
+        ReceivedSpecimenSearchItem(
+            specimenId=spec.specimenId,
+            sampleUid=spec.sampleUid,
+            patientUid=spec.patientUid,
+            testType=spec.testType,
+            status=spec.status,
+            labelCount=labelCounts.get(spec.specimenId, 0),
+        )
+        for spec in rows
+    ]
 
 
 async def generateLabel(
@@ -101,11 +156,19 @@ async def generateLabel(
 ) -> PrintLabelResponse:
     """Generate and record a printable label for a `RECEIVED` specimen.
 
+    Does NOT create a print job — printing is a separate, explicit step the
+    receptionist takes after reviewing the preview (see `printLabel`, `POST
+    .../label/print`). If the specimen already has a label from an earlier
+    call (a regenerate), that prior label (and any before it) is marked
+    `superseded` first, so exactly one label per specimen is ever "current."
+
     Args:
         operator_id: the authenticated user recorded as the label's `generated_by`.
 
     Returns:
-        Confirmation of the created label and print job, plus the label preview data.
+        Confirmation of the created label plus the label preview data and
+        `labelCount` (total labels ever generated for this specimen,
+        including superseded ones — `labelCount - 1` is "times regenerated").
 
     Raises:
         SpecimenNotFoundError: `specimen_id` doesn't exist.
@@ -131,6 +194,12 @@ async def generateLabel(
         date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
+    await db.execute(
+        update(SampleLabel)
+        .where(SampleLabel.specimenId == specimenId, SampleLabel.superseded.is_(False))
+        .values(superseded=True)
+    )
+
     label = SampleLabel(
         specimenId=specimenId,
         sampleUid=specimen.sampleUid,
@@ -140,17 +209,90 @@ async def generateLabel(
     db.add(label)
     await db.flush([label])
 
-    printJob = PrintJob(labelId=label.labelId, specimenId=specimenId, status="SENT")
-    db.add(printJob)
-    await db.flush([printJob])
+    labelCount = (
+        await db.execute(
+            select(func.count())
+            .select_from(SampleLabel)
+            .where(SampleLabel.specimenId == specimenId)
+        )
+    ).scalar_one()
+
+    await AuditLogger().record(
+        eventType="LABEL_GENERATED",
+        entityType="specimen",
+        entityId=specimenId,
+        userId=operatorId,
+        detailJson={
+            "labelId": str(label.labelId),
+            "labelCount": labelCount,
+            "regenerated": labelCount > 1,
+        },
+    )
 
     await db.commit()
 
     return PrintLabelResponse(
         success=True,
         labelId=label.labelId,
-        printJobId=printJob.printJobId,
+        printJobId=None,
         preview=labelContent,
+        labelCount=labelCount,
+    )
+
+
+async def printLabel(
+    db: AsyncSession, specimenId: uuid.UUID, operatorId: uuid.UUID
+) -> PrintJobResponse:
+    """Create a print job for a specimen's current (non-superseded) label —
+    the "Print Label" button, now separate from label generation itself
+    (see `generateLabel`'s docstring for why).
+
+    Args:
+        operator_id: the authenticated user; recorded as the `userId` on
+            this action's `LABEL_PRINTED` audit entry (`print_jobs` itself
+            still has no actor column — the audit log is where this is
+            recorded, not the print-job row).
+
+    Returns:
+        Confirmation of the created print job.
+
+    Raises:
+        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        HTTPException: 400, `LABEL_NOT_FOUND`, if no label has been
+            generated yet for this specimen.
+    """
+    specimen = await db.get(Specimen, specimenId)
+    if specimen is None:
+        raise SpecimenNotFoundError(str(specimenId))
+
+    label = await _currentLabelFor(db, specimenId)
+    if label is None:
+        exc = HTTPException(
+            status_code=400,
+            detail="No label found for this specimen. Generate a label first.",
+        )
+        exc.errorCode = "LABEL_NOT_FOUND"
+        raise exc
+
+    printJob = PrintJob(labelId=label.labelId, specimenId=specimenId, status="SENT")
+    db.add(printJob)
+    await db.flush([printJob])
+
+    await AuditLogger().record(
+        eventType="LABEL_PRINTED",
+        entityType="specimen",
+        entityId=specimenId,
+        userId=operatorId,
+        detailJson={"printJobId": str(printJob.printJobId), "labelId": str(label.labelId)},
+    )
+
+    await db.commit()
+
+    return PrintJobResponse(
+        success=True,
+        printJobId=printJob.printJobId,
+        labelId=label.labelId,
+        status=printJob.status,
     )
 
 
@@ -168,20 +310,33 @@ async def confirmLabelAffixed(
             offline-override label is created here.
         offline_override: if `True` and no label record exists yet, creates
             one on the fly (flagged `offline_override: True` in its content)
-            instead of requiring `generate_label` to have run first.
+            instead of requiring `generate_label` to have run first. Skips
+            the printer requirement only — the specimen must still be
+            `RECEIVED`, same as the normal path.
 
     Returns:
         Confirmation of the status transition.
 
     Raises:
-        HTTPException: 400, if no label exists and `offline_override` is `False`.
-        SpecimenNotFoundError: `specimen_id` doesn't exist (checked when a
-            label must be looked up or created against it).
-        UnprocessableException: the patient name fails to decrypt while
-            building an offline-override label (`PATIENT_NAME_DECRYPTION_FAILED`).
+        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        UnprocessableException: `SPECIMEN_NOT_RECEIVED`, if the specimen
+            isn't in `RECEIVED` status — checked before any label lookup,
+            with or without `offline_override`. Also raised
+            (`PATIENT_NAME_DECRYPTION_FAILED`) if the patient name fails to
+            decrypt while building an offline-override label.
+        HTTPException: 400, `LABEL_NOT_FOUND`, if no label exists and
+            `offline_override` is `False`.
     """
-    stmt = select(SampleLabel).where(SampleLabel.specimenId == specimenId)
-    label = (await db.execute(stmt)).scalars().first()
+    specimen = await db.get(Specimen, specimenId)
+    if specimen is None:
+        raise SpecimenNotFoundError(str(specimenId))
+    if specimen.status != "RECEIVED":
+        raise UnprocessableException(
+            code="SPECIMEN_NOT_RECEIVED",
+            message=f"Specimen is in state '{specimen.status}'. Must be RECEIVED to confirm labeling.",
+        )
+
+    label = await _currentLabelFor(db, specimenId)
 
     if label is None:
         if not offlineOverride:
@@ -191,10 +346,6 @@ async def confirmLabelAffixed(
             )
             exc.errorCode = "LABEL_NOT_FOUND"
             raise exc
-
-        specimen = await db.get(Specimen, specimenId)
-        if specimen is None:
-            raise SpecimenNotFoundError(str(specimenId))
 
         patientName = _decryptPatientNameOrRaise(specimen)
         label = SampleLabel(
@@ -213,14 +364,18 @@ async def confirmLabelAffixed(
         db.add(label)
         await db.flush([label])
         log.warning("Offline override used for specimen %s. Label: %s", specimenId, label.labelId)
-    else:
-        specimen = await db.get(Specimen, specimenId)
-        if specimen is None:
-            raise SpecimenNotFoundError(str(specimenId))
 
     specimen.status = "LABELED"
     label.affixedConfirmed = True
     label.affixedAt = datetime.now(UTC)
+
+    await AuditLogger().record(
+        eventType="LABEL_CONFIRMED",
+        entityType="specimen",
+        entityId=specimenId,
+        userId=operatorId,
+        detailJson={"labelId": str(label.labelId), "offlineOverride": offlineOverride},
+    )
 
     await db.commit()
 
