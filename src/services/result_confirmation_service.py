@@ -25,6 +25,7 @@ from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
 from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
+from .consent_check import requireProcessingConsent
 from .notification_service import NotificationService
 from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import getAssignedSpecimen
@@ -107,6 +108,9 @@ class ResultConfirmationService:
                 specimen no longer exists.
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
                 assigned to `medtechId`.
+            ConflictException: `CONSENT_REFUSED`, if the patient refused
+                consent to processing (a missing consent record is audited as
+                `CONSENT_NOT_ON_FILE`, not refused).
         """
         result = await self._getResult(resultId)
         # Guard: only the MedTech the specimen is assigned to may confirm it.
@@ -144,6 +148,9 @@ class ResultConfirmationService:
                     "or sent for supervisor approval."
                 ),
             )
+        await requireProcessingConsent(
+            self.db, specimen, medtechId, self.auditLogger, action="RESULT_CONFIRM", request=request
+        )
 
         wasReturned = result.status == ResultStatus.RETURNED_FOR_CORRECTION
 
@@ -231,6 +238,33 @@ class ResultConfirmationService:
         return confirmation
 
     async def listPendingForMedtech(
+        self, medtechId: uuid.UUID, page: int, pageSize: int, request: Request | None = None
+    ) -> dict:
+        """List results awaiting this MedTech's confirmation, recording the view.
+
+        When the page shows any results (patient names included), the view is
+        recorded as `PENDING_RESULTS_VIEWED` with the result IDs shown, in the
+        same transaction (RA 10173). See `_queryPendingForMedtech` for the
+        listing itself.
+
+        Returns:
+            A dict with `items`, `total`, `page`, `pageSize`.
+        """
+        listing = await self._queryPendingForMedtech(medtechId, page, pageSize)
+        if listing["items"]:
+            await self.auditLogger.record(
+                eventType="PENDING_RESULTS_VIEWED",
+                entityType="user",
+                entityId=medtechId,
+                userId=medtechId,
+                db=self.db,
+                detailJson={"result_ids": [str(item["resultId"]) for item in listing["items"]]},
+                request=request,
+            )
+            await self.db.commit()
+        return listing
+
+    async def _queryPendingForMedtech(
         self, medtechId: uuid.UUID, page: int, pageSize: int
     ) -> dict:
         """Lists results awaiting this MedTech's confirmation: their own

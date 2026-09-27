@@ -142,6 +142,7 @@ class PatientResultService:
         self.db.add(ResultView(resultId=resultId, patientId=patientId))
 
         await self.auditLogger.record(
+            db=self.db,
             eventType="RESULT_VIEWED",
             entityType="analysis_result",
             entityId=row.resultId,

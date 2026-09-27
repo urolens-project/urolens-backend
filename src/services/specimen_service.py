@@ -171,6 +171,7 @@ async def receiveSpecimen(
     labRequest.status = parentUpdateStatus
 
     await AuditLogger().record(
+        db=db,
         eventType="SPECIMEN_RECEIVED" if payload.visualCheckPassed else "SPECIMEN_REJECTED",
         entityType="specimen",
         entityId=specimen.specimenId,

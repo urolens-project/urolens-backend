@@ -91,6 +91,7 @@ class ImageRetakeService:
         image.discardedAt = nowUtc
 
         await self.auditLogger.record(
+            db=self.db,
             eventType="IMAGE_DISCARDED",
             entityType="image",
             entityId=imageId,

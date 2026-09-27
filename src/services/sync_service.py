@@ -4,6 +4,10 @@ queue assignments, and analysis results from Supabase.
 import asyncio
 from datetime import UTC, datetime
 
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.audit_logger import AuditLogger
 from src.core.supabase import supabase
 
 # Columns to select per table — only what the mobile sync needs
@@ -36,16 +40,24 @@ def _toStr(val) -> str | None:
     return str(val)
 
 
-async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
+async def pull(
+    db: AsyncSession, userId: str, lastSyncedAt: datetime | None, request: Request | None = None
+) -> dict:
     """Build a sync payload for one MedTech: their specimens, queue
     assignments, and the analysis results for those specimens.
 
+    When the payload carries any specimens or results (patient names
+    included), the pull is recorded as `SYNC_PULLED` — with the specimen IDs
+    sent — in `db`'s transaction (RA 10173).
+
     Args:
-        user_id: the requesting MedTech's user ID; specimens/assignments are
+        db: the request's session, used only for the audit row.
+        userId: the requesting MedTech's user ID; specimens/assignments are
             scoped to this user.
-        last_synced_at: if given, only rows updated after this timestamp are
+        lastSyncedAt: if given, only rows updated after this timestamp are
             returned (as `updated`); if `None`, all rows are returned (as
             `created`) — a full sync.
+        request: the inbound request, for the audit row's client IP.
 
     Returns:
         A dict with `timestamp` (server time of this sync) and `changes`,
@@ -54,6 +66,9 @@ async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
         with the DB primary key column remapped to `"id"`.
     """
     isDelta = lastSyncedAt is not None
+    # Taken before any read: the client stores it as its next lastSyncedAt,
+    # so a row updated while this pull runs is still picked up next time.
+    syncedAt = datetime.now(UTC).isoformat()
     ts = lastSyncedAt.isoformat() if isDelta else None
 
     # ── 1 + 2. Specimens and queue_assignments in parallel ────────────────────
@@ -98,8 +113,26 @@ async def pull(userId: str, lastSyncedAt: datetime | None) -> dict:
             return {"created": [], "updated": records}
         return {"created": records, "updated": []}
 
+    if specimens or analysisResults:
+        # RA 10173: the payload carries patient names and results — record
+        # which ones this device received, in the request's transaction.
+        await AuditLogger().record(
+            eventType="SYNC_PULLED",
+            entityType="user",
+            entityId=userId,
+            userId=userId,
+            db=db,
+            detailJson={
+                "delta": isDelta,
+                "specimen_ids": [str(s["id"]) for s in specimens],
+                "result_ids": [str(r["id"]) for r in analysisResults],
+            },
+            request=request,
+        )
+        await db.commit()
+
     return {
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": syncedAt,
         "changes": {
             "specimens":        makeChanges(specimens),
             "queueAssignments": makeChanges(queueAssignments),
