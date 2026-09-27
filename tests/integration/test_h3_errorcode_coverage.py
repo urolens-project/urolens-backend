@@ -99,13 +99,17 @@ async def test_physicianResultDetailNotFoundReturnsFlatEnvelope(asyncClient):
 
 @pytest.mark.asyncio
 async def test_confirmLabelAffixedNoLabelReturnsFlatEnvelope(asyncClient):
+    """Labeling is Receptionist-gated (UROLENS-142 RBAC fix) — minted as
+    RECEPTIONIST, not MEDTECH, so this still reaches the LABEL_NOT_FOUND
+    path being tested rather than 403ing on the role check.
+    """
     db = AsyncMock()
     executeResult = MagicMock()
     executeResult.scalars.return_value.first.return_value = None
     db.execute = AsyncMock(return_value=executeResult)
     _overrideDb(db)
     try:
-        token = _mintToken("MEDTECH")
+        token = _mintToken("RECEPTIONIST")
         with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
             response = await asyncClient.post(
                 f"/api/v1/specimens/{TEST_LABEL_SPECIMEN_ID}/label/confirm",

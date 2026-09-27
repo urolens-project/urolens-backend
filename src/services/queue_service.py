@@ -4,7 +4,9 @@ assignment, for both the supervisor/admin and receptionist-facing flows.
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
@@ -16,6 +18,9 @@ from src.core.exceptions import (
     SpecimenNotFoundError,
     UnprocessableException,
 )
+from src.models.queue_assignment import QueueAssignment
+from src.models.specimen import Specimen
+from src.models.user import User
 from src.schemas.queue import (
     MedTechWorkload,
     MedTechWorkloadItem,
@@ -24,6 +29,13 @@ from src.schemas.queue import (
     QueueAssignResponse,
 )
 from src.services.notification_service import NotificationService
+
+_ACTIVE_WORK_STATUSES = ("ASSIGNED", "IN_QUEUE", "PROCESSING")
+"""The one workload definition shared by `getWorkloads` and
+`getReceptionistWorkloads` (see `_medtechActiveCounts`) — specimen-status
+based, not a `queue_assignments.status` count, since a specimen's own status
+reflects real in-flight work regardless of any assignment-row bookkeeping.
+"""
 
 
 class QueueService:
@@ -41,33 +53,42 @@ class QueueService:
         self._notificationService = _notificationService
         self.sqlalchemyDb = sqlalchemyDb
 
+    async def _medtechActiveCounts(self) -> list[tuple[UUID, str, int]]:
+        """One `(userId, username, activeCount)` row per active MedTech, in a
+        single joined/aggregated query — not fetch-everything-then-filter-in-
+        Python.
+
+        `activeCount` is `Specimen.status IN _ACTIVE_WORK_STATUSES` for
+        specimens currently assigned to that MedTech (`Specimen.medtechId`),
+        not a `queue_assignments`-row count. `getWorkloads` and
+        `getReceptionistWorkloads` both call this exact method, so they
+        cannot disagree for the same data.
+        """
+        stmt = (
+            select(User.userId, User.username, func.count(Specimen.specimenId))
+            .outerjoin(
+                Specimen,
+                (Specimen.medtechId == User.userId)
+                & (Specimen.status.in_(_ACTIVE_WORK_STATUSES)),
+            )
+            .where(User.role == UserRole.MEDTECH, User.isActive.is_(True))
+            .group_by(User.userId, User.username)
+        )
+        rows = (await self.sqlalchemyDb.execute(stmt)).all()
+        return list(rows)
+
     async def getWorkloads(self) -> list[MedTechWorkload]:
-        """List active MedTechs with their current active queue-assignment
-        count, ascending by count (least-loaded first).
+        """List active MedTechs with their current active-specimen count,
+        ascending by count (least-loaded first).
 
         Returns:
             One `MedTechWorkload` per active MedTech.
         """
-        usersResult = await self.db.table("users").select(
-            "user_id", "username"
-        ).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
-
-        medtechs = usersResult.data or []
-        workloads: list[MedTechWorkload] = []
-
-        for medtech in medtechs:
-            medtechId = medtech["user_id"]
-            queueResult = await self.db.table("queue_assignments").select(
-                "assignment_id"
-            ).eq("medtech_id", str(medtechId)).eq("status", "ACTIVE").execute()
-            queueCount = len(queueResult.data or [])
-
-            workloads.append(MedTechWorkload(
-                medtechId=medtechId,
-                username=medtech["username"],
-                queueCount=queueCount,
-            ))
-
+        rows = await self._medtechActiveCounts()
+        workloads = [
+            MedTechWorkload(medtechId=userId, username=username, queueCount=count)
+            for userId, username, count in rows
+        ]
         workloads.sort(key=lambda w: w.queueCount)
         return workloads
 
@@ -80,9 +101,20 @@ class QueueService:
         """Assign a `LABELED` specimen to an active MedTech, advancing it to
         `ASSIGNED`, notifying the MedTech, and writing an audit log entry.
 
-        If the specimen-status update fails after the assignment row is
-        created, the assignment row is deleted to avoid leaving an orphaned
-        assignment with no corresponding status change.
+        Race-safety (UROLENS-142): two concurrent requests for the same
+        specimen can both pass the initial status/existing-assignment checks
+        before either writes — closed at the DB level, not just by that
+        pre-check, via a partial unique index (`ix_queue_assignments_one_
+        active_per_specimen`, migration 0035) on `specimen_id WHERE status =
+        'ACTIVE'`, plus a conditional `UPDATE ... WHERE status = 'LABELED'`
+        on the specimen row. The insert runs inside a SAVEPOINT
+        (`db.begin_nested()`) so a constraint violation only rolls back that
+        one statement, not the whole transaction — this is exactly the
+        transactional guarantee AsyncSession has over the old Supabase-REST
+        multi-step flow (three independent HTTP calls, no shared transaction).
+        Whichever side loses — constraint violation, or the conditional
+        update affecting 0 rows — gets the same `SPECIMEN_ALREADY_ASSIGNED`
+        the pre-check would already raise in the non-race case.
 
         Args:
             assigned_by: the authenticated user recorded as the assignment's author.
@@ -91,97 +123,85 @@ class QueueService:
             Confirmation of the created assignment.
 
         Raises:
-            HTTPException: 404 (`SPECIMEN_NOT_FOUND`/`MEDTECH_NOT_FOUND`), if
-                the specimen or MedTech doesn't exist (or the MedTech isn't
-                active). 422 (`INVALID_SPECIMEN_STATUS`), if the specimen
-                isn't `LABELED`. 422 (`SPECIMEN_ALREADY_ASSIGNED`), if it
-                already has an active assignment. 500
-                (`ASSIGNMENT_FAILED`/`STATUS_UPDATE_FAILED`), if the
-                assignment insert or the specimen status update returns no data.
+            SpecimenNotFoundError: `data.specimen_id` doesn't exist.
+            UnprocessableException: `INVALID_SPECIMEN_STATUS`, if the
+                specimen isn't `LABELED`. `SPECIMEN_ALREADY_ASSIGNED`, if it
+                already has (or, under a race, ends up with) an active
+                assignment.
+            NotFoundException: `MEDTECH_NOT_FOUND`, if `data.medtech_id`
+                doesn't exist, isn't `MEDTECH`, or isn't active.
         """
-        specimenResult = await self.db.table("specimens").select(
-            "specimen_id", "status"
-        ).eq("specimen_id", str(data.specimenId)).execute()
+        db = self.sqlalchemyDb
 
-        if not specimenResult.data:
+        specimen = await db.get(Specimen, data.specimenId)
+        if specimen is None:
             raise SpecimenNotFoundError(str(data.specimenId))
-
-        specimen = specimenResult.data[0]
-        if specimen["status"] != "LABELED":
+        if specimen.status != "LABELED":
             raise UnprocessableException(
                 code="INVALID_SPECIMEN_STATUS",
                 message="Specimen must be in LABELED status to be assigned.",
             )
 
-        medtechResult = await self.db.table("users").select(
-            "user_id"
-        ).eq("user_id", str(data.medtechId)).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
-
-        if not medtechResult.data:
+        medtech = await db.get(User, data.medtechId)
+        if medtech is None or medtech.role != UserRole.MEDTECH or not medtech.isActive:
             raise NotFoundException(
                 code="MEDTECH_NOT_FOUND", message="MedTech not found or not active."
             )
 
-        existingAssignment = await self.db.table("queue_assignments").select(
-            "assignment_id"
-        ).eq("specimen_id", str(data.specimenId)).eq("status", "ACTIVE").execute()
-
-        if existingAssignment.data:
+        existingActive = (
+            await db.execute(
+                select(QueueAssignment.assignmentId).where(
+                    QueueAssignment.specimenId == data.specimenId,
+                    QueueAssignment.status == "ACTIVE",
+                )
+            )
+        ).scalar_one_or_none()
+        if existingActive is not None:
             raise UnprocessableException(
                 code="SPECIMEN_ALREADY_ASSIGNED",
                 message="This specimen is already assigned to a MedTech.",
             )
 
-        assignmentPayload = {
-            "specimen_id": str(data.specimenId),
-            "medtech_id": str(data.medtechId),
-            "assigned_by": str(assignedBy),
-            "assigned_at": datetime.now(UTC).isoformat(),
-            "status": "ACTIVE",
-        }
-
-        assignmentResult = await self.db.table("queue_assignments").insert(assignmentPayload).execute()
-        if not assignmentResult.data:
-            exc = HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create queue assignment.",
-            )
-            exc.errorCode = "ASSIGNMENT_FAILED"
-            raise exc
-
-        assignmentRow = assignmentResult.data[0]
-        assignmentId = assignmentRow["assignment_id"]
-
+        assignedAt = datetime.now(UTC)
+        assignment = QueueAssignment(
+            specimenId=data.specimenId,
+            medtechId=data.medtechId,
+            assignedBy=assignedBy,
+            assignedAt=assignedAt,
+            status="ACTIVE",
+        )
+        db.add(assignment)
         try:
-            updateResult = await self.db.table("specimens").update(
-            {
-                "status": "ASSIGNED",
-                "medtech_id": str(data.medtechId),  # ← add this
-                "assigned_at": datetime.now(UTC).isoformat(),  # ← good to track too
-            }
-             ).eq("specimen_id", str(data.specimenId)).execute()
+            async with db.begin_nested():
+                await db.flush([assignment])
+        except IntegrityError:
+            # Lost the race: the other request's insert won the partial
+            # unique index first. Same code the pre-check above would have
+            # raised had it run a moment later.
+            raise UnprocessableException(
+                code="SPECIMEN_ALREADY_ASSIGNED",
+                message="This specimen is already assigned to a MedTech.",
+            ) from None
 
-            if not updateResult.data:
-                await self.db.table("queue_assignments").delete().eq(
-                    "assignment_id", assignmentId
-                ).execute()
-                exc = HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to update specimen status.",
-                )
-                exc.errorCode = "STATUS_UPDATE_FAILED"
-                raise exc
-        except HTTPException:
-            raise
-        except Exception:
-            await self.db.table("queue_assignments").delete().eq(
-                "assignment_id", assignmentId
-            ).execute()
-            raise
+        updateResult = await db.execute(
+            update(Specimen)
+            .where(Specimen.specimenId == data.specimenId, Specimen.status == "LABELED")
+            .values(status="ASSIGNED", medtechId=data.medtechId, assignedAt=assignedAt)
+        )
+        if updateResult.rowcount == 0:
+            # The specimen's status changed out from under us between our
+            # first read and this UPDATE (e.g. lost a different race on the
+            # same specimen) — same outcome as already-assigned, not a
+            # separate error path.
+            await db.rollback()
+            raise UnprocessableException(
+                code="SPECIMEN_ALREADY_ASSIGNED",
+                message="This specimen is already assigned to a MedTech.",
+            )
 
         await self._notificationService.notify(
             data.medtechId,
-            f"New specimen assigned: {data.specimenId}",
+            f"New specimen assigned: {specimen.sampleUid or data.specimenId}",
             "SAMPLE_ASSIGNED",
             entityId=data.specimenId,
         )
@@ -189,9 +209,8 @@ class QueueService:
         await self.auditLogger.record(
             "QUEUE_ASSIGNED",
             entityType="queue_assignment",
-            entityId=assignmentId,
+            entityId=assignment.assignmentId,
             userId=assignedBy,
-            db=self.sqlalchemyDb,
             detailJson={
                 "specimen_id": str(data.specimenId),
                 "medtech_id": str(data.medtechId),
@@ -199,12 +218,14 @@ class QueueService:
             request=request,
         )
 
+        await db.commit()
+
         return QueueAssignResponse(
-            assignmentId=assignmentId,
+            assignmentId=assignment.assignmentId,
             specimenId=data.specimenId,
             medtechId=data.medtechId,
             assignedBy=assignedBy,
-            assignedAt=assignmentRow.get("assigned_at", datetime.now(UTC)),
+            assignedAt=assignedAt,
             status="ACTIVE",
         )
 
@@ -266,52 +287,22 @@ class QueueService:
         return items
 
     async def getReceptionistWorkloads(self) -> list[MedTechWorkloadItem]:
-        """Return all active MedTechs with their active specimen queue depth.
-        Active = specimens.status IN (ASSIGNED, IN_QUEUE, PROCESSING).
-        Sorted ascending by active_count (least-loaded first).
+        """Return all active MedTechs with their active specimen queue depth,
+        sorted ascending by `activeCount` (least-loaded first).
+
+        `fullName` is the username — `users` has no display-name column
+        (confirmed absent again here; same data gap 137 already found, not
+        fabricated). Uses the same `_medtechActiveCounts` query `getWorkloads`
+        does, so the two can never report different numbers for the same
+        MedTech under the same data.
 
         Returns:
             One `MedTechWorkloadItem` per active MedTech.
         """
-        usersRes = await self.db.table("users").select(
-            "user_id, username"
-        ).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
-
-        medtechs = usersRes.data or []
-        if not medtechs:
-            return []
-
-        medtechIds = [str(m["user_id"]) for m in medtechs]
-
-        qaRes = await self.db.table("queue_assignments").select(
-            "medtech_id, specimen_id"
-        ).in_("medtech_id", medtechIds).execute()
-
-        qaRows = qaRes.data or []
-        activeSpecIds: set[str] = set()
-
-        if qaRows:
-            specIds = list({str(qa["specimen_id"]) for qa in qaRows})
-            specRes = await self.db.table("specimens").select(
-                "specimen_id"
-            ).in_("specimen_id", specIds).in_(
-                "status", ["ASSIGNED", "IN_QUEUE", "PROCESSING"]
-            ).execute()
-            activeSpecIds = {str(s["specimen_id"]) for s in (specRes.data or [])}
-
-        medtechCounts: dict[str, int] = {m["user_id"]: 0 for m in medtechs}
-        for qa in qaRows:
-            if str(qa["specimen_id"]) in activeSpecIds:
-                mid = str(qa["medtech_id"])
-                medtechCounts[mid] = medtechCounts.get(mid, 0) + 1
-
+        rows = await self._medtechActiveCounts()
         items = [
-            MedTechWorkloadItem(
-                userId=UUID(m["user_id"]),
-                fullName=m["username"],
-                activeCount=medtechCounts.get(m["user_id"], 0),
-            )
-            for m in medtechs
+            MedTechWorkloadItem(userId=userId, fullName=username, activeCount=count)
+            for userId, username, count in rows
         ]
         items.sort(key=lambda x: x.activeCount)
         return items
