@@ -182,12 +182,23 @@ async def test_generateLabelSucceedsForReceptionist(asyncClient):
 
     db.flush = AsyncMock(side_effect=_flush)
     db.commit = AsyncMock()
+
+    # generateLabel (post-UROLENS-141 merge) also runs a supersede UPDATE
+    # and a labelCount SELECT count(*) via db.execute — a bare AsyncMock's
+    # auto-created `.scalar_one()` is itself an AsyncMock (a coroutine when
+    # called), so it must be pinned to a plain MagicMock result explicitly,
+    # or `labelCount > 1` blows up comparing a coroutine to an int.
+    countResult = MagicMock()
+    countResult.scalar_one.return_value = 1
+    db.execute = AsyncMock(side_effect=[MagicMock(), countResult])
+
     _overrideDb(db)
     try:
         token = _mintToken("RECEPTIONIST")
         with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)), patch(
             "src.services.labeling_service.decryptPii", return_value="Juan Dela Cruz"
-        ):
+        ), patch("src.services.labeling_service.AuditLogger") as mockAuditCls:
+            mockAuditCls.return_value.record = AsyncMock()
             response = await asyncClient.post(
                 f"/api/v1/specimens/{SPECIMEN_ID}/label",
                 headers={"Authorization": f"Bearer {token}"},
@@ -216,7 +227,10 @@ async def test_confirmLabelAffixedSucceedsForReceptionist(asyncClient):
     _overrideDb(db)
     try:
         token = _mintToken("RECEPTIONIST")
-        with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
+        with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)), patch(
+            "src.services.labeling_service.AuditLogger"
+        ) as mockAuditCls:
+            mockAuditCls.return_value.record = AsyncMock()
             response = await asyncClient.post(
                 f"/api/v1/specimens/{SPECIMEN_ID}/label/confirm",
                 headers={"Authorization": f"Bearer {token}"},

@@ -1,8 +1,15 @@
 """queue_assignments one active assignment per specimen
 
-Revision ID: 0035
-Revises: 0034
+Revision ID: 0039
+Revises: 0038
 Create Date: 2026-09-28 00:00:00.000000
+
+Renumbered from 0035 to 0039 while merging this branch into development:
+this branch's own 0035 (this file) collided with revision IDs already
+claimed and renumbered by other, already-merged branches (see
+0038_sample_labels_superseded.py's docstring for the same class of
+collision, hit twice in this same merge). Chained after the current chain
+tip (0038) instead.
 
 UROLENS-142: `assignSpecimen` used to check-for-existing-assignment then
 insert as two separate, unguarded steps — two concurrent requests for the
@@ -29,8 +36,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0035'
-down_revision: str | Sequence[str] | None = '0034'
+revision: str = '0039'
+down_revision: str | Sequence[str] | None = '0038'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

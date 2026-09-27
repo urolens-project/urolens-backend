@@ -73,6 +73,7 @@ async def test_createLabRequestReturnsPatientNotFoundCodeInResponseBody(
             json={
                 "patientId": str(uuid.uuid4()),
                 "testType": "Urinalysis",
+                "physicianName": "Dr. Santos",
             },
         )
 

@@ -27,6 +27,7 @@ from .labeling import (  # noqa: F401
     LabelConfirmRequest,
     LabelConfirmResponse,
     LabelPreviewData,
+    PrintJobResponse,
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )

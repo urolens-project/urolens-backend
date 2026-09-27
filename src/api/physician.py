@@ -64,6 +64,7 @@ async def createLabRequest(
         clinicalNotes=body.clinicalNotes,
         physicianId=physicianId,
         physicianName=claims["username"],
+        specialInstructions=body.specialInstructions,
         notifyReceptionists=True,
         ipAddress=ipAddress,
     )
