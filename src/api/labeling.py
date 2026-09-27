@@ -6,7 +6,7 @@ Sample Label") — every step here is a Receptionist action, not a MedTech one.
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import getDb
@@ -15,6 +15,7 @@ from src.core.rbac import RequireRole
 from src.schemas.labeling import (
     LabelConfirmRequest,
     LabelConfirmResponse,
+    PrintJobResponse,
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )
@@ -30,11 +31,11 @@ _receptionist = RequireRole([UserRole.RECEPTIONIST])
 
 @router.get("/search-received", response_model=list[ReceivedSpecimenSearchItem])
 async def searchReceivedSpecimens(
-    q: str,
+    q: str = Query(min_length=3),
     currentUser: dict = Depends(_receptionist),
     db: AsyncSession = Depends(getDb),
 ):
-    """Search `RECEIVED` specimens by name/UID; see
+    """Search `RECEIVED` specimens by patient/sample UID; see
     `labeling_service.search_received_specimens`.
     """
     return await labeling_service.searchReceivedSpecimens(db, q)
@@ -49,6 +50,19 @@ async def generateSpecimenLabelEndpoint(
     """Generate a specimen label; see `labeling_service.generate_label`."""
     operatorId = uuid.UUID(currentUser["user_id"])
     return await labeling_service.generateLabel(db, id, operatorId)
+
+
+@router.post("/{id}/label/print", response_model=PrintJobResponse, status_code=201)
+async def printSpecimenLabelEndpoint(
+    id: UUID,
+    currentUser: dict = Depends(_receptionist),
+    db: AsyncSession = Depends(getDb),
+):
+    """Create a print job for a specimen's current label; see
+    `labeling_service.printLabel`.
+    """
+    operatorId = uuid.UUID(currentUser["user_id"])
+    return await labeling_service.printLabel(db, id, operatorId)
 
 
 @router.post("/{id}/label/confirm", response_model=LabelConfirmResponse)
