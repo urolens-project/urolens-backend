@@ -29,7 +29,7 @@ from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 
 # Import every model that shares the SQLAlchemy registry so all forward-reference
 # strings (e.g. "Specimen") are resolvable before mapper configuration is triggered.
-from src.models.specimen import Specimen  # noqa: F401
+from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import (
@@ -88,6 +88,12 @@ def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     executeResult = MagicMock()
     executeResult.scalar_one_or_none.return_value = result
     db.execute = AsyncMock(return_value=executeResult)
+    # confirmResult's ownership check (SEC-2) loads the specimen: make it the
+    # confirming MedTech's own.
+    specimen = MagicMock(spec=Specimen)
+    specimen.medtechId = MEDTECH_ID
+    specimen.status = "PROCESSING"
+    db.get = AsyncMock(return_value=specimen)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()

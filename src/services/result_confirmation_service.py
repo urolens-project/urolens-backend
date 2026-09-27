@@ -27,6 +27,7 @@ from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
 from .notification_service import NotificationService
 from .smart_diagnosis_service import SmartDiagnosisService
+from .specimen_access import getAssignedSpecimen
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +103,20 @@ class ResultConfirmationService:
             ConflictException: (`SPECIMEN_REJECTED`) the result's specimen has
                 been rejected.
             UnprocessableException: a pending image retake blocks confirmation.
+            SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if the result's
+                specimen no longer exists.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+                assigned to `medtechId`.
         """
         result = await self._getResult(resultId)
+        # Guard: only the MedTech the specimen is assigned to may confirm it.
+        # Checked before any state guard so a non-owner learns nothing about
+        # the result's status.
+        specimen = await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+        # Re-read now that the specimen is locked: the first read only told us
+        # which specimen to lock, and a concurrent upload may have reset the
+        # result since.
+        result = await self._getResult(resultId, fresh=True)
 
         # Guard: pending retake blocks confirmation (checked first so this
         # specific message wins over the generic one below).
@@ -123,8 +136,7 @@ class ResultConfirmationService:
         # this, a MedTech who rejects the specimen after the AI ran could still
         # confirm (or replay a queued offline confirm of) its result, putting it
         # in the approval queue for a specimen the lab has thrown out.
-        specimen = await self.db.get(Specimen, result.specimenId)
-        if specimen is not None and specimen.status == "REJECTED":
+        if specimen.status == "REJECTED":
             raise ConflictException(
                 code="SPECIMEN_REJECTED",
                 message=(
@@ -297,12 +309,15 @@ class ResultConfirmationService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _getResult(self, resultId: uuid.UUID) -> AnalysisResult:
+    async def _getResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # Loads the result with manual_overrides eagerly, or raises
-        # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist.
+        # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist. `fresh`
+        # overwrites the already-loaded object with the current DB state.
         stmt = select(AnalysisResult).options(
             selectinload(AnalysisResult.manualOverrides)
         ).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:

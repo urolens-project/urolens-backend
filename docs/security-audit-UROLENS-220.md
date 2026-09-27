@@ -305,10 +305,11 @@ All four repos are **public**, so this needs to stay true — see *Recommendatio
 
 | Finding | Where it gets fixed | Status |
 |---|---|---|
-| F-01, F-02 | SEC-0, SEC-0b — this branch | ✅ Fixed |
-| F-03, F-04, F-08 | **SEC-2** (`fix/UROLENS-220-sec-2-access-control-upload-hardening`) — ownership + editable-status guards | 🔜 Planned, Sprint 5 |
-| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG only, 10 MB cap) | 🔜 Planned, Sprint 5 |
-| F-10, F-14, F-15, F-16 | **SEC-2** — dependency batch 1 (cryptography 50.0.0 as a later batch 2) | 🔜 Planned, Sprint 5 |
+| F-01, F-02 | SEC-0, SEC-0b (`feat/UROLENS-220-supabase-security-compliance`) | ✅ Fixed |
+| F-03, F-04, F-08 | **SEC-2** (`fix/UROLENS-220-sec-2-access-control-upload-hardening`) — ownership + editable-status guards (`services/specimen_access.py`), specimen row lock | ✅ Fixed |
+| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG decoders only, 10 MB cap, migration `0037`) | ✅ Fixed |
+| F-10, F-14, F-16 | **SEC-2** — dependency batch 1 | ✅ Fixed |
+| F-15 | SEC-2 took cryptography to 48.0.1 (OpenSSL fix); the X.509/PKCS#7 advisories need 50.0.0 | 🟡 Partly — batch 2 |
 | F-06, F-07 | SEC-2, or UROLENS-81 (JWT/RBAC hardening) — confirm with its owner | ⏳ Pending that decision |
 | F-12 | Pin the AI engine commit (one line; coordinate with the AI engine owner) | 🔜 Planned |
 | F-11 | SEC-3 (`feat/UROLENS-220-sec-3-ra10173-controls`) | Next sprint |

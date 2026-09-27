@@ -19,7 +19,9 @@ from sqlalchemy.exc import IntegrityError
 
 from src.core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
+    SpecimenNotFoundError,
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
@@ -31,6 +33,7 @@ from src.services.smart_diagnosis_service import SmartDiagnosisService
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000041")
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000042")
+OTHER_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000043")
 
 
 def _makeResult(
@@ -49,8 +52,17 @@ def _makeResult(
     return result
 
 
-def _makeDbMock(getResultReturn) -> AsyncMock:
+def _makeSpecimen(status: str = "PROCESSING", medtechId: uuid.UUID = MEDTECH_ID) -> Specimen:
+    specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
+    specimen.status = status
+    specimen.medtechId = medtechId
+    return specimen
+
+
+def _makeDbMock(getResultReturn, specimen: Specimen | None = None) -> AsyncMock:
     db = AsyncMock()
+    db.get = AsyncMock(return_value=specimen if specimen is not None else _makeSpecimen())
     executeResult = MagicMock()
     executeResult.scalar_one_or_none.return_value = getResultReturn
     db.execute = AsyncMock(return_value=executeResult)
@@ -154,9 +166,7 @@ async def test_confirmIsBlockedWhenSpecimenWasRejected(resultStatus):
     """
     result = _makeResult(status=resultStatus)
     db = _makeDbMock(getResultReturn=result)
-    rejectedSpecimen = MagicMock(spec=Specimen)
-    rejectedSpecimen.status = "REJECTED"
-    db.get = AsyncMock(return_value=rejectedSpecimen)
+    db.get = AsyncMock(return_value=_makeSpecimen(status="REJECTED"))
     service = _makeService(db)
 
     with pytest.raises(ConflictException) as excInfo:
@@ -231,3 +241,50 @@ async def test_confirmMergesManualOverridesIntoParticleClasses():
     await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
 
     assert result.particleClasses == {"RBC": 15.0, "WBC": 4}
+
+
+# ── Ownership (SEC-2, security audit F-08) ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_confirmIsForbiddenForAMedtechTheSpecimenIsNotAssignedTo():
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(getResultReturn=result, specimen=_makeSpecimen(medtechId=OTHER_MEDTECH_ID))
+    service = _makeService(db)
+
+    with pytest.raises(ForbiddenException) as excInfo:
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert excInfo.value.status_code == 403
+    assert excInfo.value.errorCode == "SPECIMEN_NOT_ASSIGNED"
+    assert result.status == ResultStatus.PENDING_CONFIRM
+    assert result.confirmedBy is None
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmOwnershipIsCheckedBeforeStatusSoANonOwnerLearnsNothing():
+    # An already-approved result must still answer a non-owner with 403,
+    # not reveal its state through RESULT_ALREADY_CONFIRMED.
+    result = _makeResult(status=ResultStatus.APPROVED)
+    db = _makeDbMock(getResultReturn=result, specimen=_makeSpecimen(medtechId=OTHER_MEDTECH_ID))
+
+    with pytest.raises(ForbiddenException):
+        await _makeService(db).confirmResult(
+            resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock()
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirmRaisesNotFoundWhenTheResultsSpecimenIsMissing():
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(getResultReturn=result)
+    db.get = AsyncMock(return_value=None)
+
+    with pytest.raises(SpecimenNotFoundError) as excInfo:
+        await _makeService(db).confirmResult(
+            resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock()
+        )
+
+    assert excInfo.value.errorCode == "SPECIMEN_NOT_FOUND"
+    db.commit.assert_not_awaited()
