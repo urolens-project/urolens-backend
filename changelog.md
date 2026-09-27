@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+- **Load-test tool and proposed p95 targets for the mobile routes (UROLENS-220,
+  SEC-4).** `scripts/perf_baseline.py` measures sync pull (full/delta), the MedTech
+  and supervisor pending lists, result detail and image upload (incl. AI inference)
+  at several concurrency levels and reports p50/p95/p99 against targets — see
+  `docs/performance-baseline-UROLENS-220.md`. Staging only: it refuses to start
+  unless `--confirm-host` matches the target, logs in once per role, and records the
+  deployed ref. No application code changed.
+
 ### Fixed
 - **MedTechs could read any patient's result, and login had no brute-force
   protection (UROLENS-222; security audit F-22, F-06, F-07).**
