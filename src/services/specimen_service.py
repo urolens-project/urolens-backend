@@ -18,7 +18,6 @@ from ..core.encryption import decryptPii, encryptPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
-    SpecimenNotFoundError,
     UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
@@ -33,6 +32,7 @@ from ..schemas.specimen import (
     SpecimenRejectResponse,
     SpecimenStartAnalysisResponse,
 )
+from .specimen_access import getAssignedSpecimen
 
 log = logging.getLogger(__name__)
 
@@ -264,9 +264,10 @@ async def rejectSpecimen(
         Confirmation of the rejection, including the `rejected_at` timestamp.
 
     Raises:
-        HTTPException: 422, if `reason_code` isn't a valid reason. 403, if
-            the specimen isn't assigned to `user_id`.
-        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        HTTPException: 422, if `reasonCode` isn't a valid reason.
+        SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if `specimenId` doesn't exist.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+            assigned to `userId`.
         ConflictException: the specimen is already rejected
             (`SPECIMEN_ALREADY_REJECTED`), or its result has already been
             confirmed and sent to the supervisor (`RESULT_ALREADY_SUBMITTED`).
@@ -276,17 +277,7 @@ async def rejectSpecimen(
             code="INVALID_REJECTION_REASON", message=f"Invalid rejection reason: {reasonCode}."
         )
 
-    specimen = await db.get(Specimen, specimenId)
-    if specimen is None:
-        raise SpecimenNotFoundError(str(specimenId))
-
-    if specimen.medtechId != userId:
-        exc = HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Specimen is not assigned to you.",
-        )
-        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
-        raise exc
+    specimen = await getAssignedSpecimen(db, specimenId, userId)
     if specimen.status == "REJECTED":
         raise ConflictException(
             code="SPECIMEN_ALREADY_REJECTED", message="Specimen is already rejected."
@@ -339,22 +330,13 @@ async def startAnalysis(
 
     Raises:
         SpecimenNotFoundError: `specimen_id` doesn't exist.
-        HTTPException: 403, if the specimen isn't assigned to `user_id`.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+            assigned to `userId`.
         ConflictException: `SPECIMEN_NOT_STARTABLE`, if the specimen is in
             a status that can't move to `PROCESSING` (e.g. rejected or
             completed).
     """
-    specimen = await db.get(Specimen, specimenId)
-    if specimen is None:
-        raise SpecimenNotFoundError(str(specimenId))
-
-    if specimen.medtechId != userId:
-        exc = HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Specimen is not assigned to you.",
-        )
-        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
-        raise exc
+    specimen = await getAssignedSpecimen(db, specimenId, userId)
 
     if specimen.status == "PROCESSING":
         return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")

@@ -3,6 +3,52 @@
 ## Unreleased
 
 ### Fixed
+- **Any MedTech could change, reset or discard another MedTech's results — including
+  released ones (SEC-2, UROLENS-220).** Upload, discard, confirm and override never
+  checked that the specimen belonged to the caller, override blocked only `APPROVED`
+  (so a `RELEASED` result could still be edited), and an upload reset *any* result to
+  `PENDING_CONFIRM` and wiped its findings. From `docs/security-audit-UROLENS-220.md`
+  (F-03, F-04, F-05, F-08, F-09, F-18). Now:
+  - New `src/services/specimen_access.py` holds the one ownership check
+    (`getAssignedSpecimen`, 403 `SPECIMEN_NOT_ASSIGNED` via the new
+    `ForbiddenException`) and the editable-status sets; `rejectSpecimen` and
+    `startAnalysis` use it instead of their two inline copies (rule 14). Ownership is
+    checked before any state check, so a non-owner learns nothing about the result.
+    `getAssignedSpecimen` also locks the specimen row (`SELECT ... FOR UPDATE`), and
+    every flow reads the result/image state after taking it, so specimen-scoped
+    writes run one at a time: an upload can no longer reset a result that was
+    confirmed from another device while the upload was still running.
+  - `POST /images/upload`: 404 `SPECIMEN_NOT_FOUND` (was a 500 after the file was
+    already stored), 403 `SPECIMEN_NOT_ASSIGNED`, 409 `SPECIMEN_REJECTED`, 409
+    `RESULT_NOT_EDITABLE` once the result is submitted/approved/released. All checked
+    before the file is decoded or stored.
+  - `POST /images/{id}/discard`: 403 `SPECIMEN_NOT_ASSIGNED`; 409
+    `RESULT_NOT_EDITABLE` once the result is submitted.
+  - `POST /results/{id}/confirm`: 403 `SPECIMEN_NOT_ASSIGNED`.
+  - `POST /results/{id}/override`: 422 `RESULT_ALREADY_FINALISED` for `APPROVED`
+    **and `RELEASED`**, for everyone. A MedTech may override only their own specimen
+    while `PENDING_CONFIRM`/`RETURNED_FOR_CORRECTION`; a Supervisor only while
+    `PENDING_SUPERVISOR_APPROVAL` (matches the web review screen, which offers actions
+    only then). Otherwise 409 `RESULT_NOT_EDITABLE`. The route now passes the caller's
+    role to the service.
+  - **Uploads are capped at 10 MB** — 413 `IMAGE_TOO_LARGE`, never reading more than
+    one byte past the cap. Migration `0042` sets the same bucket `file_size_limit`.
+  - **Only genuine JPEG/PNG is decoded**: Pillow is limited to those two decoders
+    (`formats=`), so a file labelled `image/jpeg` can no longer reach Pillow's EPS,
+    GD, JPEG2000 or other parsers; content that doesn't match its declared type is a
+    422 `INVALID_IMAGE_FORMAT`. The error no longer echoes Pillow's exception text.
+  - Dependencies: Pillow 12.3.0, starlette 1.3.1, PyJWT 2.13.0, cryptography 48.0.1,
+    anyio 4.14.2, python-dotenv 1.2.2 — 27 of the audit's 30 advisories resolved. The
+    3 left (cryptography X.509/PKCS#7, not reachable here) need cryptography 50.0.0,
+    a separate major bump.
+  - Tests: `tests/integration/conftest.py` now refuses real database access — an
+    integration test that forgets to mock `getDb` fails instead of silently querying
+    the database in `.env` (one did during this change: a single read-only lookup).
+  Not changed: login rate limiting and lockout (F-06/F-07) — pending a decision on
+  whether they belong to UROLENS-81. The AI engine is still pinned to `@develop`
+  (F-12). Mobile clients: a MedTech acting on a specimen reassigned to someone else
+  now gets 403 instead of success; queued offline actions for such specimens fail
+  with that code.
 - **Every database table was readable and writable with the Supabase anon key
   (SEC-0).** All 27 `public` tables had Row Level Security disabled (confirmed on the
   live database), and Supabase grants `anon`/`authenticated` full table privileges

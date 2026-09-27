@@ -45,12 +45,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
 from ..core.config import settings
-from ..core.exceptions import ImageFormatError, ImageResolutionError
+from ..core.exceptions import (
+    ConflictException,
+    ImageFormatError,
+    ImageResolutionError,
+    ImageTooLargeError,
+)
 from ..core.supabase import supabase as sb
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.lab_request import LabRequest
 from ..models.specimen import Specimen
+from .specimen_access import (
+    MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES,
+    getAssignedSpecimen,
+)
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +68,10 @@ MIN_HEIGHT = 480
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
 MIME_TO_FORMAT = {"image/jpeg": "JPEG", "image/png": "PNG"}
 MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
+# 10 MiB. Covers a full-resolution in-app camera JPEG (~3-6 MB) with room to
+# spare; the AI model downsizes to ~640 px anyway, so bigger buys nothing.
+# Migration 0042 sets the same limit on the storage bucket — keep them equal.
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class AIIntegrationService:
@@ -96,14 +109,26 @@ class AIIntegrationService:
             `smart_diagnosis` populated if inference succeeded.
 
         Raises:
-            ImageFormatError: unsupported MIME type or unreadable file.
-            ImageResolutionError: below the 640x480 minimum.
+            ImageFormatError: `INVALID_IMAGE_FORMAT`, if the declared type
+                isn't JPEG/PNG, or the bytes aren't a readable image of that
+                declared type.
+            ImageTooLargeError: `IMAGE_TOO_LARGE`, if over `MAX_IMAGE_BYTES`.
+            SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if `specimenId`
+                doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+                assigned to `uploaderId`.
+            ConflictException: `SPECIMEN_REJECTED`, if the specimen was
+                rejected; `RESULT_NOT_EDITABLE`, if its result has already
+                been submitted, approved or released.
+            ImageResolutionError: `INVALID_IMAGE_RESOLUTION`, if below 640x480.
         """
-        rawBytes = await file.read()
-
         contentType = file.content_type or ""
         self._validateFormat(contentType)
-        width, height = await self._validateResolution(rawBytes)
+        rawBytes = await self._readWithinLimit(file)
+        # Access checks run before the file is decoded or stored, so a
+        # rejected upload never reaches Pillow or the bucket.
+        await self._requireUploadAllowed(specimenId, uploaderId)
+        width, height = await self._validateImage(rawBytes, contentType)
 
         await self._replacePreviousImage(specimenId)
 
@@ -160,21 +185,65 @@ class AIIntegrationService:
                 f"Accepted: {', '.join(ALLOWED_MIME_TYPES)}"
             )
 
-    async def _validateResolution(self, rawBytes: bytes) -> tuple[int, int]:
-        """Return (width, height); raise ImageResolutionError if below minimum.
+    async def _readWithinLimit(self, file: UploadFile) -> bytes:
+        """Read the upload, refusing anything over `MAX_IMAGE_BYTES`.
 
-        PIL.Image.open is synchronous/blocking — run in a thread so a large
-        image doesn't stall the event loop.
+        Never loads more than one byte past the limit into memory.
+        """
+        if file.size is not None and file.size > MAX_IMAGE_BYTES:
+            raise ImageTooLargeError()
+        rawBytes = await file.read(MAX_IMAGE_BYTES + 1)
+        if len(rawBytes) > MAX_IMAGE_BYTES:
+            raise ImageTooLargeError()
+        return rawBytes
+
+    async def _requireUploadAllowed(self, specimenId: uuid.UUID, uploaderId: uuid.UUID) -> None:
+        """Allow the upload only for the assigned MedTech on a live specimen.
+
+        Also refused once the result has been submitted: an upload resets the
+        result to PENDING_CONFIRM and wipes its findings.
+        """
+        specimen = await getAssignedSpecimen(self.db, specimenId, uploaderId)
+        if specimen.status == "REJECTED":
+            raise ConflictException(
+                code="SPECIMEN_REJECTED",
+                message="This specimen was rejected, so no image can be added to it.",
+            )
+        result = (
+            await self.db.execute(
+                select(AnalysisResult).where(AnalysisResult.specimenId == specimenId)
+            )
+        ).scalar_one_or_none()
+        if result is not None and result.status not in MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES:
+            raise ConflictException(
+                code="RESULT_NOT_EDITABLE",
+                message="This result has already been submitted, so its image can't be replaced.",
+            )
+
+    async def _validateImage(self, rawBytes: bytes, contentType: str) -> tuple[int, int]:
+        """Return (width, height) of a genuine JPEG/PNG matching `contentType`.
+
+        Pillow is limited to the JPEG and PNG decoders: without `formats=`
+        it sniffs the bytes and runs whichever parser matches (EPS, GD,
+        JPEG2000, ...), whatever `Content-Type` claimed (security audit
+        F-05). Synchronous — runs in a thread so it can't stall the loop.
         """
 
-        def _readDimensions() -> tuple[int, int]:
-            img = PILImage.open(io.BytesIO(rawBytes))
-            return img.size
+        def _readHeader() -> tuple[str | None, tuple[int, int]]:
+            img = PILImage.open(io.BytesIO(rawBytes), formats=list(MIME_TO_FORMAT.values()))
+            return img.format, img.size
 
         try:
-            width, height = await asyncio.to_thread(_readDimensions)
+            actualFormat, (width, height) = await asyncio.to_thread(_readHeader)
         except Exception as exc:
-            raise ImageFormatError(f"Cannot read image file: {exc}") from exc
+            log.info("Rejected unreadable image upload", exc_info=True)
+            raise ImageFormatError(
+                "The file isn't a readable JPEG or PNG image."
+            ) from exc
+        if actualFormat != MIME_TO_FORMAT[contentType]:
+            raise ImageFormatError(
+                f"The file content doesn't match its declared type ({contentType})."
+            )
 
         if width < MIN_WIDTH or height < MIN_HEIGHT:
             raise ImageResolutionError(

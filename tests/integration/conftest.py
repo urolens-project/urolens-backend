@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 # Import app after env is loaded (main.py calls load_dotenv at top)
 from main import app
 from src.core.config import settings
+from src.core.database import getDb
 
 # ── Fixed IDs ────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,41 @@ async def mockSessionActive():
     """
     with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
         yield
+
+
+class _RefusingSession:
+    # Any attribute access (execute, get, add, commit, ...) is a real DB call
+    # the test didn't mock.
+    def __getattr__(self, name: str):
+        raise RuntimeError(
+            f"Integration test used the real database (session.{name}): override "
+            "getDb (see the mockSqlDb fixture) before calling a DB-backed route."
+        )
+
+
+@pytest.fixture(autouse=True)
+def refuseRealDatabase():
+    """Fail loudly if a test uses the database session without mocking it.
+
+    `.env` points at a real database, and `load_dotenv(override=True)` means
+    nothing in the test environment can redirect it — so a test that forgets
+    `app.dependency_overrides[getDb]` (e.g. the `mockSqlDb` fixture) would
+    otherwise silently query that database. The stand-in session fails on
+    first *use*, not on injection: FastAPI resolves `getDb` for every
+    DB-backed route even when the handler rejects the request before any
+    query. Tests that install their own override replace this one; it only
+    removes itself if still in place.
+    """
+
+    async def _refuse():
+        yield _RefusingSession()
+
+    app.dependency_overrides[getDb] = _refuse
+    try:
+        yield
+    finally:
+        if app.dependency_overrides.get(getDb) is _refuse:
+            app.dependency_overrides.pop(getDb)
 
 
 # ── Supabase mock builder ────────────────────────────────────────────────────
