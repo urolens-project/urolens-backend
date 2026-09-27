@@ -57,4 +57,5 @@ class User(Base):
         return self.lockedAt is not None
 
     def __repr__(self) -> str:
+        """Debug-friendly representation showing username and role."""
         return f"<User {self.username!r} role={self.role}>"

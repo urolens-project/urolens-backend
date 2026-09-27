@@ -244,7 +244,7 @@ class TestResultNotApproved:
                 )
 
             assert excInfo.value.status_code == 422
-            assert excInfo.value.detail["error"]["code"] == "RESULT_NOT_APPROVED"
+            assert excInfo.value.errorCode == "RESULT_NOT_APPROVED"
             auditLogger.record.assert_not_awaited()
 
 
@@ -265,7 +265,7 @@ class TestAlreadyReleased:
             )
 
         assert excInfo.value.status_code == 422
-        assert excInfo.value.detail["error"]["code"] == "ALREADY_RELEASED"
+        assert excInfo.value.errorCode == "ALREADY_RELEASED"
         auditLogger.record.assert_not_awaited()
 
 
@@ -283,7 +283,7 @@ class TestResultNotFound:
             )
 
         assert excInfo.value.status_code == 404
-        assert excInfo.value.detail["error"]["code"] == "NOT_FOUND"
+        assert excInfo.value.errorCode == "NOT_FOUND"
 
 
 # ── Scenario 5: RBAC — SUPERVISOR forbidden on approved queue ─────────────────

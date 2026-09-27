@@ -13,7 +13,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +44,12 @@ async def _generateRequestUid(db: AsyncSession) -> str:
         )
         if existing.scalar_one_or_none() is None:
             return uid
-    raise HTTPException(status_code=500, detail="Failed to generate a unique request UID.")
+    exc = HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Failed to generate a unique request UID.",
+    )
+    exc.errorCode = "REQUEST_UID_GENERATION_FAILED"
+    raise exc
 
 
 async def getPhysicians(db: AsyncSession) -> list[PhysicianItem]:

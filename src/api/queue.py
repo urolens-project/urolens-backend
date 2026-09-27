@@ -19,7 +19,7 @@ from src.schemas.queue import (
 from src.services.notification_service import NotificationService
 from src.services.queue_service import QueueService
 
-router = APIRouter()
+router = APIRouter(tags=["MedTech Queue"])
 
 
 async def getQueueService(

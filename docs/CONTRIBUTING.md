@@ -3,8 +3,8 @@
 This document covers the required sequence for adding a new feature and the checklist to run
 through before opening a PR. For the full rule-by-rule reference — why each rule exists, and
 its current real-world status in this codebase — see
-[`docs/backend-standards.md`](./docs/backend-standards.md) 📋. Coding agents working in this
-repo should load the `urolens-backend-standards` skill, which mirrors that document.
+[`docs/backend-standards.md`](./backend-standards.md) 📋. Coding agents working in this
+repo should load the `Backend-standard` skill, which mirrors that document.
 
 ---
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.audit_logger import AuditLogger
 from src.core.auth_service import hashPassword
 from src.core.encryption import decryptPii, encryptPii
+from src.core.exceptions import ConflictException, NotFoundException
 from src.models.consent import Consent
 from src.models.patient import Patient
 from src.models.user import User
@@ -196,10 +197,7 @@ class PatientService:
         stmt = select(Patient).where(Patient.userId == uuid.UUID(str(userId)))
         row = (await self.db.execute(stmt)).scalar_one_or_none()
         if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Patient record not found for this account.",
-            )
+            raise NotFoundException(message="Patient record not found for this account.")
 
         return PatientResponse(
             patientId=row.patientId,
@@ -239,9 +237,8 @@ class PatientService:
                     and decryptPii(lastEnc).lower() == data.lastName.lower()
                     and decryptPii(dobEnc) == str(data.dateOfBirth)
                 ):
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A patient with this name and date of birth already exists.",
+                    raise ConflictException(
+                        message="A patient with this name and date of birth already exists."
                     )
             except HTTPException:
                 raise
@@ -288,7 +285,9 @@ class PatientService:
             if existing.scalar_one_or_none() is None:
                 return candidate
 
-        raise HTTPException(
+        exc = HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate a unique patient UID.",
         )
+        exc.errorCode = "PATIENT_UID_GENERATION_FAILED"
+        raise exc

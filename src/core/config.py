@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -95,10 +96,7 @@ def _loadSettings() -> Settings:
             time — before the app finishes booting — not deferred to first
             use.
     """
-    databaseUrl = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/urolens_db",
-    )
+    databaseUrl = os.getenv("DATABASE_URL") or ""
     if not databaseUrl:
         raise RuntimeError(
             "DATABASE_URL is unset. Set a Postgres connection string in the "
@@ -132,6 +130,13 @@ def _loadSettings() -> Settings:
             "ENCRYPTION_KEY is unset. Set a Fernet key (Fernet.generate_key()) in the "
             "environment before starting the app — PHI encryption cannot run without it."
         )
+    try:
+        Fernet(encryptionKey.encode("utf-8"))
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(
+            "ENCRYPTION_KEY is set but is not a valid Fernet key. Generate one with "
+            "Fernet.generate_key() and set it in the environment before starting the app."
+        ) from exc
 
     return Settings(
         supabaseUrl=supabaseUrl,

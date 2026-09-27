@@ -37,3 +37,11 @@ repos:
         entry: '\A(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: [a-z]'
         args: [--multiline]
         stages: [commit-msg]
+
+      - id: no-ai-co-authored
+        name: block AI co-authored commit trailers
+        # Keep this pattern identical to the check-commit-authorship job
+        # in .github/workflows/check-commit-authorship.yml.
+        language: pygrep
+        entry: '(?i)co-authored-by:.*(claude|copilot|chatgpt|openai|anthropic|gpt-|cursor|codeium)'
+        stages: [commit-msg]

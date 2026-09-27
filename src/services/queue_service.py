@@ -11,6 +11,11 @@ from supabase import AsyncClient
 from src.core.audit_logger import AuditLogger
 from src.core.encryption import decryptPii
 from src.core.enums import UserRole
+from src.core.exceptions import (
+    NotFoundException,
+    SpecimenNotFoundError,
+    UnprocessableException,
+)
 from src.schemas.queue import (
     MedTechWorkload,
     MedTechWorkloadItem,
@@ -99,28 +104,13 @@ class QueueService:
         ).eq("specimen_id", str(data.specimenId)).execute()
 
         if not specimenResult.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": {
-                        "code": "SPECIMEN_NOT_FOUND",
-                        "message": "Specimen not found.",
-                        "details": {},
-                    }
-                },
-            )
+            raise SpecimenNotFoundError(str(data.specimenId))
 
         specimen = specimenResult.data[0]
         if specimen["status"] != "LABELED":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "error": {
-                        "code": "INVALID_SPECIMEN_STATUS",
-                        "message": "Specimen must be in LABELED status to be assigned.",
-                        "details": {},
-                    }
-                },
+            raise UnprocessableException(
+                code="INVALID_SPECIMEN_STATUS",
+                message="Specimen must be in LABELED status to be assigned.",
             )
 
         medtechResult = await self.db.table("users").select(
@@ -128,15 +118,8 @@ class QueueService:
         ).eq("user_id", str(data.medtechId)).eq("role", UserRole.MEDTECH).eq("is_active", True).execute()
 
         if not medtechResult.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": {
-                        "code": "MEDTECH_NOT_FOUND",
-                        "message": "MedTech not found or not active.",
-                        "details": {},
-                    }
-                },
+            raise NotFoundException(
+                code="MEDTECH_NOT_FOUND", message="MedTech not found or not active."
             )
 
         existingAssignment = await self.db.table("queue_assignments").select(
@@ -144,15 +127,9 @@ class QueueService:
         ).eq("specimen_id", str(data.specimenId)).eq("status", "ACTIVE").execute()
 
         if existingAssignment.data:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "error": {
-                        "code": "SPECIMEN_ALREADY_ASSIGNED",
-                        "message": "This specimen is already assigned to a MedTech.",
-                        "details": {},
-                    }
-                },
+            raise UnprocessableException(
+                code="SPECIMEN_ALREADY_ASSIGNED",
+                message="This specimen is already assigned to a MedTech.",
             )
 
         assignmentPayload = {
@@ -165,16 +142,12 @@ class QueueService:
 
         assignmentResult = await self.db.table("queue_assignments").insert(assignmentPayload).execute()
         if not assignmentResult.data:
-            raise HTTPException(
+            exc = HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": {
-                        "code": "ASSIGNMENT_FAILED",
-                        "message": "Failed to create queue assignment.",
-                        "details": {},
-                    }
-                },
+                detail="Failed to create queue assignment.",
             )
+            exc.errorCode = "ASSIGNMENT_FAILED"
+            raise exc
 
         assignmentRow = assignmentResult.data[0]
         assignmentId = assignmentRow["assignment_id"]
@@ -192,16 +165,12 @@ class QueueService:
                 await self.db.table("queue_assignments").delete().eq(
                     "assignment_id", assignmentId
                 ).execute()
-                raise HTTPException(
+                exc = HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={
-                        "error": {
-                            "code": "STATUS_UPDATE_FAILED",
-                            "message": "Failed to update specimen status.",
-                            "details": {},
-                        }
-                    },
+                    detail="Failed to update specimen status.",
                 )
+                exc.errorCode = "STATUS_UPDATE_FAILED"
+                raise exc
         except HTTPException:
             raise
         except Exception:

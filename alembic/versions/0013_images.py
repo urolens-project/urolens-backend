@@ -56,7 +56,7 @@ def upgrade():
         sa.Column("file_size_bytes", sa.Integer(), nullable=False),
         sa.Column(
             "status",
-            sa.String(20),
+            postgresql.ENUM("ACTIVE", "DISCARDED", "REPLACED", name="image_status", create_type=False),
             nullable=False,
             server_default="ACTIVE",
         ),

@@ -66,8 +66,8 @@ def _makeEngineOutput(
     out.gout = _condition(goutLevel)
     out.glomerulonephritis = _condition(gnLevel)
     out.nephrolithiasis = _condition(nephroLevel)
-    out.noSignificantIndicators = noSignificant
-    out.engineVersion = engineVersion
+    out.no_significant_indicators = noSignificant
+    out.engine_version = engineVersion
     return out
 
 

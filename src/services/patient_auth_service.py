@@ -110,9 +110,9 @@ async def patientLogin(patientUid: str, password: str, request: Request) -> Pati
         lastName = decryptPii(patient["last_name"])
         dateOfBirth = decryptPii(patient["date_of_birth"])
         expected = _derivePatientPassword(lastName, dateOfBirth)
-    except Exception:
+    except Exception as err:
         await audit_logger.logPatientLoginFailed(ipAddress, patientId=patient["patient_id"])
-        raise _invalidCreds()
+        raise _invalidCreds() from err
 
     # Case-insensitive so patients who type lowercase surnames still authenticate
     if password.upper() != expected.upper():
