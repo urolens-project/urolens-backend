@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed
+- **Returned results reached the mobile queue without the supervisor's reason, and
+  the online queue list was unordered and missing the sample ID (UROLENS-225).**
+  The MedTech queue is built entirely from `GET /sync/pull`.
+  - `GET /sync/pull`: every synced result carries `return_reason` — the supervisor's
+    latest reason when `RETURNED_FOR_CORRECTION`, else `null`. Existing apps ignore
+    the new field until they're updated (UROLENS-170). The route is now MedTech-only
+    (403 for other roles; audit F-19).
+  - **Patient names no longer go to MedTech phones.** The app shows only the patient
+    code (a deliberate privacy decision in its UI), yet sync sent `patient_name` — as
+    Fernet ciphertext. Sync now doesn't read that column at all and sends
+    `patient_name: ""` (kept, because the app's local column requires a string).
+    RA 10173 data minimization. `patient_uid` is unchanged. Web and every other role
+    are unaffected: they don't use sync, and names stay stored (encrypted) as before.
+  - `GET /results/medtech/pending` (the online confirmation queue, MedTech-only):
+    rows now include `sampleUid`, `testType`, `priorityLevel` and `receivedAt`, and
+    no longer include `patientName` (same privacy decision — patient by `patientUid`).
+    Optional filters `status` (`PENDING_CONFIRM` | `RETURNED_FOR_CORRECTION`) and
+    `sort` (`oldest` | `newest`, by received time). Order is returned-first, then
+    received time, then result ID — it previously claimed "oldest first" but sorted
+    by a random UUID, so pages were in arbitrary order. The total is a real `COUNT`
+    instead of loading every row.
+  - New `core.encryption.decryptStoredPii` (decrypts ciphertext, passes legacy
+    plaintext through, never returns ciphertext) replaces
+    `result_confirmation_service`'s private decrypt helper (rule 14); used there for
+    the patient's age.
+  Not changed: no route added or removed. Only MedTechs can sync now; the app should
+  block non-MedTech logins rather than show 403s.
+
 ### Added
 - **Load-test tool and proposed p95 targets for the mobile routes (UROLENS-220,
   SEC-4).** `scripts/perf_baseline.py` measures sync pull (full/delta), the MedTech

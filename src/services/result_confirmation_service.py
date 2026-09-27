@@ -8,13 +8,13 @@ import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..core.audit_logger import AuditLogger
-from ..core.encryption import decryptPii
+from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
@@ -25,6 +25,7 @@ from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
 from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
+from ..schemas.result_review import MedtechQueueSort, MedtechQueueStatus
 from .consent_check import requireProcessingConsent
 from .notification_service import NotificationService
 from .smart_diagnosis_service import SmartDiagnosisService
@@ -51,13 +52,8 @@ def _computeAge(dobStr: str | None) -> int | None:
         return None
 
 
-def _decryptOrNone(ciphertext: str | None) -> str | None:
-    if not ciphertext:
-        return None
-    try:
-        return decryptPii(ciphertext)
-    except Exception:
-        return None
+# Statuses in which a result is waiting on its MedTech — the confirmation queue.
+_MEDTECH_QUEUE_STATUSES = (ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION)
 
 
 class ResultConfirmationService:
@@ -238,7 +234,13 @@ class ResultConfirmationService:
         return confirmation
 
     async def listPendingForMedtech(
-        self, medtechId: uuid.UUID, page: int, pageSize: int, request: Request | None = None
+        self,
+        medtechId: uuid.UUID,
+        page: int,
+        pageSize: int,
+        request: Request | None = None,
+        status: MedtechQueueStatus | None = None,
+        sort: MedtechQueueSort = "oldest",
     ) -> dict:
         """List results awaiting this MedTech's confirmation, recording the view.
 
@@ -247,10 +249,18 @@ class ResultConfirmationService:
         same transaction (RA 10173). See `_queryPendingForMedtech` for the
         listing itself.
 
+        Args:
+            medtechId: the MedTech whose queue this is.
+            page: 1-based page number.
+            pageSize: rows per page.
+            request: the inbound request, for the audit row's client IP.
+            status: only results in this status; both queue statuses when `None`.
+            sort: `"oldest"` or `"newest"` by specimen received time.
+
         Returns:
             A dict with `items`, `total`, `page`, `pageSize`.
         """
-        listing = await self._queryPendingForMedtech(medtechId, page, pageSize)
+        listing = await self._queryPendingForMedtech(medtechId, page, pageSize, status, sort)
         if listing["items"]:
             await self.auditLogger.record(
                 eventType="PENDING_RESULTS_VIEWED",
@@ -265,31 +275,45 @@ class ResultConfirmationService:
         return listing
 
     async def _queryPendingForMedtech(
-        self, medtechId: uuid.UUID, page: int, pageSize: int
+        self,
+        medtechId: uuid.UUID,
+        page: int,
+        pageSize: int,
+        status: MedtechQueueStatus | None = None,
+        sort: MedtechQueueSort = "oldest",
     ) -> dict:
-        """Lists results awaiting this MedTech's confirmation: their own
-        specimens with status PENDING_CONFIRM or RETURNED_FOR_CORRECTION,
-        oldest first. Returned-for-correction results carry the
-        supervisor's `returnReason` so the MedTech knows what to fix.
+        """List results awaiting this MedTech's confirmation.
+
+        Their own specimens whose result is PENDING_CONFIRM or
+        RETURNED_FOR_CORRECTION (or just `status`, if given).
+        Returned-for-correction results come first — they're already late —
+        then by when the specimen was received (`sort`), then by result ID so
+        paging is stable. Returned results carry the supervisor's latest
+        `returnReason` so the MedTech knows what to fix.
 
         Returns:
             A dict with `items`, `total`, `page`, `pageSize`.
         """
         offset = (page - 1) * pageSize
-        statuses = (ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION)
+        statuses = (status,) if status else _MEDTECH_QUEUE_STATUSES
+        inQueue = (Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
 
-        countStmt = (
-            select(AnalysisResult.resultId)
-            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-            .where(Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
-        )
-        total = len((await self.db.execute(countStmt)).all())
+        total = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+                .where(*inQueue)
+            )
+        ).scalar_one()
 
+        returnedFirst = case((AnalysisResult.status == ResultStatus.RETURNED_FOR_CORRECTION, 0), else_=1)
+        byReceived = Specimen.receivedAt.asc() if sort == "oldest" else Specimen.receivedAt.desc()
         stmt = (
             select(AnalysisResult, Specimen)
             .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-            .where(Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
-            .order_by(AnalysisResult.status.desc(), AnalysisResult.resultId)
+            .where(*inQueue)
+            .order_by(returnedFirst, byReceived.nulls_last(), AnalysisResult.resultId)
             .offset(offset)
             .limit(pageSize)
         )
@@ -321,15 +345,17 @@ class ResultConfirmationService:
         items = []
         for ar, spec in rows:
             pat = patMap.get(spec.patientUid) if spec.patientUid else None
-            name = (_decryptOrNone(spec.patientName) or "") if spec else ""
-            age = _computeAge(_decryptOrNone(pat.dateOfBirth)) if pat else None
+            age = _computeAge(decryptStoredPii(pat.dateOfBirth)) if pat else None
             sex = pat.sex if pat else None
             items.append(
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid,
+                    "testType": spec.testType,
+                    "priorityLevel": spec.priorityLevel,
+                    "receivedAt": spec.receivedAt,
                     "patientUid": spec.patientUid or "",
-                    "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
                     "status": ar.status,

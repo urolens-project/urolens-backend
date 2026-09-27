@@ -39,6 +39,8 @@ from ..schemas.result_review import (
     EscalateResponse,
     FullResultDetail,
     MedtechPendingListResponse,
+    MedtechQueueSort,
+    MedtechQueueStatus,
     OverrideRequest,
     OverrideResponse,
     PendingResultListResponse,
@@ -156,12 +158,14 @@ async def listMedtechPending(
     request: Request,
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
+    status: MedtechQueueStatus | None = Query(None, description="Only this status; both when omitted."),
+    sort: MedtechQueueSort = Query("oldest", description="By specimen received time; returned results first."),
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> MedtechPendingListResponse:
     """List results awaiting this MedTech's confirmation (or re-confirmation,
     for ones a supervisor returned); see
-    `ResultConfirmationService.list_pending_for_medtech`.
+    `ResultConfirmationService.listPendingForMedtech`.
     """
     return MedtechPendingListResponse(
         **await _service.listPendingForMedtech(
@@ -169,6 +173,8 @@ async def listMedtechPending(
             page=page,
             pageSize=pageSize,
             request=request,
+            status=status,
+            sort=sort,
         )
     )
 
