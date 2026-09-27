@@ -75,15 +75,30 @@ class SupervisorStatsResponse(BaseModel):
     escalatedCount: int
 
 
+MedtechQueueStatus = Literal["PENDING_CONFIRM", "RETURNED_FOR_CORRECTION"]
+"""`status` filter values for the MedTech confirmation queue (UROLENS-225)."""
+
+MedtechQueueSort = Literal["oldest", "newest"]
+"""Queue order by when the specimen was received — mirrors the mobile queue's
+Earliest/Latest filters. Returned-for-correction results always come first."""
+
+
 class MedtechPendingResultItem(BaseModel):
     """One result awaiting this MedTech's confirmation (or re-confirmation,
     if a supervisor returned it), for the MedTech's own queue list.
+
+    Identifies the patient by `patientUid` only — no name, matching the mobile
+    app's privacy decision to show the patient code (UROLENS-225).
     """
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
+    testType: str | None = None
+    priorityLevel: str | None = None
+    receivedAt: datetime | None = None
     patientUid: str = ""
-    patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
     status: str
