@@ -10,3 +10,6 @@ ENV/
 *.db
 *.sqlite3
 __pycache__/
+
+# Local Claude Code config and skills
+.claude/
