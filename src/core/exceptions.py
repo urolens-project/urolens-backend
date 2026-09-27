@@ -135,6 +135,23 @@ class ForbiddenException(HTTPException):
         self.errorCode = code
 
 
+class TooManyRequestsException(HTTPException):
+    """429 — too many login attempts; `errorCode` is `"TOO_MANY_LOGIN_ATTEMPTS"`.
+
+    Carries a `Retry-After` header (seconds), which the global error handler
+    passes through to the client.
+    """
+
+    def __init__(self, retryAfterSeconds: int) -> None:
+        """Build the 429 telling the client to wait `retryAfterSeconds`."""
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts. Try again in {retryAfterSeconds} seconds.",
+            headers={"Retry-After": str(retryAfterSeconds)},
+        )
+        self.errorCode = "TOO_MANY_LOGIN_ATTEMPTS"
+
+
 class ConflictException(HTTPException):
     """409, with a caller-supplied `error_code` (default `"CONFLICT"`) — used
     by service classes rather than raised as HTTP directly by routers.

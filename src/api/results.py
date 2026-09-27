@@ -52,6 +52,7 @@ from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
 from ..services.result_review_service import ResultReviewService, getSmartDiagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
+from ..services.specimen_access import requireResultReadable
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -297,14 +298,18 @@ async def escalateResult(
     summary="Get Smart Diagnosis output for a result",
 )
 async def getSmartDiagnosisRoute(
-    result_id: str,
+    result_id: uuid.UUID,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    db: AsyncSession = Depends(getDb),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output. Open to MEDTECH too — they
     need this while reviewing a result they're about to confirm, not just
     the supervisor. See `result_review_service.get_smart_diagnosis`.
     """
-    return await getSmartDiagnosis(resultId=result_id)
+    await requireResultReadable(
+        db, result_id, uuid.UUID(currentUser["user_id"]), currentUser["role"]
+    )
+    return await getSmartDiagnosis(resultId=str(result_id))
 
 
 @router.get("/{result_id}", response_model=FullResultDetail)
@@ -321,6 +326,9 @@ async def getFullResult(
     """
     return FullResultDetail(
         **await _service.getFullResult(
-            result_id, viewerId=uuid.UUID(currentUser["user_id"]), request=request
+            result_id,
+            viewerId=uuid.UUID(currentUser["user_id"]),
+            request=request,
+            viewerRole=currentUser["role"],
         )
     )

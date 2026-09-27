@@ -3,6 +3,35 @@
 ## Unreleased
 
 ### Fixed
+- **MedTechs could read any patient's result, and login had no brute-force
+  protection (UROLENS-222; security audit F-22, F-06, F-07).**
+  - **F-22 — MedTech reads limited to their own specimens.** `GET /results/{id}`
+    and `GET /results/{id}/smart-diagnosis` return 403 `SPECIMEN_NOT_ASSIGNED` to a
+    MedTech whose specimen it isn't — checked before any patient data is decrypted
+    or the view is logged. Supervisors still read every result. Mobile doesn't call
+    either route (it reads through sync), so no app change. The smart-diagnosis
+    `result_id` is now validated as a UUID (malformed IDs get 422 instead of 404).
+    New `specimen_access.requireResultReadable` / `isMedtech`.
+  - **F-06 — login rate limiting**, new `src/core/rate_limit.py`, on
+    `POST /auth/login` and `POST /auth/patient-login`: 5 attempts per 5 minutes per
+    username / patient UID, 30 per minute per client IP. Over either →
+    429 `TOO_MANY_LOGIN_ATTEMPTS` with a `Retry-After` header (the global error
+    handler now passes exception headers through). A successful login resets the
+    account's count. In-process: per worker, and IP-based limiting needs
+    `uvicorn --proxy-headers` behind a proxy — otherwise all users share the proxy's
+    IP (hence the generous IP limit).
+  - **F-07 — no username enumeration, no permanent lockout.** An unknown username or
+    patient UID now runs one bcrypt check against a dummy hash, so it takes as long
+    as a wrong password. A lock now expires after 15 minutes
+    (`auth_service.LOCKOUT_MINUTES`) instead of needing an administrator. While
+    locked, every attempt gets `423 ACCOUNT_LOCKED` — right or wrong password — and
+    nothing is counted, so a wrong guess can't extend the lock and the response can't
+    confirm a correct guess. After expiry the failure count is still at the limit
+    (it resets only on success), so one wrong guess locks again: one guess per
+    15 minutes. The rate limiter caps how many keys it remembers (10,000 per limiter,
+    expired first) so spraying random usernames can't grow memory.
+  Not changed: the failed-attempt counter is still a read-then-write through
+  Supabase REST (not atomic); the per-account rate limit now caps a parallel burst.
 - **Audit rows could be silently lost, patient-data views weren't recorded, and
   consent was forced and never checked (UROLENS-222, RA 10173).** Four changes:
   - **Audit rows now commit with the action they record** (security audit F-11).
