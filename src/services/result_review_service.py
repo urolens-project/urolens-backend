@@ -24,9 +24,11 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptPii
 from ..core.exceptions import (
     ConflictException,
@@ -82,8 +84,9 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, auditLogger: AuditLogger | None = None) -> None:
         self.db = db
+        self.auditLogger = auditLogger
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -400,10 +403,19 @@ class ResultReviewService:
 
     # ── Full result detail ────────────────────────────────────────────────
 
-    async def getFullResult(self, resultId: uuid.UUID) -> dict[str, Any]:
+    async def getFullResult(
+        self, resultId: uuid.UUID, viewerId: uuid.UUID | None = None, request: Request | None = None
+    ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
         patient/medtech context, AI findings, manual overrides, the latest
         annotation, and Smart Diagnosis (if attached).
+
+        Args:
+            resultId: the result to assemble.
+            viewerId: the caller. When given (and an `auditLogger` was
+                injected), the view is recorded as `RESULT_DETAIL_VIEWED` in
+                the same transaction — no view without an audit row.
+            request: the inbound request, for the audit row's client IP.
 
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
@@ -490,7 +502,7 @@ class ResultReviewService:
             _decryptOrNone(spec.patientName) if spec else ""
         ) or ""
 
-        return {
+        detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
             "patientUid": spec.patientUid if spec else "",
@@ -512,6 +524,19 @@ class ResultReviewService:
             "annotationNotes": latestAnnotation,
             "spatialAnnotations": latestSpatial,
         }
+        if viewerId is not None and self.auditLogger is not None:
+            # RA 10173: record who viewed which patient's result.
+            await self.auditLogger.record(
+                eventType="RESULT_DETAIL_VIEWED",
+                entityType="analysis_result",
+                entityId=ar.resultId,
+                userId=viewerId,
+                db=self.db,
+                detailJson={"specimen_id": str(ar.specimenId)},
+                request=request,
+            )
+            await self.db.commit()
+        return detail
 
     # ── Annotation ────────────────────────────────────────────────────────
 

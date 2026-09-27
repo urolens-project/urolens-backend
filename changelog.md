@@ -3,6 +3,37 @@
 ## Unreleased
 
 ### Fixed
+- **Audit rows could be silently lost, patient-data views weren't recorded, and
+  consent was forced and never checked (UROLENS-222, RA 10173).** Four changes:
+  - **Audit rows now commit with the action they record** (security audit F-11).
+    `AuditLogger.record(..., db=session)` adds the row to the caller's transaction
+    instead of a separate Supabase REST insert that swallowed failures; all 16
+    service call sites pass their session. An action and its audit row now succeed
+    or fail together — an audit write failure fails the request rather than being
+    lost. Only the auth-flow helpers (login/logout/access-denied, no session) keep
+    the best-effort path, now logged at ERROR as `AUDIT_WRITE_FAILED` for alerting.
+  - **Views of patient data on mobile routes are recorded**, in the same
+    transaction: `GET /results/{id}` → `RESULT_DETAIL_VIEWED`;
+    `GET /results/medtech/pending` → `PENDING_RESULTS_VIEWED` (result IDs shown);
+    `GET /sync/pull` → `SYNC_PULLED` (specimen and result IDs sent). Empty responses
+    aren't logged. Sync's returned `timestamp` (the client's next `lastSyncedAt`) is
+    now taken *before* the reads, so a row updated while a pull runs is no longer
+    skipped by later delta pulls. `ResultReviewService` takes an optional `auditLogger`; `sync_service.pull`
+    now takes the request's session.
+  - **Consent is checked before analysis** — new `services/consent_check.py`, called
+    by `POST /images/upload` and `POST /results/{id}/confirm`. If the patient's
+    latest consent refuses processing: 409 `CONSENT_REFUSED`. If there's no consent
+    record: allowed, audited as `CONSENT_NOT_ON_FILE` (13 of 38 live patients
+    predate consent capture; processing for diagnosis also has its own lawful basis
+    under RA 10173 s.13(f), while an explicit refusal is always honoured).
+  - **Research consent is optional at intake.** `ConsentData.consentResearch`
+    defaults to `false` and is no longer validated as required — consent forced as
+    a condition of care isn't freely given. Processing and storage consent stay
+    required. Web can stop marking the research checkbox required (no change needed
+    for it to keep working).
+  Not changed: MedTech read access to other MedTechs' result detail (new audit
+  finding F-22, needs a decision); data-subject requests and retention (policy
+  decision first). No migration.
 - **Any MedTech could change, reset or discard another MedTech's results — including
   released ones (SEC-2, UROLENS-220).** Upload, discard, confirm and override never
   checked that the specimen belonged to the caller, override blocked only `APPROVED`

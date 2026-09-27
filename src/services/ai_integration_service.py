@@ -38,7 +38,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import UploadFile
+from fastapi import Request, UploadFile
 from PIL import Image as PILImage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,7 @@ from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.lab_request import LabRequest
 from ..models.specimen import Specimen
+from .consent_check import requireProcessingConsent
 from .specimen_access import (
     MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES,
     getAssignedSpecimen,
@@ -119,7 +120,8 @@ class AIIntegrationService:
                 assigned to `uploaderId`.
             ConflictException: `SPECIMEN_REJECTED`, if the specimen was
                 rejected; `RESULT_NOT_EDITABLE`, if its result has already
-                been submitted, approved or released.
+                been submitted, approved or released; `CONSENT_REFUSED`, if
+                the patient refused consent to processing.
             ImageResolutionError: `INVALID_IMAGE_RESOLUTION`, if below 640x480.
         """
         contentType = file.content_type or ""
@@ -127,7 +129,7 @@ class AIIntegrationService:
         rawBytes = await self._readWithinLimit(file)
         # Access checks run before the file is decoded or stored, so a
         # rejected upload never reaches Pillow or the bucket.
-        await self._requireUploadAllowed(specimenId, uploaderId)
+        await self._requireUploadAllowed(specimenId, uploaderId, request)
         width, height = await self._validateImage(rawBytes, contentType)
 
         await self._replacePreviousImage(specimenId)
@@ -157,6 +159,7 @@ class AIIntegrationService:
             await self._runSmartDiagnosis(result, findings)
 
         await self.auditLogger.record(
+            db=self.db,
             eventType="IMAGE_UPLOADED",
             entityType="image",
             entityId=image.imageId,
@@ -197,7 +200,9 @@ class AIIntegrationService:
             raise ImageTooLargeError()
         return rawBytes
 
-    async def _requireUploadAllowed(self, specimenId: uuid.UUID, uploaderId: uuid.UUID) -> None:
+    async def _requireUploadAllowed(
+        self, specimenId: uuid.UUID, uploaderId: uuid.UUID, request: Request | None = None
+    ) -> None:
         """Allow the upload only for the assigned MedTech on a live specimen.
 
         Also refused once the result has been submitted: an upload resets the
@@ -219,6 +224,9 @@ class AIIntegrationService:
                 code="RESULT_NOT_EDITABLE",
                 message="This result has already been submitted, so its image can't be replaced.",
             )
+        await requireProcessingConsent(
+            self.db, specimen, uploaderId, self.auditLogger, action="IMAGE_UPLOAD", request=request
+        )
 
     async def _validateImage(self, rawBytes: bytes, contentType: str) -> tuple[int, int]:
         """Return (width, height) of a genuine JPEG/PNG matching `contentType`.

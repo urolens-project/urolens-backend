@@ -138,6 +138,7 @@ class PatientService:
             userId=createdBy,
             detailJson={"patient_uid": patientUid},
             request=request,
+            db=self.db,
         )
 
         await self.db.commit()

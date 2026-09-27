@@ -245,6 +245,17 @@ Upload failure is logged and ignored by design, so a result can reference an ima
 that doesn't exist. Now visible as `imageUrl: null` (SEC-0b) rather than a broken
 link; decide in SEC-5 whether to fail the upload instead.
 
+
+### F-22 🟡 Medium — Any MedTech can read any patient's result detail *(found during UROLENS-222)*
+**File:** [results.py `GET /results/{result_id}`](../src/api/results.py) → `ResultReviewService.getFullResult`
+**Issue:** the route is open to MEDTECH and SUPERVISOR with no ownership check for
+MedTechs. SEC-2 added ownership to writes only.
+**Impact:** a MedTech can read the name, age, sex, findings and image of patients
+whose specimens aren't assigned to them. Now at least recorded
+(`RESULT_DETAIL_VIEWED`, UROLENS-222), but not prevented.
+**Fix:** apply `requireSpecimenAssigned` for MEDTECH callers (supervisors keep full
+access) — confirm first that no mobile screen shows other MedTechs' results.
+
 ---
 
 ## Dependency scan
@@ -312,7 +323,8 @@ All four repos are **public**, so this needs to stay true — see *Recommendatio
 | F-15 | SEC-2 took cryptography to 48.0.1 (OpenSSL fix); the X.509/PKCS#7 advisories need 50.0.0 | 🟡 Partly — batch 2 |
 | F-06, F-07 | SEC-2, or UROLENS-81 (JWT/RBAC hardening) — confirm with its owner | ⏳ Pending that decision |
 | F-12 | Pin the AI engine commit (one line; coordinate with the AI engine owner) | 🔜 Planned |
-| F-11 | SEC-3 (`feat/UROLENS-220-sec-3-ra10173-controls`) | Next sprint |
+| F-11 | UROLENS-222 (`feat/UROLENS-222-ra10173-consent-and-audit`) — audit rows written in the action's transaction | ✅ Fixed |
+| F-22 | Open — decide whether MedTech result-detail reads should be limited to their own specimens | ⏳ Needs decision |
 | F-13, F-17, F-21 | SEC-5 (`feat/UROLENS-220-sec-5-production-readiness`) | Partly Sprint 5 |
 | F-19, F-20 | SEC-5 cleanup | Next sprint |
 

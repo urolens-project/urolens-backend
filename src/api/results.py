@@ -99,9 +99,10 @@ async def getOverrideService(
 
 async def getResultReviewService(
     db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
-    return ResultReviewService(db=db)
+    return ResultReviewService(db=db, auditLogger=auditLogger)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -151,6 +152,7 @@ async def overrideParameter(
 
 @router.get("/medtech/pending", response_model=MedtechPendingListResponse)
 async def listMedtechPending(
+    request: Request,
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
@@ -162,7 +164,10 @@ async def listMedtechPending(
     """
     return MedtechPendingListResponse(
         **await _service.listPendingForMedtech(
-            medtechId=uuid.UUID(currentUser["user_id"]), page=page, pageSize=pageSize
+            medtechId=uuid.UUID(currentUser["user_id"]),
+            page=page,
+            pageSize=pageSize,
+            request=request,
         )
     )
 
@@ -305,6 +310,7 @@ async def getSmartDiagnosisRoute(
 @router.get("/{result_id}", response_model=FullResultDetail)
 async def getFullResult(
     result_id: uuid.UUID,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> FullResultDetail:
@@ -313,4 +319,8 @@ async def getFullResult(
     backs both the MedTech's pre-confirmation review and the Supervisor's
     review/approval workspace. See `ResultReviewService.get_full_result`.
     """
-    return FullResultDetail(**await _service.getFullResult(result_id))
+    return FullResultDetail(
+        **await _service.getFullResult(
+            result_id, viewerId=uuid.UUID(currentUser["user_id"]), request=request
+        )
+    )
