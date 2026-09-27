@@ -1,5 +1,7 @@
-"""Specimen labeling routes (MedTech-facing): label search, generation, and
-affixed confirmation.
+"""Specimen labeling routes (Receptionist-facing): label search, generation,
+and affixed confirmation. Was MedTech-gated; corrected to Receptionist per
+UROLENS-141's UAC ("Ability for the Receptionist to Generate and Confirm a
+Sample Label") — every step here is a Receptionist action, not a MedTech one.
 """
 import uuid
 from uuid import UUID
@@ -24,13 +26,13 @@ router = APIRouter(
     tags=["Sample Labeling Tracking"]
 )
 
-_medtech = RequireRole([UserRole.MEDTECH])
+_receptionist = RequireRole([UserRole.RECEPTIONIST])
 
 
 @router.get("/search-received", response_model=list[ReceivedSpecimenSearchItem])
 async def searchReceivedSpecimens(
     q: str = Query(min_length=3),
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_receptionist),
     db: AsyncSession = Depends(getDb),
 ):
     """Search `RECEIVED` specimens by patient/sample UID; see
@@ -42,7 +44,7 @@ async def searchReceivedSpecimens(
 @router.post("/{id}/label", response_model=PrintLabelResponse, status_code=201)
 async def generateSpecimenLabelEndpoint(
     id: UUID,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_receptionist),
     db: AsyncSession = Depends(getDb),
 ):
     """Generate a specimen label; see `labeling_service.generate_label`."""
@@ -53,7 +55,7 @@ async def generateSpecimenLabelEndpoint(
 @router.post("/{id}/label/print", response_model=PrintJobResponse, status_code=201)
 async def printSpecimenLabelEndpoint(
     id: UUID,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_receptionist),
     db: AsyncSession = Depends(getDb),
 ):
     """Create a print job for a specimen's current label; see
@@ -66,7 +68,7 @@ async def printSpecimenLabelEndpoint(
 @router.post("/{id}/label/confirm", response_model=LabelConfirmResponse)
 async def confirmLabelAffixedEndpoint(
     id: UUID,
-    currentUser: dict = Depends(_medtech),
+    currentUser: dict = Depends(_receptionist),
     db: AsyncSession = Depends(getDb),
     payload: LabelConfirmRequest = Body(...),
 ):

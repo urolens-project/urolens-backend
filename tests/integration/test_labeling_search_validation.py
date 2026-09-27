@@ -23,14 +23,19 @@ from main import app
 from src.core.config import settings
 from src.core.database import getDb
 
-MEDTECH_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000110")
+RECEPTIONIST_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000110")
 
 
-def _mintMedtechToken() -> str:
+def _mintReceptionistToken() -> str:
+    """Labeling is Receptionist-gated (UROLENS-142 RBAC fix, merged after
+    this test was originally written against MEDTECH) — minted as
+    RECEPTIONIST so these tests reach the query-length validation being
+    tested instead of 403ing on the role check first.
+    """
     now = datetime.now(UTC)
     payload = {
-        "user_id": str(MEDTECH_USER_ID),
-        "role": "MEDTECH",
+        "user_id": str(RECEPTIONIST_USER_ID),
+        "role": "RECEPTIONIST",
         "session_id": str(uuid.uuid4()),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
@@ -63,7 +68,7 @@ def mockDb():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("q", ["", "a", "ab"])
 async def test_searchReceivedRejectsQueryUnderMinLength(asyncClient, mockDb, q):
-    token = _mintMedtechToken()
+    token = _mintReceptionistToken()
     with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
         response = await asyncClient.get(
             "/api/v1/specimens/search-received",
@@ -80,7 +85,7 @@ async def test_searchReceivedRejectsQueryUnderMinLength(asyncClient, mockDb, q):
 
 @pytest.mark.asyncio
 async def test_searchReceivedRejectsMissingQuery(asyncClient, mockDb):
-    token = _mintMedtechToken()
+    token = _mintReceptionistToken()
     with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
         response = await asyncClient.get(
             "/api/v1/specimens/search-received",

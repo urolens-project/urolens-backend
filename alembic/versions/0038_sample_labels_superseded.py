@@ -1,8 +1,19 @@
 """sample_labels superseded flag
 
-Revision ID: 0035
-Revises: 0034
+Revision ID: 0038
+Revises: 0037
 Create Date: 2026-09-27 00:00:00.000000
+
+Renumbered from 0035 to 0038 while merging fix/UROLENS-142-Sample-Assignment
+into development: this branch's own 0035 (queue_assignments_active_unique)
+and two other, already-merged branches' migrations
+(0035_lab_requests_test_type_and_special_instructions from
+UROLENS-137/feat/lab-request, and 0036/0037_patients_add_sex/dedup_hash from
+feat/patient-intake) all independently claimed revision IDs starting from
+'0035' with down_revision '0034' — the same class of collision hit and
+fixed once already during the feat/lab-request -> development merge (see
+that merge commit). This branch was cut before that renumbering existed, so
+it collided again. Chained after the current chain tip (0037) instead.
 
 Adds `sample_labels.superseded` (UROLENS-141): `generateLabel` regenerates a
 label by inserting a new `sample_labels` row rather than updating the old
@@ -26,8 +37,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0035'
-down_revision: str | Sequence[str] | None = '0034'
+revision: str = '0038'
+down_revision: str | Sequence[str] | None = '0037'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
