@@ -9,6 +9,7 @@ physician was specified on the intake form (if any) and
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
+from ..core.encryption import decryptPii
 from ..core.exceptions import NotFoundException
 from ..models.lab_request import LabRequest
 from ..models.patient import Patient
@@ -25,6 +27,8 @@ from ..models.user import User
 from ..schemas.lab_request import LabRequestCreateResponse, PhysicianItem
 from ..schemas.specimen import LabRequestSearchItem
 from .notification_service import NotificationService
+
+log = logging.getLogger(__name__)
 
 _PHT = timezone(timedelta(hours=8))
 _UID_GENERATION_ATTEMPTS = 5
@@ -72,7 +76,10 @@ async def searchPendingLabRequests(db: AsyncSession, q: str) -> list[LabRequestS
             both `request_uid` and `physician_name`.
 
     Returns:
-        Up to `_MAX_SEARCH_RESULTS` matching lab requests.
+        Up to `_MAX_SEARCH_RESULTS` matching lab requests, each carrying its
+        patient's `patientUid`/decrypted display name (nothing else off the
+        patient record) so the receptionist can check "Label Matches
+        Patient" without a second, fuller patient lookup.
     """
     cleanQ = q.strip()
     if cleanQ.lower().startswith("dr."):
@@ -91,16 +98,40 @@ async def searchPendingLabRequests(db: AsyncSession, q: str) -> list[LabRequestS
         .limit(_MAX_SEARCH_RESULTS)
     )
     rows = (await db.execute(stmt)).scalars().all()
-    return [
-        LabRequestSearchItem(
-            labRequestId=r.labRequestId,
-            requestUid=r.requestUid,
-            testType=r.testType,
-            physicianName=r.physicianName,
-            patientId=r.patientId,
+
+    patientIds = {r.patientId for r in rows}
+    patientsById: dict[uuid.UUID, Patient] = {}
+    if patientIds:
+        patientRows = (
+            await db.execute(select(Patient).where(Patient.patientId.in_(patientIds)))
+        ).scalars().all()
+        patientsById = {p.patientId: p for p in patientRows}
+
+    items: list[LabRequestSearchItem] = []
+    for r in rows:
+        patient = patientsById.get(r.patientId)
+        patientName = None
+        if patient is not None:
+            try:
+                patientName = f"{decryptPii(patient.firstName)} {decryptPii(patient.lastName)}"
+            except Exception:
+                log.warning(
+                    "Failed to decrypt patient name while searching pending lab "
+                    "requests (patient_id=%s) — omitting name from this result.",
+                    patient.patientId,
+                )
+        items.append(
+            LabRequestSearchItem(
+                labRequestId=r.labRequestId,
+                requestUid=r.requestUid,
+                testType=r.testType,
+                physicianName=r.physicianName,
+                patientId=r.patientId,
+                patientUid=patient.patientUid if patient is not None else None,
+                patientName=patientName,
+            )
         )
-        for r in rows
-    ]
+    return items
 
 
 async def createLabRequest(
