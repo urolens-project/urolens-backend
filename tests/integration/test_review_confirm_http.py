@@ -8,12 +8,15 @@ error envelope; `POST /results/{id}/confirm` returns `resubmitted` and `status`.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
+from httpx import AsyncClient
+from sqlalchemy import Select
 
 from main import app
 from src.api.results import getConfirmationService, getResultReviewService
@@ -83,10 +86,10 @@ def _db(result: AnalysisResult, specimen: Specimen) -> AsyncMock:
     byModel = {AnalysisResult: result, Specimen: specimen}
     byEntity = {AnalysisResult: result, Patient: patient, ResultReturn: "Recount the casts"}
 
-    async def _get(model, *args, **kwargs):
+    async def _get(model: type, *_args: object, **_kwargs: object) -> object:
         return byModel.get(model, SimpleNamespace(username="medtech1"))
 
-    def _execute(stmt, *args, **kwargs):
+    def _execute(stmt: Select) -> MagicMock:
         executeResult = MagicMock()
         executeResult.scalars.return_value.all.return_value = []
         executeResult.scalar_one_or_none.return_value = byEntity.get(stmt.column_descriptions[0].get("entity"))
@@ -106,7 +109,7 @@ def _useReviewService(db: AsyncMock) -> None:
 
 
 @pytest.fixture
-def _clearOverrides():
+def _clearOverrides() -> Iterator[None]:
     yield
     app.dependency_overrides.pop(getResultReviewService, None)
     app.dependency_overrides.pop(getConfirmationService, None)
@@ -114,7 +117,7 @@ def _clearOverrides():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clearOverrides")
-async def test_medtechReviewShowsTheReturnReasonAndNoPatientName(asyncClient) -> None:
+async def test_medtechReviewShowsTheReturnReasonAndNoPatientName(asyncClient: AsyncClient) -> None:
     _useReviewService(_db(_result(ResultStatus.RETURNED_FOR_CORRECTION), _specimen(MEDTECH_USER_ID)))
 
     response = await asyncClient.get(f"/api/v1/results/{RESULT_ID}", headers=_headers("MEDTECH"))
@@ -129,7 +132,7 @@ async def test_medtechReviewShowsTheReturnReasonAndNoPatientName(asyncClient) ->
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clearOverrides")
-async def test_supervisorReviewKeepsThePatientName(asyncClient) -> None:
+async def test_supervisorReviewKeepsThePatientName(asyncClient: AsyncClient) -> None:
     _useReviewService(_db(_result(ResultStatus.PENDING_SUPERVISOR_APPROVAL), _specimen(MEDTECH_USER_ID)))
 
     response = await asyncClient.get(f"/api/v1/results/{RESULT_ID}", headers=_headers("SUPERVISOR"))
@@ -150,7 +153,11 @@ async def test_supervisorReviewKeepsThePatientName(asyncClient) -> None:
     ],
 )
 async def test_medtechAnnotateIsRefusedWithTheErrorEnvelope(
-    asyncClient, status, assignedTo, expectedStatus, expectedCode
+    asyncClient: AsyncClient,
+    status: ResultStatus,
+    assignedTo: uuid.UUID,
+    expectedStatus: int,
+    expectedCode: str,
 ) -> None:
     db = _db(_result(status), _specimen(assignedTo))
     _useReviewService(db)
@@ -168,7 +175,7 @@ async def test_medtechAnnotateIsRefusedWithTheErrorEnvelope(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clearOverrides")
-async def test_medtechAnnotatesTheirOwnPendingResult(asyncClient) -> None:
+async def test_medtechAnnotatesTheirOwnPendingResult(asyncClient: AsyncClient) -> None:
     db = _db(_result(ResultStatus.PENDING_CONFIRM), _specimen(MEDTECH_USER_ID))
     _useReviewService(db)
 
@@ -185,7 +192,7 @@ async def test_medtechAnnotatesTheirOwnPendingResult(asyncClient) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clearOverrides")
-async def test_confirmResponseCarriesResubmittedAndStatus(asyncClient) -> None:
+async def test_confirmResponseCarriesResubmittedAndStatus(asyncClient: AsyncClient) -> None:
     service = MagicMock()
     service.confirmResult = AsyncMock(return_value=ConfirmResultResponse(
         id=uuid.uuid4(), resultId=RESULT_ID, confirmedBy=MEDTECH_USER_ID, confirmedAt=datetime.now(UTC),

@@ -12,9 +12,11 @@ in tests/test_manual_override_service.py and tests/test_result_review_service.py
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import Select
 from sqlalchemy.exc import IntegrityError
 
 from src.core.exceptions import (
@@ -61,10 +63,12 @@ def _makeSpecimen(status: str = "PROCESSING", medtechId: uuid.UUID = MEDTECH_ID)
     return specimen
 
 
-def _answerByEntity(result, existingConfirmation=None):
+def _answerByEntity(
+    result: AnalysisResult | None, existingConfirmation: ResultConfirmation | None = None
+) -> Callable[[Select], MagicMock]:
     # Like a real session: a result query returns the result; the "existing
     # confirmation?" lookup returns the confirmation row (None by default).
-    def _execute(stmt, *args, **kwargs):
+    def _execute(stmt: Select) -> MagicMock:
         entity = stmt.column_descriptions[0].get("entity")
         executeResult = MagicMock()
         executeResult.scalar_one_or_none.return_value = (
@@ -309,7 +313,9 @@ async def test_confirmRaisesNotFoundWhenTheResultsSpecimenIsMissing():
     ("status", "resubmitted"),
     [(ResultStatus.PENDING_CONFIRM, False), (ResultStatus.RETURNED_FOR_CORRECTION, True)],
 )
-async def test_confirmResponseSaysWhetherItWasAResubmitAndTheNewStatus(status, resubmitted):
+async def test_confirmResponseSaysWhetherItWasAResubmitAndTheNewStatus(
+    status: ResultStatus, resubmitted: bool
+) -> None:
     result = _makeResult(status=status)
     service = _makeService(_makeDbMock(getResultReturn=result))
 
@@ -323,7 +329,7 @@ async def test_confirmResponseSaysWhetherItWasAResubmitAndTheNewStatus(status, r
 
 
 @pytest.mark.asyncio
-async def test_confirmAFailedResultIsNotConfirmableRatherThanAlreadyConfirmed():
+async def test_confirmAFailedResultIsNotConfirmableRatherThanAlreadyConfirmed() -> None:
     """The app treats RESULT_ALREADY_CONFIRMED as success, so a FAILED result
     must get its own code instead of being silently marked done offline.
     """
