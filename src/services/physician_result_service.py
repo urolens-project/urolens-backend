@@ -13,9 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
-from src.core.config import settings
 from src.core.encryption import decryptPii
 from src.core.exceptions import NotFoundException
+from src.core.storage import signedImageUrl
 from src.models.analysis_result import AnalysisResult
 from src.models.image import Image
 from src.models.lab_request import LabRequest
@@ -53,14 +53,6 @@ def _computeAge(dobStr: str | None) -> int | None:
     except (ValueError, TypeError):
         return None
 
-
-def _imagePublicUrl(storageKey: str | None) -> str | None:
-    # Builds the public Supabase storage URL for a specimen image; returns
-    # None if there's no storage key or no configured Supabase URL.
-    if not storageKey or not settings.supabaseUrl:
-        return None
-    base = settings.supabaseUrl.rstrip("/")
-    return f"{base}/storage/v1/object/public/{settings.supabaseImageBucket}/{storageKey}"
 
 
 class PhysicianResultService:
@@ -239,7 +231,7 @@ class PhysicianResultService:
         imageUrl: str | None = None
         if ar.imageId:
             image = await self.db.get(Image, ar.imageId)
-            imageUrl = _imagePublicUrl(image.storageKey if image else None)
+            imageUrl = await signedImageUrl(image.storageKey if image else None)
 
         try:
             first = decryptPii(pat.firstName) if pat and pat.firstName else ""
