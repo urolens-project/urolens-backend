@@ -273,17 +273,15 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     # ── Write path: no existing review row for this result/supervisor pair ──
     arForWrite = _makeResult()
     writeDb = AsyncMock()
-    writeDb.execute = AsyncMock(
-        side_effect=[_makeScalarOneResult(arForWrite), _makeScalarOneResult(None)]  # result, existing review
-    )
+    writeDb.get = AsyncMock(return_value=arForWrite)
+    writeDb.execute = AsyncMock(return_value=_makeScalarOneResult(None))
     writeDb.add = MagicMock()
     writeDb.commit = AsyncMock()
 
-    _writeService = ResultReviewService(db=writeDb, auditLogger=MagicMock(record=AsyncMock()))
+    _writeService = ResultReviewService(db=writeDb)
     writeResponse = await _writeService.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
-        callerRole="SUPERVISOR",
         annotationNotes="Possible cast cluster, upper-left quadrant",
         spatialAnnotations=payload,
     )
@@ -329,16 +327,14 @@ async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     existingReview.annotationNotes = "old notes"
 
     db = AsyncMock()
-    db.execute = AsyncMock(
-        side_effect=[_makeScalarOneResult(ar), _makeScalarOneResult(existingReview)]  # result, existing review
-    )
+    db.get = AsyncMock(return_value=ar)
+    db.execute = AsyncMock(return_value=_makeScalarOneResult(existingReview))
     db.commit = AsyncMock()
 
-    _service = ResultReviewService(db=db, auditLogger=MagicMock(record=AsyncMock()))
+    _service = ResultReviewService(db=db)
     await _service.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
-        callerRole="SUPERVISOR",
         annotationNotes="updated notes only",
         spatialAnnotations=None,
     )
@@ -481,7 +477,6 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
     specimen = _makeSpecimen()
     specimen.patientUid = None
     specimen.medtechId = None
-    specimen.patientName = None
 
     overrides = [
         _makeOverride("RBC", datetime(2026, 1, 1, tzinfo=UTC)),

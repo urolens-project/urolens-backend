@@ -3,32 +3,6 @@
 ## Unreleased
 
 ### Fixed
-- **Any MedTech could annotate any result in any status, with no audit trail; the
-  review screen showed MedTechs the patient's name but not why a result was returned
-  (UROLENS-226).**
-  - `PATCH /results/{id}/annotate` now follows the manual-override rules: a MedTech
-    may annotate only a specimen assigned to them (403 `SPECIMEN_NOT_ASSIGNED`,
-    checked under the specimen row lock, before any status check) while the result is
-    `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`; a Supervisor only while it is
-    `PENDING_SUPERVISOR_APPROVAL`. Otherwise 409 `RESULT_NOT_EDITABLE`, or 422
-    `RESULT_ALREADY_FINALISED` for everyone once `APPROVED`/`RELEASED`. Each save
-    writes an `ANNOTATION_SAVED` audit row in the same transaction (never the note
-    text). The status rule now lives once in `specimen_access.requireResultEditable`,
-    shared with manual override (rule 14); override's finalised message text changed
-    to a generic one, its codes did not.
-  - `GET /results/{id}` (the MedTech's online review source): new `returnReason` —
-    the supervisor's latest reason when `RETURNED_FOR_CORRECTION`, else `null`.
-    `patientName` is now `null` for MedTech callers and their name columns aren't
-    decrypted (same privacy decision as UROLENS-225; patient by `patientUid`).
-    Supervisors are unaffected. `result_review_service`'s private decrypt helper is
-    replaced by `core.encryption.decryptStoredPii` (rule 14).
-  - `POST /results/{id}/confirm`: the response adds `resubmitted` (true when
-    re-confirming a returned result) and `status` (`PENDING_SUPERVISOR_APPROVAL`).
-    A `FAILED` result now gets 409 `RESULT_NOT_CONFIRMABLE` instead of
-    `RESULT_ALREADY_CONFIRMED` — the app treats the latter as success, so a queued
-    offline confirm of a failed result would have been silently marked done.
-  Not changed: no route added or removed, no migration. Annotation display and
-  free-text confirmation notes are deferred until after MVP validation.
 - **Returned results reached the mobile queue without the supervisor's reason, and
   the online queue list was unordered and missing the sample ID (UROLENS-225).**
   The MedTech queue is built entirely from `GET /sync/pull`.

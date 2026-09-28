@@ -118,11 +118,12 @@ async def confirmResult(
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
     """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
-    return await _service.confirmResult(
+    confirmation = await _service.confirmResult(
         resultId=id,
         medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
     )
+    return ConfirmResultResponse.model_validate(confirmation)
 
 
 @router.post("/{id}/override", response_model=OverrideResponse, status_code=200)
@@ -229,22 +230,21 @@ async def listPendingResults(
 async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
-    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
-    """Save the caller's annotation on a result; see `ResultReviewService.saveAnnotation`.
-
-    Each user's annotation is stored under their own `reviewed_by`, and
-    `getFullResult` surfaces whichever was most recently updated.
+    """Save an annotation (notes + drawn regions) on a result. Open to
+    MEDTECH too — marking up the image while reviewing/correcting it is
+    just as much their job as the Supervisor's; each user's annotation is
+    stored under their own `reviewed_by`, and `get_full_result` surfaces
+    whichever is most recently updated. See
+    `ResultReviewService.save_annotation`.
     """
     result = await _service.saveAnnotation(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
-        callerRole=currentUser["role"],
         annotationNotes=body.annotationNotes,
         spatialAnnotations=body.spatialAnnotations,
-        request=request,
     )
     return AnnotationResponse(**result)
 

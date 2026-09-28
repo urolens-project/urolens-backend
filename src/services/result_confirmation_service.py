@@ -25,11 +25,7 @@ from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
 from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
-from ..schemas.result_review import (
-    ConfirmResultResponse,
-    MedtechQueueSort,
-    MedtechQueueStatus,
-)
+from ..schemas.result_review import MedtechQueueSort, MedtechQueueStatus
 from .consent_check import requireProcessingConsent
 from .notification_service import NotificationService
 from .smart_diagnosis_service import SmartDiagnosisService
@@ -42,15 +38,6 @@ logger = logging.getLogger(__name__)
 _CONFIRMABLE_STATUSES = {
     ResultStatus.PENDING_CONFIRM,
     ResultStatus.RETURNED_FOR_CORRECTION,
-}
-
-# Statuses a confirmation has already moved the result into (or past). Only
-# these answer RESULT_ALREADY_CONFIRMED, which clients treat as success.
-_ALREADY_CONFIRMED_STATUSES = {
-    ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-    ResultStatus.CRITICAL_ESCALATED,
-    ResultStatus.APPROVED,
-    ResultStatus.RELEASED,
 }
 
 
@@ -95,24 +82,21 @@ class ResultConfirmationService:
         resultId: uuid.UUID,
         medtechId: uuid.UUID,
         request: Request,
-    ) -> ConfirmResultResponse:
+    ) -> ResultConfirmation:
         """Confirms an analysis result and triggers Smart Diagnosis.
 
         Args:
-            medtechId: the authenticated user recorded as `confirmed_by`.
+            medtech_id: the authenticated user recorded as `confirmed_by`.
 
         Returns:
-            The confirmation, with `resubmitted` telling a re-confirmation of
-            a supervisor-returned result apart from a first confirmation (the
-            app words its success message differently — UROLENS-146).
+            The persisted `ResultConfirmation` row.
 
         Raises:
-            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` does not exist.
-            ConflictException: `RESULT_ALREADY_CONFIRMED`, if the result is
-                already with or past the supervisor (or a concurrent
-                double-submit hit the unique constraint first);
-                `RESULT_NOT_CONFIRMABLE`, if it's in any other status that
-                can't be confirmed.
+            NotFoundException: result_id does not exist.
+            ConflictException: result isn't in a confirmable status — either
+                because it already passed confirmation, or because a
+                concurrent double-submit hit the DB's unique constraint
+                first.
             ConflictException: (`SPECIMEN_REJECTED`) the result's specimen has
                 been rejected.
             UnprocessableException: a pending image retake blocks confirmation.
@@ -143,16 +127,9 @@ class ResultConfirmationService:
         # confirmed" statuses) so a status this doesn't recognise — e.g.
         # FAILED — is rejected by default instead of silently allowed through.
         if result.status not in _CONFIRMABLE_STATUSES:
-            # Mobile treats RESULT_ALREADY_CONFIRMED as success (double tap /
-            # replayed offline confirm), so it must only mean what it says.
-            if result.status in _ALREADY_CONFIRMED_STATUSES:
-                raise ConflictException(
-                    code="RESULT_ALREADY_CONFIRMED",
-                    message="This result has already been confirmed.",
-                )
             raise ConflictException(
-                code="RESULT_NOT_CONFIRMABLE",
-                message="This result can't be confirmed in its current status.",
+                code="RESULT_ALREADY_CONFIRMED",
+                message="This result has already been confirmed.",
             )
 
         # Guard: a rejected specimen must never reach the supervisor. Without
@@ -190,7 +167,6 @@ class ResultConfirmationService:
             confirmation.confirmedAt = now
         else:
             confirmation = ResultConfirmation(
-                confirmationId=uuid.uuid4(),  # known before flush, for the response
                 resultId=resultId,
                 medtechId=medtechId,
                 confirmedAt=now,
@@ -255,14 +231,7 @@ class ResultConfirmationService:
 
         await self.db.commit()
         await self.db.refresh(confirmation)
-        return ConfirmResultResponse(
-            id=confirmation.confirmationId,
-            resultId=resultId,
-            confirmedBy=medtechId,
-            confirmedAt=now,
-            resubmitted=wasReturned,
-            status=ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-        )
+        return confirmation
 
     async def listPendingForMedtech(
         self,
