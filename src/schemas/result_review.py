@@ -18,6 +18,12 @@ class ConfirmResultResponse(BaseModel):
     resultId: UUID
     confirmedBy: UUID
     confirmedAt: datetime
+    resubmitted: bool = False
+    """True when this re-confirms a result the supervisor returned for
+    correction ("re-submitted for supervisor approval"), False for a first
+    confirmation (UROLENS-226)."""
+    status: str
+    """The result's status after confirming — `PENDING_SUPERVISOR_APPROVAL`."""
 
     model_config = {"from_attributes": True}
 
@@ -201,12 +207,17 @@ class ManualOverrideItem(BaseModel):
 
 
 class FullResultDetail(BaseModel):
-    """Response body for the supervisor's full single-result review/detail view."""
+    """Response body for the full single-result review/detail view.
+
+    Serves the supervisor's review workspace and the MedTech's online review screen.
+    """
 
     resultId: UUID
     specimenId: UUID
     patientUid: str = ""
-    patientName: str
+    patientName: str | None = None
+    """`null` for a MedTech caller — they identify the patient by
+    `patientUid` only (UROLENS-226); set for supervisors."""
     patientAge: int | None = None
     patientSex: str | None = None
     medtechName: str
@@ -224,6 +235,9 @@ class FullResultDetail(BaseModel):
     smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str
+    returnReason: str | None = None
+    """The supervisor's latest reason, only while the result is
+    RETURNED_FOR_CORRECTION (UROLENS-226)."""
     annotationNotes: str | None = None
     spatialAnnotations: list[dict[str, Any]] | None = None
     """Persisted as of migration 0034 (JSONB) — type inferred from pre-port

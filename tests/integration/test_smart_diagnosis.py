@@ -23,7 +23,7 @@ from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.engine_error_log import EngineErrorLog
 from src.models.image import Image  # noqa: F401
 from src.models.manual_override import ManualOverride  # noqa: F401
-from src.models.result_confirmation import ResultConfirmation  # noqa: F401
+from src.models.result_confirmation import ResultConfirmation
 from src.models.result_view import ResultView  # noqa: F401
 from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 
@@ -85,9 +85,16 @@ def _makeAllLowOutput() -> MagicMock:
 def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     """Returns a mock AsyncSession that yields the given AnalysisResult on SELECT."""
     db = AsyncMock()
-    executeResult = MagicMock()
-    executeResult.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=executeResult)
+
+    def _execute(stmt, *args, **kwargs):
+        # A result query returns the result; the "existing confirmation?"
+        # lookup finds none, as on a first confirmation.
+        entity = stmt.column_descriptions[0].get("entity")
+        executeResult = MagicMock()
+        executeResult.scalar_one_or_none.return_value = None if entity is ResultConfirmation else result
+        return executeResult
+
+    db.execute = AsyncMock(side_effect=_execute)
     # confirmResult's ownership check (SEC-2) loads the specimen: make it the
     # confirming MedTech's own.
     specimen = MagicMock(spec=Specimen)
