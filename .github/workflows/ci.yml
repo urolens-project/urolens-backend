@@ -4,7 +4,7 @@ name: CI
   push:
     branches: ["**"]
   pull_request:
-    branches: [main, development, v1.0.0]
+    branches: [main, development, v1.0.0, v1.1.0]
 
 jobs:
   ci:

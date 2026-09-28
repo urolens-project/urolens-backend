@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from src.models.analysis_result import AnalysisResult
+from src.models.image import Image
 from src.models.patient import Patient
 from src.models.specimen import Specimen
 from src.services.physician_result_service import PhysicianResultService
@@ -155,6 +157,35 @@ async def test_getResultDetailReturnsFullDetailForOwnedReleasedResult():
     auditLogger.record.assert_awaited_once()
     assert auditLogger.record.call_args.kwargs["eventType"] == "RESULT_RETRIEVED"
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
+    # SEC-0b: the microscopy bucket is private; a public link would 400 and,
+    # while it was public, exposed the image to anyone holding the link.
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    ar.imageId = uuid.uuid4()
+    storageKey = f"specimens/{SPECIMEN_ID}/images/{ar.imageId}.jpg"
+    signedUrl = f"https://example.supabase.co/storage/v1/object/sign/microscopy/{storageKey}?token=t"
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (Patient, PATIENT_ID): _makePatient(),
+        (Image, ar.imageId): SimpleNamespace(storageKey=storageKey),
+    }
+    db = _makeDetailDb(getMap, physicianPatientIds={PATIENT_ID})
+    bucket = MagicMock()
+    bucket.create_signed_url = AsyncMock(return_value={"signedURL": signedUrl, "signedUrl": signedUrl})
+    fakeSb = MagicMock()
+    fakeSb.storage.from_.return_value = bucket
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    with patch("src.core.storage.supabase", fakeSb):
+        result = await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
+
+    assert result.imageUrl == signedUrl
+    assert "/object/public/" not in result.imageUrl
+    assert bucket.create_signed_url.await_args.args[0] == storageKey
 
 
 # ── getResultDetail — status-gate fix (security-relevant) ────────────────────
