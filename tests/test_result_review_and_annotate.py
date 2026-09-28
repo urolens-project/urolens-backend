@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Select
 
 from src.core.encryption import encryptPii
 from src.core.exceptions import (
@@ -78,14 +79,14 @@ def _makeAuditLogger() -> MagicMock:
 
 # ── getFullResult: return reason and patient name ─────────────────────────────
 
-def _detailDb(result, specimen, returnReason: str | None = None) -> tuple[AsyncMock, list]:
+def _detailDb(result: AnalysisResult, specimen: Specimen, returnReason: str | None = None) -> tuple[AsyncMock, list]:
     """A session answering each getFullResult query by the entity it selects."""
     medtech = SimpleNamespace(username="medtech1")
     db = AsyncMock()
     db.get = AsyncMock(side_effect=[result, specimen, medtech])
     returnQueries: list = []
 
-    def _execute(stmt, *args, **kwargs):
+    def _execute(stmt: Select) -> MagicMock:
         entity = stmt.column_descriptions[0].get("entity")
         executeResult = MagicMock()
         executeResult.scalars.return_value.all.return_value = []
@@ -100,7 +101,7 @@ def _detailDb(result, specimen, returnReason: str | None = None) -> tuple[AsyncM
 
 
 @pytest.mark.asyncio
-async def test_detailOfAReturnedResultCarriesTheLatestReturnReason():
+async def test_detailOfAReturnedResultCarriesTheLatestReturnReason() -> None:
     db, returnQueries = _detailDb(
         _makeResult(ResultStatus.RETURNED_FOR_CORRECTION), _makeSpecimen(), returnReason="Recount the casts"
     )
@@ -121,7 +122,7 @@ async def test_detailOfAReturnedResultCarriesTheLatestReturnReason():
     "status",
     [ResultStatus.PENDING_CONFIRM, ResultStatus.PENDING_SUPERVISOR_APPROVAL, ResultStatus.APPROVED],
 )
-async def test_detailOfAResultThatIsNotReturnedHasNoReturnReason(status):
+async def test_detailOfAResultThatIsNotReturnedHasNoReturnReason(status: ResultStatus) -> None:
     # An old return row must not resurface once the result was resubmitted.
     db, returnQueries = _detailDb(_makeResult(status), _makeSpecimen(), returnReason="stale reason")
 
@@ -135,7 +136,7 @@ async def test_detailOfAResultThatIsNotReturnedHasNoReturnReason(status):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["MEDTECH", "medtech"])
-async def test_medtechDetailHasThePatientCodeButNoNameAndNeverDecryptsIt(role):
+async def test_medtechDetailHasThePatientCodeButNoNameAndNeverDecryptsIt(role: str) -> None:
     db, _ = _detailDb(_makeResult(), _makeSpecimen())
     service = ResultReviewService(db=db, auditLogger=_makeAuditLogger())
 
@@ -151,7 +152,7 @@ async def test_medtechDetailHasThePatientCodeButNoNameAndNeverDecryptsIt(role):
 
 
 @pytest.mark.asyncio
-async def test_supervisorDetailStillHasThePatientName():
+async def test_supervisorDetailStillHasThePatientName() -> None:
     db, _ = _detailDb(_makeResult(ResultStatus.PENDING_SUPERVISOR_APPROVAL), _makeSpecimen())
 
     detail = await ResultReviewService(db=db, auditLogger=_makeAuditLogger()).getFullResult(
@@ -163,12 +164,16 @@ async def test_supervisorDetailStillHasThePatientName():
 
 # ── saveAnnotation: ownership, status rules, audit ────────────────────────────
 
-def _annotateDb(result, specimen=None, existingReview=None) -> AsyncMock:
+def _annotateDb(
+    result: AnalysisResult | None,
+    specimen: Specimen | None = None,
+    existingReview: ResultReview | None = None,
+) -> AsyncMock:
     """Result reads (initial and fresh) return `result`; the review lookup `existingReview`."""
     db = AsyncMock()
     db.get = AsyncMock(return_value=specimen)
 
-    def _execute(stmt, *args, **kwargs):
+    def _execute(stmt: Select) -> MagicMock:
         entity = stmt.column_descriptions[0].get("entity")
         executeResult = MagicMock()
         executeResult.scalar_one_or_none.return_value = existingReview if entity is ResultReview else result
@@ -193,7 +198,7 @@ async def _annotate(db: AsyncMock, userId: uuid.UUID, role: str, auditLogger: Ma
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION])
-async def test_medtechAnnotatesTheirOwnEditableResultUnderTheSpecimenLock(status):
+async def test_medtechAnnotatesTheirOwnEditableResultUnderTheSpecimenLock(status: ResultStatus) -> None:
     db = _annotateDb(_makeResult(status), _makeSpecimen())
 
     response = await _annotate(db, MEDTECH_ID, "MEDTECH")
@@ -212,7 +217,7 @@ async def test_medtechAnnotatesTheirOwnEditableResultUnderTheSpecimenLock(status
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("assignedTo", [OTHER_MEDTECH_ID, None])
-async def test_medtechCannotAnnotateAnotherMedtechsOrAnUnassignedSpecimen(assignedTo):
+async def test_medtechCannotAnnotateAnotherMedtechsOrAnUnassignedSpecimen(assignedTo: uuid.UUID | None) -> None:
     # A finalised status too: ownership is checked first, so a non-owner learns nothing.
     db = _annotateDb(_makeResult(ResultStatus.APPROVED), _makeSpecimen(medtechId=assignedTo))
     auditLogger = _makeAuditLogger()
@@ -236,7 +241,7 @@ async def test_medtechCannotAnnotateAnotherMedtechsOrAnUnassignedSpecimen(assign
         ResultStatus.FAILED,
     ],
 )
-async def test_medtechCannotAnnotateOnceTheResultLeftTheirHands(status):
+async def test_medtechCannotAnnotateOnceTheResultLeftTheirHands(status: ResultStatus) -> None:
     db = _annotateDb(_makeResult(status), _makeSpecimen())
 
     with pytest.raises(ConflictException) as excInfo:
@@ -249,7 +254,7 @@ async def test_medtechCannotAnnotateOnceTheResultLeftTheirHands(status):
 
 
 @pytest.mark.asyncio
-async def test_supervisorAnnotatesWhileReviewingWithoutAnOwnershipLookup():
+async def test_supervisorAnnotatesWhileReviewingWithoutAnOwnershipLookup() -> None:
     db = _annotateDb(_makeResult(ResultStatus.PENDING_SUPERVISOR_APPROVAL))
 
     await _annotate(db, SUPERVISOR_ID, "SUPERVISOR")
@@ -263,7 +268,7 @@ async def test_supervisorAnnotatesWhileReviewingWithoutAnOwnershipLookup():
     "status",
     [ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION, ResultStatus.CRITICAL_ESCALATED],
 )
-async def test_supervisorCannotAnnotateOutsideTheirReview(status):
+async def test_supervisorCannotAnnotateOutsideTheirReview(status: ResultStatus) -> None:
     db = _annotateDb(_makeResult(status))
 
     with pytest.raises(ConflictException) as excInfo:
@@ -276,7 +281,7 @@ async def test_supervisorCannotAnnotateOutsideTheirReview(status):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("userId", "role"), [(MEDTECH_ID, "MEDTECH"), (SUPERVISOR_ID, "SUPERVISOR")])
 @pytest.mark.parametrize("status", [ResultStatus.APPROVED, ResultStatus.RELEASED])
-async def test_nobodyAnnotatesAFinalisedResult(userId, role, status):
+async def test_nobodyAnnotatesAFinalisedResult(userId: uuid.UUID, role: str, status: ResultStatus) -> None:
     db = _annotateDb(_makeResult(status), _makeSpecimen())
 
     with pytest.raises(UnprocessableException) as excInfo:
@@ -289,7 +294,7 @@ async def test_nobodyAnnotatesAFinalisedResult(userId, role, status):
 
 
 @pytest.mark.asyncio
-async def test_annotatingAMissingResultIsNotFound():
+async def test_annotatingAMissingResultIsNotFound() -> None:
     db = _annotateDb(None)
 
     with pytest.raises(NotFoundException) as excInfo:
@@ -300,7 +305,7 @@ async def test_annotatingAMissingResultIsNotFound():
 
 
 @pytest.mark.asyncio
-async def test_annotationIsAuditedInItsTransactionWithoutTheNoteText():
+async def test_annotationIsAuditedInItsTransactionWithoutTheNoteText() -> None:
     db = _annotateDb(_makeResult(ResultStatus.RETURNED_FOR_CORRECTION), _makeSpecimen())
     auditLogger = _makeAuditLogger()
 

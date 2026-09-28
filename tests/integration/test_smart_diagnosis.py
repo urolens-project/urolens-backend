@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Select
 
 from src.core.audit_logger import AuditLogger
 from src.models.analysis_result import AnalysisResult, ResultStatus
@@ -86,7 +87,7 @@ def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     """Returns a mock AsyncSession that yields the given AnalysisResult on SELECT."""
     db = AsyncMock()
 
-    def _execute(stmt, *args, **kwargs):
+    def _execute(stmt: Select) -> MagicMock:
         # A result query returns the result; the "existing confirmation?"
         # lookup finds none, as on a first confirmation.
         entity = stmt.column_descriptions[0].get("entity")
