@@ -155,54 +155,93 @@ class ResultReviewService:
         sex = pat.sex if pat else None
         return patientName, age, sex
 
+    # ── Shared filters (kept in one place so the dashboard counts can never
+    # drift from the queue list endpoints they summarize — see UROLENS-142's
+    # workload-count bug and UROLENS-143's release-race bug, both caused by
+    # the same definition living in two places) ─────────────────────────────
+
+    @staticmethod
+    def _pendingApprovalFilter() -> tuple[Any, ...]:
+        # Rejected specimens' results never show up for approval —
+        # shared by get_pending and get_supervisor_stats.
+        return (
+            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            Specimen.status != "REJECTED",
+        )
+
+    @staticmethod
+    def _escalatedFilter() -> tuple[Any, ...]:
+        return (AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED,)
+
+    @staticmethod
+    def _todayWindowPht() -> tuple[datetime, datetime]:
+        """The [start, end) instant bounds of "today" in Philippine time,
+        as timezone-aware datetimes.
+
+        Deliberately NOT a bare `date` compared against a `timestamptz`
+        column: asyncpg encodes a plain `datetime.date` using Postgres'
+        `date` OID, and comparing that to `timestamptz` triggers an
+        implicit cast that reinterprets the date's midnight in the
+        session's timezone (UTC here, unconfigured) rather than PHT —
+        silently shifting the "day" boundary to 8am PHT instead of
+        midnight PHT. Passing tz-aware datetimes instead makes the bound
+        an absolute instant, so the comparison is correct regardless of
+        the session's timezone setting.
+        """
+        nowPht = datetime.now(_PHT)
+        startPht = nowPht.replace(hour=0, minute=0, second=0, microsecond=0)
+        return startPht, startPht + timedelta(days=1)
+
+    @staticmethod
+    def _approvedTodayFilter(startPht: datetime, endPht: datetime) -> tuple[Any, ...]:
+        # Global across all supervisors, not per-approver — matches
+        # get_approved_today, which has no approved_by filter either.
+        return (
+            ResultApproval.approvedAt >= startPht,
+            ResultApproval.approvedAt < endPht,
+        )
+
     # ── Supervisor dashboard stats ───────────────────────────────────────
 
     async def getSupervisorStats(self) -> dict[str, int]:
-        """Dashboard counts for the supervisor's review queue.
+        """Dashboard counts for the supervisor's review queue, in one
+        round trip (three scalar subqueries in a single SELECT — this
+        endpoint is polled on an interval).
 
         Returns:
             A dict with `pendingCount` (results awaiting approval),
-            `approvedToday` (approvals recorded today, PHT), and
-            `escalatedCount` (results currently `CRITICAL_ESCALATED`).
+            `approvedToday` (approvals recorded today, PHT, across all
+            supervisors), and `escalatedCount` (results currently
+            `CRITICAL_ESCALATED`).
         """
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
+        startPht, endPht = self._todayWindowPht()
 
-        pendingCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-                .where(
-                    AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-                    Specimen.status != "REJECTED",
-                )
-            )
-        ).scalar_one()
+        pendingSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .where(*self._pendingApprovalFilter())
+            .scalar_subquery()
+        )
+        approvedSubq = (
+            select(func.count())
+            .select_from(ResultApproval)
+            .where(*self._approvedTodayFilter(startPht, endPht))
+            .scalar_subquery()
+        )
+        escalatedSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .where(*self._escalatedFilter())
+            .scalar_subquery()
+        )
 
-        approvedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(ResultApproval)
-                .where(
-                    ResultApproval.approvedAt >= todayPht,
-                    ResultApproval.approvedAt < tomorrowPht,
-                )
-            )
-        ).scalar_one()
-
-        escalatedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
-            )
-        ).scalar_one()
+        row = (await self.db.execute(select(pendingSubq, approvedSubq, escalatedSubq))).one()
 
         return {
-            "pendingCount": pendingCount,
-            "approvedToday": approvedCount,
-            "escalatedCount": escalatedCount,
+            "pendingCount": row[0],
+            "approvedToday": row[1],
+            "escalatedCount": row[2],
         }
 
     # ── Pending queue ─────────────────────────────────────────────────────
@@ -222,10 +261,7 @@ class ResultReviewService:
 
         # Results of rejected specimens never show up for approval (approveResult
         # would refuse them anyway) — same filter as getSupervisorStats.
-        awaitingApproval = (
-            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-            Specimen.status != "REJECTED",
-        )
+        awaitingApproval = self._pendingApprovalFilter()
 
         total = (
             await self.db.execute(
@@ -285,10 +321,8 @@ class ResultReviewService:
             `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
-
-        window = (ResultApproval.approvedAt >= todayPht, ResultApproval.approvedAt < tomorrowPht)
+        startPht, endPht = self._todayWindowPht()
+        window = self._approvedTodayFilter(startPht, endPht)
 
         total = (
             await self.db.execute(
@@ -354,19 +388,18 @@ class ResultReviewService:
             per row), `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
+        escalated = self._escalatedFilter()
 
         total = (
             await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                select(func.count()).select_from(AnalysisResult).where(*escalated)
             )
         ).scalar_one()
 
         arRows = (
             await self.db.execute(
                 select(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                .where(*escalated)
                 .order_by(AnalysisResult.updatedAt.desc())
                 .offset(offset)
                 .limit(pageSize)
