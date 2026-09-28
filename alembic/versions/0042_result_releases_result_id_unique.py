@@ -1,21 +1,33 @@
 """result_releases one release per result
 
-Revision ID: 0043
-Revises: 0042
+Revision ID: 0042
+Revises: 0041
 Create Date: 2026-09-28 00:00:00.000000
 
-Renumbered from 0040 to 0043. origin/development's tip is 0041
+Renumbered from 0040 to 0042 (via a brief detour through 0043 — see below).
+origin/development's real tip, now merged into this branch, is 0041
 (0040_enable_rls_all_tables.py, 0041_make_microscopy_bucket_private.py, both
-UROLENS-220) — chaining after 0041 alone would give this migration
-revision '0042', but the sibling branch feat/UROLENS-169 already claims
-'0042' for its own migration (0042_supervisor_stats_indexes.py, pushed to
-origin/feat/UROLENS-169) off that same development tip. Chaining after that
-instead avoids a second guaranteed collision, at the cost of an implicit
-ordering dependency: whichever of feat/UROLENS-169 / feat/UROLENS-143 merges
-into development second will need its migration's down_revision re-checked
-against development's actual tip at that time — the same renumbering this
-file itself just went through. Content unchanged from the original 0040
-version.
+UROLENS-220). Chained after it directly. Content unchanged from the
+original 0040 version.
+
+This migration was briefly renumbered to 0043 (down_revision='0042') to
+avoid colliding with the sibling branch feat/UROLENS-169's own migration,
+which also claims '0042' off the same development tip (pushed to
+origin/feat/UROLENS-169, not merged into development yet). That version
+broke `alembic heads` on THIS branch standalone — down_revision='0042'
+pointed at a revision that only exists on feat/UROLENS-169's tree, not
+here, so CI (which runs on every push, testing the raw branch) failed with
+a dangling-reference KeyError. Reverted to chaining directly after 0041
+(this branch's own real, present tip, post-merge) instead of trying to
+pre-empt a collision with a revision this branch doesn't actually contain.
+
+Known consequence, not fixed here: this branch and feat/UROLENS-169 both
+now claim '0042' off development's 0041. Whichever of the two merges into
+development second will hit the same collision UROLENS-220 vs. this
+migration originally hit, and will need its own migration renumbered
+again at that time — a real coordination point between the two branches,
+not something resolvable by one branch unilaterally reserving a number
+for a revision it doesn't contain.
 
 UROLENS-143: `releaseResult` used to check-for-existing-release then insert
 as two separate, unguarded steps — two concurrent requests for the same
@@ -36,8 +48,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0043'
-down_revision: str | Sequence[str] | None = '0042'
+revision: str = '0042'
+down_revision: str | Sequence[str] | None = '0041'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
