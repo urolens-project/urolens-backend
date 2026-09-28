@@ -2,7 +2,7 @@
 
 One place for "is this specimen yours?" and "can this result still be
 edited?", used by specimen reject/start-analysis, image upload/discard, result
-confirmation and manual override. Before this, only reject/start-analysis
+confirmation, manual override and result annotation. Before this, only reject/start-analysis
 checked ownership, so any MedTech could act on any other MedTech's specimen
 through the other four (security audit F-03/F-04/F-08).
 """
@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.enums import UserRole
 from src.core.exceptions import (
+    ConflictException,
     ForbiddenException,
     NotFoundException,
     SpecimenNotFoundError,
+    UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.specimen import Specimen
@@ -29,6 +31,15 @@ MEDTECH_EDITABLE_RESULT_STATUSES = frozenset({
     ResultStatus.PENDING_CONFIRM,
     ResultStatus.RETURNED_FOR_CORRECTION,
 })
+
+# A finalised result is the lab's record of truth (and, once RELEASED, already
+# in the patient's and physician's hands) — nobody may change it.
+FINALISED_RESULT_STATUSES = frozenset({ResultStatus.APPROVED, ResultStatus.RELEASED})
+
+# A Supervisor changes a result (override, annotate) only while reviewing it —
+# matches the web review screen, which offers actions only for
+# PENDING_SUPERVISOR_APPROVAL.
+SUPERVISOR_EDITABLE_RESULT_STATUSES = frozenset({ResultStatus.PENDING_SUPERVISOR_APPROVAL})
 
 # A result's image may be discarded or replaced in the editable statuses,
 # plus the two that exist precisely to ask for a new image.
@@ -77,6 +88,32 @@ async def getAssignedSpecimen(
         raise SpecimenNotFoundError(str(specimenId))
     requireSpecimenAssigned(specimen, medtechId)
     return specimen
+
+
+def requireResultEditable(result: AnalysisResult, isSupervisor: bool) -> None:
+    """Reject a change to a result that its status doesn't allow.
+
+    A MedTech may change a result only in `MEDTECH_EDITABLE_RESULT_STATUSES`,
+    a Supervisor only in `SUPERVISOR_EDITABLE_RESULT_STATUSES`. Check the
+    status after taking the specimen lock (see `getAssignedSpecimen`).
+
+    Raises:
+        UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
+            APPROVED or RELEASED (checked first, so this code wins for everyone).
+        ConflictException: `RESULT_NOT_EDITABLE`, for any other status the
+            caller's role may not change.
+    """
+    if result.status in FINALISED_RESULT_STATUSES:
+        raise UnprocessableException(
+            code="RESULT_ALREADY_FINALISED",
+            message="This result has been finalised and can't be changed.",
+        )
+    allowed = SUPERVISOR_EDITABLE_RESULT_STATUSES if isSupervisor else MEDTECH_EDITABLE_RESULT_STATUSES
+    if result.status not in allowed:
+        raise ConflictException(
+            code="RESULT_NOT_EDITABLE",
+            message="This result can't be changed in its current status.",
+        )
 
 
 def isMedtech(role: str) -> bool:

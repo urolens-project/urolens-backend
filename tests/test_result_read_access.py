@@ -113,7 +113,7 @@ async def test_resultDetailRefusesAnotherMedtechBeforeDecryptingOrLogging():
     auditLogger.record = AsyncMock()
     service = ResultReviewService(db=db, auditLogger=auditLogger)
 
-    with patch.object(result_review_service, "_decryptOrNone") as decryptSpy, \
+    with patch.object(result_review_service, "decryptStoredPii") as decryptSpy, \
          pytest.raises(ForbiddenException) as excInfo:
         await service.getFullResult(
             RESULT_ID, viewerId=MEDTECH_ID, viewerRole=UserRole.MEDTECH

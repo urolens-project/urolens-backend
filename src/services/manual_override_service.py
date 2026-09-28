@@ -11,21 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.audit_logger import AuditLogger
 from ..core.enums import UserRole
 from ..core.exceptions import (
-    ConflictException,
     NotFoundException,
     UnprocessableException,
 )
-from ..models.analysis_result import AnalysisResult, ResultStatus
+from ..models.analysis_result import AnalysisResult
 from ..models.manual_override import ManualOverride
-from .specimen_access import MEDTECH_EDITABLE_RESULT_STATUSES, getAssignedSpecimen
-
-# A finalised result is the lab's record of truth (and, once RELEASED, already
-# in the patient's and physician's hands) — nobody may change it.
-_FINALISED_RESULT_STATUSES = frozenset({ResultStatus.APPROVED, ResultStatus.RELEASED})
-
-# A Supervisor overrides only while reviewing — matches the web review screen,
-# which offers actions only for PENDING_SUPERVISOR_APPROVAL.
-_SUPERVISOR_EDITABLE_RESULT_STATUSES = frozenset({ResultStatus.PENDING_SUPERVISOR_APPROVAL})
+from .specimen_access import getAssignedSpecimen, requireResultEditable
 
 
 class ManualOverrideService:
@@ -93,7 +84,7 @@ class ManualOverrideService:
             # then re-read under the specimen lock (see getAssignedSpecimen).
             await getAssignedSpecimen(self.db, result.specimenId, medtechId)
             result = await self._getResult(resultId, fresh=True)
-        self._requireOverridable(result, isSupervisor)
+        requireResultEditable(result, isSupervisor)
 
         # Read original AI value safely from the db findings (Source of Truth)
         dbOriginalValue = await self._extractOriginalValue(result, parameter)
@@ -139,22 +130,6 @@ class ManualOverrideService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _requireOverridable(self, result: AnalysisResult, isSupervisor: bool) -> None:
-        # Finalised is checked first so its specific code wins for everyone.
-        if result.status in _FINALISED_RESULT_STATUSES:
-            raise UnprocessableException(
-                code="RESULT_ALREADY_FINALISED",
-                message="Cannot override a parameter after the result has been finalised.",
-            )
-        allowed = (
-            _SUPERVISOR_EDITABLE_RESULT_STATUSES if isSupervisor else MEDTECH_EDITABLE_RESULT_STATUSES
-        )
-        if result.status not in allowed:
-            raise ConflictException(
-                code="RESULT_NOT_EDITABLE",
-                message="This result can't be changed in its current status.",
-            )
 
     async def _getResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # `fresh` overwrites the already-loaded object with current DB state.
