@@ -39,6 +39,8 @@ from ..schemas.result_review import (
     EscalateResponse,
     FullResultDetail,
     MedtechPendingListResponse,
+    MedtechQueueSort,
+    MedtechQueueStatus,
     OverrideRequest,
     OverrideResponse,
     PendingResultListResponse,
@@ -52,6 +54,7 @@ from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
 from ..services.result_review_service import ResultReviewService, getSmartDiagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
+from ..services.specimen_access import requireResultReadable
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -99,9 +102,10 @@ async def getOverrideService(
 
 async def getResultReviewService(
     db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
-    return ResultReviewService(db=db)
+    return ResultReviewService(db=db, auditLogger=auditLogger)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -114,12 +118,11 @@ async def confirmResult(
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
     """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
-    confirmation = await _service.confirmResult(
+    return await _service.confirmResult(
         resultId=id,
         medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
     )
-    return ConfirmResultResponse.model_validate(confirmation)
 
 
 @router.post("/{id}/override", response_model=OverrideResponse, status_code=200)
@@ -143,6 +146,7 @@ async def overrideParameter(
         rationale=body.rationale,
         originalAiValue=body.originalAiValue,
         medtechId=uuid.UUID(currentUser["user_id"]),
+        callerRole=currentUser["role"],
         request=request,
     )
     return OverrideResponse.model_validate(override)
@@ -150,18 +154,26 @@ async def overrideParameter(
 
 @router.get("/medtech/pending", response_model=MedtechPendingListResponse)
 async def listMedtechPending(
+    request: Request,
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
+    status: MedtechQueueStatus | None = Query(None, description="Only this status; both when omitted."),
+    sort: MedtechQueueSort = Query("oldest", description="By specimen received time; returned results first."),
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> MedtechPendingListResponse:
     """List results awaiting this MedTech's confirmation (or re-confirmation,
     for ones a supervisor returned); see
-    `ResultConfirmationService.list_pending_for_medtech`.
+    `ResultConfirmationService.listPendingForMedtech`.
     """
     return MedtechPendingListResponse(
         **await _service.listPendingForMedtech(
-            medtechId=uuid.UUID(currentUser["user_id"]), page=page, pageSize=pageSize
+            medtechId=uuid.UUID(currentUser["user_id"]),
+            page=page,
+            pageSize=pageSize,
+            request=request,
+            status=status,
+            sort=sort,
         )
     )
 
@@ -217,21 +229,22 @@ async def listPendingResults(
 async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
-    """Save an annotation (notes + drawn regions) on a result. Open to
-    MEDTECH too — marking up the image while reviewing/correcting it is
-    just as much their job as the Supervisor's; each user's annotation is
-    stored under their own `reviewed_by`, and `get_full_result` surfaces
-    whichever is most recently updated. See
-    `ResultReviewService.save_annotation`.
+    """Save the caller's annotation on a result; see `ResultReviewService.saveAnnotation`.
+
+    Each user's annotation is stored under their own `reviewed_by`, and
+    `getFullResult` surfaces whichever was most recently updated.
     """
     result = await _service.saveAnnotation(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
+        callerRole=currentUser["role"],
         annotationNotes=body.annotationNotes,
         spatialAnnotations=body.spatialAnnotations,
+        request=request,
     )
     return AnnotationResponse(**result)
 
@@ -291,19 +304,24 @@ async def escalateResult(
     summary="Get Smart Diagnosis output for a result",
 )
 async def getSmartDiagnosisRoute(
-    result_id: str,
+    result_id: uuid.UUID,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    db: AsyncSession = Depends(getDb),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output. Open to MEDTECH too — they
     need this while reviewing a result they're about to confirm, not just
     the supervisor. See `result_review_service.get_smart_diagnosis`.
     """
-    return await getSmartDiagnosis(resultId=result_id)
+    await requireResultReadable(
+        db, result_id, uuid.UUID(currentUser["user_id"]), currentUser["role"]
+    )
+    return await getSmartDiagnosis(resultId=str(result_id))
 
 
 @router.get("/{result_id}", response_model=FullResultDetail)
 async def getFullResult(
     result_id: uuid.UUID,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> FullResultDetail:
@@ -312,4 +330,11 @@ async def getFullResult(
     backs both the MedTech's pre-confirmation review and the Supervisor's
     review/approval workspace. See `ResultReviewService.get_full_result`.
     """
-    return FullResultDetail(**await _service.getFullResult(result_id))
+    return FullResultDetail(
+        **await _service.getFullResult(
+            result_id,
+            viewerId=uuid.UUID(currentUser["user_id"]),
+            request=request,
+            viewerRole=currentUser["role"],
+        )
+    )

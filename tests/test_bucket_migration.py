@@ -1,6 +1,7 @@
-"""Unit tests — migration 0041 (SEC-0b: microscopy bucket private). No
-database: the migration's connection is mocked and every statement it
-executes is captured. The live-database check is `scripts/check_rls.py`.
+"""Unit tests — migrations 0041 (SEC-0b: microscopy bucket private) and 0042
+(SEC-2: bucket size limit). No database: the migration's connection is
+mocked and every statement it executes is captured. The live-database check
+is `scripts/check_rls.py`.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from src.services.ai_integration_service import ALLOWED_MIME_TYPES
+from src.services.ai_integration_service import ALLOWED_MIME_TYPES, MAX_IMAGE_BYTES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,3 +88,40 @@ def test_downgradeRestoresThePublicBucketWithNoMimeAllowlist(bucketMigration):
     assert "SET public = true" in sql
     assert "allowed_mime_types = NULL" in sql
     assert params == {"bucket": "microscopy"}
+
+
+# ── 0042: bucket size limit (SEC-2, F-09) ─────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def sizeLimitMigration():
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    return ScriptDirectory.from_config(config).get_revision("0042")
+
+
+def test_sizeLimitMigrationFollowsTheBucketMigration(sizeLimitMigration):
+    assert sizeLimitMigration.down_revision == "0041"
+
+
+def test_bucketSizeLimitEqualsTheUploadEndpointsCap(sizeLimitMigration):
+    # If these drift, uploads between the two limits pass the backend and are
+    # then silently dropped by the bucket (storage failure is non-fatal).
+    [(sql, params)] = _run(sizeLimitMigration, "upgrade")
+    assert "file_size_limit = :limit" in sql
+    assert params == {"limit": MAX_IMAGE_BYTES, "bucket": "microscopy"}
+
+
+def test_bucketSizeLimitTargetsTheConfiguredImageBucket(sizeLimitMigration):
+    with patch.object(sizeLimitMigration.module.settings, "supabaseImageBucket", "microscopy-staging"):
+        [(_, params)] = _run(sizeLimitMigration, "upgrade")
+    assert params["bucket"] == "microscopy-staging"
+
+
+@pytest.mark.parametrize("step", ["upgrade", "downgrade"])
+def test_sizeLimitMigrationChangesNothingWithoutAStorageSchema(sizeLimitMigration, step):
+    assert _run(sizeLimitMigration, step, hasStorageSchema=False) == []
+
+
+def test_sizeLimitDowngradeRemovesTheLimit(sizeLimitMigration):
+    [(_, params)] = _run(sizeLimitMigration, "downgrade")
+    assert params["limit"] is None

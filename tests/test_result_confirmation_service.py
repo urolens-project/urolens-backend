@@ -12,17 +12,22 @@ in tests/test_manual_override_service.py and tests/test_result_review_service.py
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import Select
 from sqlalchemy.exc import IntegrityError
 
 from src.core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
+    SpecimenNotFoundError,
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.result_confirmation import ResultConfirmation
 from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
@@ -31,6 +36,7 @@ from src.services.smart_diagnosis_service import SmartDiagnosisService
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000041")
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000042")
+OTHER_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000043")
 
 
 def _makeResult(
@@ -49,11 +55,33 @@ def _makeResult(
     return result
 
 
-def _makeDbMock(getResultReturn) -> AsyncMock:
+def _makeSpecimen(status: str = "PROCESSING", medtechId: uuid.UUID = MEDTECH_ID) -> Specimen:
+    specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
+    specimen.status = status
+    specimen.medtechId = medtechId
+    return specimen
+
+
+def _answerByEntity(
+    result: AnalysisResult | None, existingConfirmation: ResultConfirmation | None = None
+) -> Callable[[Select], MagicMock]:
+    # Like a real session: a result query returns the result; the "existing
+    # confirmation?" lookup returns the confirmation row (None by default).
+    def _execute(stmt: Select) -> MagicMock:
+        entity = stmt.column_descriptions[0].get("entity")
+        executeResult = MagicMock()
+        executeResult.scalar_one_or_none.return_value = (
+            existingConfirmation if entity is ResultConfirmation else result
+        )
+        return executeResult
+    return _execute
+
+
+def _makeDbMock(getResultReturn, specimen: Specimen | None = None) -> AsyncMock:
     db = AsyncMock()
-    executeResult = MagicMock()
-    executeResult.scalar_one_or_none.return_value = getResultReturn
-    db.execute = AsyncMock(return_value=executeResult)
+    db.get = AsyncMock(return_value=specimen if specimen is not None else _makeSpecimen())
+    db.execute = AsyncMock(side_effect=_answerByEntity(getResultReturn))
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
@@ -154,9 +182,7 @@ async def test_confirmIsBlockedWhenSpecimenWasRejected(resultStatus):
     """
     result = _makeResult(status=resultStatus)
     db = _makeDbMock(getResultReturn=result)
-    rejectedSpecimen = MagicMock(spec=Specimen)
-    rejectedSpecimen.status = "REJECTED"
-    db.get = AsyncMock(return_value=rejectedSpecimen)
+    db.get = AsyncMock(return_value=_makeSpecimen(status="REJECTED"))
     service = _makeService(db)
 
     with pytest.raises(ConflictException) as excInfo:
@@ -231,3 +257,91 @@ async def test_confirmMergesManualOverridesIntoParticleClasses():
     await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
 
     assert result.particleClasses == {"RBC": 15.0, "WBC": 4}
+
+
+# ── Ownership (SEC-2, security audit F-08) ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_confirmIsForbiddenForAMedtechTheSpecimenIsNotAssignedTo():
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(getResultReturn=result, specimen=_makeSpecimen(medtechId=OTHER_MEDTECH_ID))
+    service = _makeService(db)
+
+    with pytest.raises(ForbiddenException) as excInfo:
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert excInfo.value.status_code == 403
+    assert excInfo.value.errorCode == "SPECIMEN_NOT_ASSIGNED"
+    assert result.status == ResultStatus.PENDING_CONFIRM
+    assert result.confirmedBy is None
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmOwnershipIsCheckedBeforeStatusSoANonOwnerLearnsNothing():
+    # An already-approved result must still answer a non-owner with 403,
+    # not reveal its state through RESULT_ALREADY_CONFIRMED.
+    result = _makeResult(status=ResultStatus.APPROVED)
+    db = _makeDbMock(getResultReturn=result, specimen=_makeSpecimen(medtechId=OTHER_MEDTECH_ID))
+
+    with pytest.raises(ForbiddenException):
+        await _makeService(db).confirmResult(
+            resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock()
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirmRaisesNotFoundWhenTheResultsSpecimenIsMissing():
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    db = _makeDbMock(getResultReturn=result)
+    db.get = AsyncMock(return_value=None)
+
+    with pytest.raises(SpecimenNotFoundError) as excInfo:
+        await _makeService(db).confirmResult(
+            resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock()
+        )
+
+    assert excInfo.value.errorCode == "SPECIMEN_NOT_FOUND"
+    db.commit.assert_not_awaited()
+
+
+# ── UROLENS-226: confirm response and non-confirmable statuses ───────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "resubmitted"),
+    [(ResultStatus.PENDING_CONFIRM, False), (ResultStatus.RETURNED_FOR_CORRECTION, True)],
+)
+async def test_confirmResponseSaysWhetherItWasAResubmitAndTheNewStatus(
+    status: ResultStatus, resubmitted: bool
+) -> None:
+    result = _makeResult(status=status)
+    service = _makeService(_makeDbMock(getResultReturn=result))
+
+    response = await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert response.resultId == RESULT_ID
+    assert response.confirmedBy == MEDTECH_ID
+    assert response.resubmitted is resubmitted
+    assert response.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL
+    assert response.id is not None
+
+
+@pytest.mark.asyncio
+async def test_confirmAFailedResultIsNotConfirmableRatherThanAlreadyConfirmed() -> None:
+    """The app treats RESULT_ALREADY_CONFIRMED as success, so a FAILED result
+    must get its own code instead of being silently marked done offline.
+    """
+    result = _makeResult(status=ResultStatus.FAILED)
+    db = _makeDbMock(getResultReturn=result)
+    service = _makeService(db)
+
+    with pytest.raises(ConflictException) as excInfo:
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert excInfo.value.status_code == 409
+    assert excInfo.value.errorCode == "RESULT_NOT_CONFIRMABLE"
+    assert result.status == ResultStatus.FAILED
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
