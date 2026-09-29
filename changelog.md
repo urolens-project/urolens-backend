@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Fixed
+- **Restored #56–#60 to `development` — they had merged into their stacked base
+  branches, never into `development`.** Only #55 (SEC-0/SEC-1) reached
+  `development`. SEC-2 (#56), UROLENS-222 (#57), SEC-4 (#58), UROLENS-225 (#59) and
+  UROLENS-226 (#60) each merged into the branch below them after that branch had
+  already merged, and those branches were deleted. This merges their unchanged commits
+  (still on `fix/UROLENS-226-review-and-confirm`) into `development`; the entries
+  below describe them.
+  - SEC-2's bucket size limit migration is renumbered **0042 → 0043** (chained after
+    `0042_result_releases_result_id_unique`, UROLENS-143) to keep a single Alembic
+    head. Content unchanged. **Deploy:** check the target DB's `alembic_version` first —
+    if SEC-2's migration was already applied there as `0042`, stamp instead of
+    upgrading.
+  - UROLENS-143's release audit row now commits in the release's transaction, like
+    every other audited action since UROLENS-222.
 - **Any MedTech could annotate any result in any status, with no audit trail; the
   review screen showed MedTechs the patient's name but not why a result was returned
   (UROLENS-226).**
@@ -156,7 +170,7 @@
     only then). Otherwise 409 `RESULT_NOT_EDITABLE`. The route now passes the caller's
     role to the service.
   - **Uploads are capped at 10 MB** — 413 `IMAGE_TOO_LARGE`, never reading more than
-    one byte past the cap. Migration `0042` sets the same bucket `file_size_limit`.
+    one byte past the cap. Migration `0043` sets the same bucket `file_size_limit`.
   - **Only genuine JPEG/PNG is decoded**: Pillow is limited to those two decoders
     (`formats=`), so a file labelled `image/jpeg` can no longer reach Pillow's EPS,
     GD, JPEG2000 or other parsers; content that doesn't match its declared type is a

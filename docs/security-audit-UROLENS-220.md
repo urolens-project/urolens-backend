@@ -318,7 +318,7 @@ All four repos are **public**, so this needs to stay true — see *Recommendatio
 |---|---|---|
 | F-01, F-02 | SEC-0, SEC-0b (`feat/UROLENS-220-supabase-security-compliance`) | ✅ Fixed |
 | F-03, F-04, F-08 | **SEC-2** (`fix/UROLENS-220-sec-2-access-control-upload-hardening`) — ownership + editable-status guards (`services/specimen_access.py`), specimen row lock | ✅ Fixed |
-| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG decoders only, 10 MB cap, migration `0042`) | ✅ Fixed |
+| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG decoders only, 10 MB cap, migration `0043`) | ✅ Fixed |
 | F-10, F-14, F-16 | **SEC-2** — dependency batch 1 | ✅ Fixed |
 | F-15 | SEC-2 took cryptography to 48.0.1 (OpenSSL fix); the X.509/PKCS#7 advisories need 50.0.0 | 🟡 Partly — batch 2 |
 | F-06, F-07 | UROLENS-222 — login rate limit (5/5 min per account, 30/min per IP), dummy-hash timing, 15-minute lock expiry | ✅ Fixed |
