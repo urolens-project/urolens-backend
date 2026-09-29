@@ -71,7 +71,7 @@ MIME_TO_FORMAT = {"image/jpeg": "JPEG", "image/png": "PNG"}
 MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 # 10 MiB. Covers a full-resolution in-app camera JPEG (~3-6 MB) with room to
 # spare; the AI model downsizes to ~640 px anyway, so bigger buys nothing.
-# Migration 0042 sets the same limit on the storage bucket — keep them equal.
+# Migration 0043 sets the same limit on the storage bucket — keep them equal.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 

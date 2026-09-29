@@ -1,4 +1,4 @@
-"""Unit tests — migrations 0041 (SEC-0b: microscopy bucket private) and 0042
+"""Unit tests — migrations 0041 (SEC-0b: microscopy bucket private) and 0043
 (SEC-2: bucket size limit). No database: the migration's connection is
 mocked and every statement it executes is captured. The live-database check
 is `scripts/check_rls.py`.
@@ -90,17 +90,22 @@ def test_downgradeRestoresThePublicBucketWithNoMimeAllowlist(bucketMigration):
     assert params == {"bucket": "microscopy"}
 
 
-# ── 0042: bucket size limit (SEC-2, F-09) ─────────────────────────────────────
+# ── 0043: bucket size limit (SEC-2, F-09) ─────────────────────────────────────
 
 @pytest.fixture(scope="module")
 def sizeLimitMigration():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    return ScriptDirectory.from_config(config).get_revision("0042")
+    return ScriptDirectory.from_config(config).get_revision("0043")
 
 
 def test_sizeLimitMigrationFollowsTheBucketMigration(sizeLimitMigration):
-    assert sizeLimitMigration.down_revision == "0041"
+    # 0041 (bucket private) must run first; 0042 (result_releases) sits between them.
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    ancestors = {rev.revision for rev in ScriptDirectory.from_config(config).walk_revisions("base", "0043")}
+    assert sizeLimitMigration.down_revision == "0042"
+    assert "0041" in ancestors
 
 
 def test_bucketSizeLimitEqualsTheUploadEndpointsCap(sizeLimitMigration):

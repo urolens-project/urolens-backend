@@ -1,11 +1,15 @@
 """set image bucket size limit
 
-Revision ID: 0042
-Revises: 0041
+Revision ID: 0043
+Revises: 0042
 Create Date: 2026-09-27
 
 Renumbered from 0037 to 0042 while retargeting UROLENS-220 onto development
-(see 0040's docstring). Content unchanged.
+(see 0040's docstring), then to 0043 when #56–#60 were restored to development:
+those PRs had merged into their stacked base branches instead, and meanwhile
+development took 0042 for `0042_result_releases_result_id_unique` (UROLENS-143).
+Now chained after that. Content unchanged — the two migrations are independent
+(a storage bucket setting vs. a unique constraint on result_releases).
 
 SEC-2 (Security & Compliance / security audit F-09). The backend now refuses
 image uploads over 10 MB (`ai_integration_service.MAX_IMAGE_BYTES`, 413
@@ -27,8 +31,8 @@ from alembic import op
 from src.core.config import settings
 
 # revision identifiers, used by Alembic.
-revision: str = '0042'
-down_revision: str | Sequence[str] | None = '0041'
+revision: str = '0043'
+down_revision: str | Sequence[str] | None = '0042'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
