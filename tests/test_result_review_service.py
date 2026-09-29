@@ -16,10 +16,12 @@ annotation's spatial data was silently dropped. See
 test_annotate_result_persists_and_round_trips_spatial_annotations below —
 this is the test that would have caught it, and does: it fails against
 the pre-fix code (asserting on the object passed to db.add, not just the
-call succeeding) and passes against the fix. The rest of
-ResultReviewService's read-side methods (get_pending, get_approved_today,
-get_escalated, get_supervisor_stats) remain untested — still a gap, not
-attempted here either, out of scope for the regression fix.
+call succeeding) and passes against the fix. Beyond that, get_pending,
+get_approved_today, and get_escalated are only covered for the one field
+UROLENS-148 added (sampleUid) and the rejected-specimen filter above —
+their pagination, ordering, and non-sampleUid fields remain untested.
+get_supervisor_stats itself is covered separately in
+tests/integration/test_supervisor_stats.py.
 """
 from __future__ import annotations
 
@@ -710,3 +712,102 @@ async def test_getSmartDiagnosisNoDataReturnsFlaggedUnavailable():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result == {"resultId": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
+
+
+# ── UROLENS-148: sampleUid on the three supervisor queue endpoints ─────────
+
+
+def _makeQueueSpecimen(sampleUid: str = "SMP-20260928-12345") -> Specimen:
+    """A specimen with no patient/medtech linkage, so `_batchPatientContext`
+    skips the patient and user lookups — isolates these tests to the one
+    thing they check.
+    """
+    specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
+    specimen.sampleUid = sampleUid
+    specimen.patientUid = None
+    specimen.patientName = None
+    specimen.medtechId = None
+    specimen.status = "ASSIGNED"
+    return specimen
+
+
+def _makeCountResult(n: int) -> MagicMock:
+    executeResult = MagicMock()
+    executeResult.scalar_one.return_value = n
+    return executeResult
+
+
+@pytest.mark.asyncio
+async def test_getPendingIncludesSampleUidFromSpecimen():
+    """UROLENS-148: the pending list must surface the specimen's human-facing
+    sampleUid (e.g. SMP-...), not the specimen's raw UUID.
+    """
+    ar = _makeResult()
+    ar.confirmedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getPending(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getApprovedTodayIncludesSampleUidFromSpecimen():
+    """UROLENS-148: same guarantee for the approved-today list."""
+    ar = _makeResult(status=ResultStatus.APPROVED)
+    approval = MagicMock(spec=ResultApproval)
+    approval.resultId = RESULT_ID
+    approval.approvedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([approval]),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getApprovedToday(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getEscalatedIncludesSampleUidFromSpecimen():
+    """UROLENS-148: same guarantee for the escalated list."""
+    ar = _makeResult(status=ResultStatus.CRITICAL_ESCALATED)
+    ar.updatedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([]),  # no Escalation row needed for this assertion
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getEscalated(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
