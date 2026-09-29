@@ -259,6 +259,21 @@ async def test_confirmMergesManualOverridesIntoParticleClasses():
     assert result.particleClasses == {"RBC": 15.0, "WBC": 4}
 
 
+@pytest.mark.asyncio
+async def test_confirmKeepsTheLatestOverrideOfAParameterCorrectedTwice() -> None:
+    # `manualOverrides` loads oldest first (UROLENS-227), so the latest wins.
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM, aiFindings={"RBC": 12})
+    first, latest = MagicMock(), MagicMock()
+    first.parameterName, first.correctedValue = "RBC", "15.0"
+    latest.parameterName, latest.correctedValue = "RBC", "9.0"
+    result.manualOverrides = [first, latest]
+    service = _makeService(_makeDbMock(getResultReturn=result))
+
+    await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert result.particleClasses == {"RBC": 9.0}
+
+
 # ── Ownership (SEC-2, security audit F-08) ────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from src.models.analysis_result import ResultStatus
 from src.services import sync_service
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.result_review_service import ResultReviewService
+from tests.conftest import makeSyncDb
 from tests.test_result_review_service import (
     RESULT_ID,
     _makeResult,
@@ -149,7 +150,7 @@ def _makeSyncSupabase(specimenRows: list[dict], resultRows: list[dict]) -> Magic
 
 @pytest.mark.asyncio
 async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice():
-    db = AsyncMock()
+    db = makeSyncDb()
     auditLogger = _makeAuditLogger()
     specimenId = str(uuid.uuid4())
     resultId = str(uuid.uuid4())
@@ -165,7 +166,9 @@ async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice():
     assert len(payload["changes"]["specimens"]["created"]) == 1
     kwargs = auditLogger.record.call_args.kwargs
     assert kwargs["eventType"] == "SYNC_PULLED"
-    assert kwargs["detailJson"] == {"delta": False, "specimen_ids": [specimenId], "result_ids": [resultId]}
+    assert kwargs["detailJson"] == {
+        "delta": False, "specimen_ids": [specimenId], "result_ids": [resultId], "override_ids": [],
+    }
     assert kwargs["db"] is db
     db.commit.assert_awaited_once()
 
@@ -187,7 +190,7 @@ async def test_emptySyncPullIsNotLogged():
 async def test_deltaPullRecordsResultsEvenWhenTheirSpecimensDidNotChange():
     # A supervisor returning a result changes the result, not the specimen:
     # the audit row must still say whose result reached the device.
-    db = AsyncMock()
+    db = makeSyncDb()
     auditLogger = _makeAuditLogger()
     since = datetime.now(UTC) - timedelta(minutes=5)
     oldSpecimen = {"specimen_id": str(uuid.uuid4()), "updated_at": (since - timedelta(days=1)).isoformat()}

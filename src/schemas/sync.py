@@ -19,6 +19,8 @@ class SyncChanges(BaseModel):
     specimens: TableChanges
     queueAssignments: TableChanges
     analysisResults: TableChanges
+    manualOverrides: TableChanges
+    """Corrections on the MedTech's results, from any author (UROLENS-227)."""
 
 
 class SyncPullResponse(BaseModel):
