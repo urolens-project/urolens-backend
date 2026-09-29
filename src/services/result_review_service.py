@@ -287,6 +287,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -354,6 +355,7 @@ class ResultReviewService:
                 {
                     "resultId": resultId,
                     "specimenId": ar.specimenId if ar else None,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -418,6 +420,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
