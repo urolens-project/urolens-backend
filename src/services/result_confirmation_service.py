@@ -211,6 +211,8 @@ class ResultConfirmationService:
 
         # Settle particle_classes = ai_findings merged with any MedTech overrides.
         # If no overrides exist this is a straight copy of ai_findings.
+        # `manualOverrides` is ordered oldest first, so a parameter corrected
+        # more than once ends up with its latest value.
         overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
         result.particleClasses = {**result.aiFindings, **overrides}
 
