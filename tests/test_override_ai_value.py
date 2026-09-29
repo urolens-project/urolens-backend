@@ -249,11 +249,12 @@ async def test_uploadClearsTheResultsOverridesAndAuditsHowMany() -> None:
         _readWithinLimit=AsyncMock(return_value=b"jpeg"),
         _requireUploadAllowed=AsyncMock(),
         _validateImage=AsyncMock(return_value=(800, 600)),
+        _stripMetadata=AsyncMock(return_value=b"jpeg"),
+        _infer=AsyncMock(return_value={}),
         _replacePreviousImage=AsyncMock(),
         _uploadToStorage=AsyncMock(),
         _getOrCreateResult=AsyncMock(return_value=result),
         _clearManualOverrides=AsyncMock(return_value=2),
-        _runInference=AsyncMock(return_value=None),
     ):
         await service.handleUpload(specimenId=SPECIMEN_ID, uploaderId=MEDTECH_ID, file=upload, request=None)
         service._clearManualOverrides.assert_awaited_once_with(RESULT_ID)

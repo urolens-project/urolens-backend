@@ -159,6 +159,7 @@ async def test_confirmIsRefusedWhenThePatientRefusedProcessing():
     result.status = ResultStatus.PENDING_CONFIRM
     result.manualOverrides = []
     result.confirmedBy = None
+    result.imageId = None
     db = _makeDb(consent=_makeConsent(processing=False))
     db.get = AsyncMock(return_value=_makeSpecimen())
     executeResult = MagicMock()

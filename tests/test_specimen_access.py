@@ -53,6 +53,7 @@ def _makeResult(status: str) -> AnalysisResult:
     result.manualOverrides = []
     result.particleClasses = {}
     result.confirmedBy = None
+    result.imageId = None
     return result
 
 
