@@ -17,9 +17,9 @@ run for real.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -215,7 +215,8 @@ async def test_login04_accountLocksOn5thFailedAttempt(client):
 @pytest.mark.asyncio
 async def test_login05_lockedAccountRejectedEvenWithCorrectPassword(client):
     c, fakeSb = client
-    seedUser(fakeSb, failed_attempts=5, locked_at="2026-09-08T00:00:00+00:00")
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedMinuteAgo)
 
     resp = await c.post(
         "/api/v1/auth/login",
@@ -224,6 +225,55 @@ async def test_login05_lockedAccountRejectedEvenWithCorrectPassword(client):
 
     assert resp.status_code == 423
     assert resp.json()["error"]["code"] == "ACCOUNT_LOCKED"
+
+
+@pytest.mark.asyncio
+async def test_login05b_lockExpiresAfterLockoutWindow(client):
+    # UROLENS-222 / F-07: a lock no longer needs an administrator, so knowing
+    # a username isn't enough to keep its owner locked out.
+    c, fakeSb = client
+    lockedLongAgo = (datetime.now(UTC) - timedelta(minutes=16)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedLongAgo)
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_login05c_wrongGuessWhileLockedGets423AndDoesNotExtendTheLock(client):
+    # Before the fix a wrong guess re-stamped locked_at (endless lockout) and
+    # got 401 where the right password got 423 (a "your guess was right" oracle).
+    c, fakeSb = client
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedMinuteAgo)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    assert resp.status_code == 423
+    assert resp.json()["error"]["code"] == "ACCOUNT_LOCKED"
+    user = fakeSb.store["users"][0]
+    assert user["locked_at"] == lockedMinuteAgo
+    assert user["failed_attempts"] == 5
+
+
+@pytest.mark.asyncio
+async def test_login05d_oneWrongGuessAfterExpiryLocksAgainImmediately(client):
+    # The failure count is only reset by a successful login, so an expired
+    # lock gives exactly one guess per window.
+    c, fakeSb = client
+    lockedLongAgo = (datetime.now(UTC) - timedelta(minutes=16)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedLongAgo)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    assert resp.status_code == 401
+    user = fakeSb.store["users"][0]
+    assert user["failed_attempts"] == 6
+    assert user["locked_at"] != lockedLongAgo  # re-locked just now
 
 
 @pytest.mark.asyncio
@@ -308,3 +358,34 @@ async def test_login09_expiredJwtRejectedOnSubsequentRequest(client):
     )
 
     assert resp.status_code == 401
+
+
+# ── UROLENS-222: rate limiting and timing (audit F-06/F-07) ───────────────────
+
+@pytest.mark.asyncio
+async def test_login10_sixthAttemptInFiveMinutesIsRefusedWith429AndRetryAfter(client):
+    c, fakeSb = client
+    seedUser(fakeSb)
+    for _ in range(5):
+        await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "TOO_MANY_LOGIN_ATTEMPTS"
+    assert int(resp.headers["Retry-After"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_login11_unknownUsernameCostsOneBcryptCheckLikeAWrongPassword(client):
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    with patch("src.api.auth.spendPasswordCheck", AsyncMock()) as spend:
+        resp = await c.post("/api/v1/auth/login", json={"username": "nobody", "password": "guess"})
+
+    assert resp.status_code == 401
+    spend.assert_awaited_once_with("guess")

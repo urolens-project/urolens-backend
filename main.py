@@ -60,6 +60,7 @@ _STATUS_TO_CODE = {
     409: "CONFLICT",
     422: "VALIDATION_ERROR",
     423: "ACCOUNT_LOCKED",
+    429: "TOO_MANY_REQUESTS",
 }
 
 
@@ -69,6 +70,7 @@ async def httpExceptionHandler(request: Request, exc: HTTPException) -> JSONResp
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": code, "message": exc.detail}},
+        headers=getattr(exc, "headers", None),  # e.g. Retry-After on a 429
     )
 
 

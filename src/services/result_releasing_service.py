@@ -230,6 +230,7 @@ class ResultReleasingService:
             userId=currentUser["user_id"],
             detailJson={"result_id": str(resultId), "release_method": releaseMethod},
             request=request,
+            db=self.db,
         )
 
         await self.db.commit()

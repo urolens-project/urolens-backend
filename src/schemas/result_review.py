@@ -18,6 +18,12 @@ class ConfirmResultResponse(BaseModel):
     resultId: UUID
     confirmedBy: UUID
     confirmedAt: datetime
+    resubmitted: bool = False
+    """True when this re-confirms a result the supervisor returned for
+    correction ("re-submitted for supervisor approval"), False for a first
+    confirmation (UROLENS-226)."""
+    status: str
+    """The result's status after confirming — `PENDING_SUPERVISOR_APPROVAL`."""
 
     model_config = {"from_attributes": True}
 
@@ -75,15 +81,30 @@ class SupervisorStatsResponse(BaseModel):
     escalatedCount: int
 
 
+MedtechQueueStatus = Literal["PENDING_CONFIRM", "RETURNED_FOR_CORRECTION"]
+"""`status` filter values for the MedTech confirmation queue (UROLENS-225)."""
+
+MedtechQueueSort = Literal["oldest", "newest"]
+"""Queue order by when the specimen was received — mirrors the mobile queue's
+Earliest/Latest filters. Returned-for-correction results always come first."""
+
+
 class MedtechPendingResultItem(BaseModel):
     """One result awaiting this MedTech's confirmation (or re-confirmation,
     if a supervisor returned it), for the MedTech's own queue list.
+
+    Identifies the patient by `patientUid` only — no name, matching the mobile
+    app's privacy decision to show the patient code (UROLENS-225).
     """
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
+    testType: str | None = None
+    priorityLevel: str | None = None
+    receivedAt: datetime | None = None
     patientUid: str = ""
-    patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
     status: str
@@ -186,12 +207,17 @@ class ManualOverrideItem(BaseModel):
 
 
 class FullResultDetail(BaseModel):
-    """Response body for the supervisor's full single-result review/detail view."""
+    """Response body for the full single-result review/detail view.
+
+    Serves the supervisor's review workspace and the MedTech's online review screen.
+    """
 
     resultId: UUID
     specimenId: UUID
     patientUid: str = ""
-    patientName: str
+    patientName: str | None = None
+    """`null` for a MedTech caller — they identify the patient by
+    `patientUid` only (UROLENS-226); set for supervisors."""
     patientAge: int | None = None
     patientSex: str | None = None
     medtechName: str
@@ -209,6 +235,9 @@ class FullResultDetail(BaseModel):
     smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str
+    returnReason: str | None = None
+    """The supervisor's latest reason, only while the result is
+    RETURNED_FOR_CORRECTION (UROLENS-226)."""
     annotationNotes: str | None = None
     spatialAnnotations: list[dict[str, Any]] | None = None
     """Persisted as of migration 0034 (JSONB) — type inferred from pre-port

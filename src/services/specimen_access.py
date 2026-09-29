@@ -1,0 +1,145 @@
+"""Shared MedTech access rules for specimen-scoped write actions (SEC-2).
+
+One place for "is this specimen yours?" and "can this result still be
+edited?", used by specimen reject/start-analysis, image upload/discard, result
+confirmation, manual override and result annotation. Before this, only reject/start-analysis
+checked ownership, so any MedTech could act on any other MedTech's specimen
+through the other four (security audit F-03/F-04/F-08).
+"""
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.enums import UserRole
+from src.core.exceptions import (
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    SpecimenNotFoundError,
+    UnprocessableException,
+)
+from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.specimen import Specimen
+
+# The only statuses in which a MedTech may still change a result (override a
+# parameter, discard its image, replace its image): before it is submitted,
+# or after a supervisor sends it back. Once submitted, approved or released,
+# only the supervisor workflow may touch it.
+MEDTECH_EDITABLE_RESULT_STATUSES = frozenset({
+    ResultStatus.PENDING_CONFIRM,
+    ResultStatus.RETURNED_FOR_CORRECTION,
+})
+
+# A finalised result is the lab's record of truth (and, once RELEASED, already
+# in the patient's and physician's hands) — nobody may change it.
+FINALISED_RESULT_STATUSES = frozenset({ResultStatus.APPROVED, ResultStatus.RELEASED})
+
+# A Supervisor changes a result (override, annotate) only while reviewing it —
+# matches the web review screen, which offers actions only for
+# PENDING_SUPERVISOR_APPROVAL.
+SUPERVISOR_EDITABLE_RESULT_STATUSES = frozenset({ResultStatus.PENDING_SUPERVISOR_APPROVAL})
+
+# A result's image may be discarded or replaced in the editable statuses,
+# plus the two that exist precisely to ask for a new image.
+MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES = MEDTECH_EDITABLE_RESULT_STATUSES | frozenset({
+    ResultStatus.IMAGE_RETAKE_REQUESTED,
+    ResultStatus.FAILED,
+})
+
+
+def requireSpecimenAssigned(specimen: Specimen, medtechId: uuid.UUID) -> None:
+    """Reject the caller unless the specimen is assigned to them.
+
+    Raises:
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if `specimen.medtechId`
+            isn't `medtechId` (including an unassigned specimen).
+    """
+    if specimen.medtechId != medtechId:
+        raise ForbiddenException(
+            code="SPECIMEN_NOT_ASSIGNED",
+            message="Specimen is not assigned to you.",
+        )
+
+
+async def getAssignedSpecimen(
+    db: AsyncSession, specimenId: uuid.UUID, medtechId: uuid.UUID
+) -> Specimen:
+    """Load and lock a specimen the calling MedTech is assigned to.
+
+    The row is locked (`SELECT ... FOR UPDATE`) until the caller's
+    transaction ends, so every specimen-scoped write — reject, start,
+    upload, discard, confirm, override — runs one at a time per specimen.
+    Callers must read any state they check (the result's status, the
+    image's status) *after* this call, or a concurrent write can slip in
+    between the check and the change (e.g. an upload resetting a result
+    that was confirmed from another device mid-upload).
+
+    Returns:
+        The `Specimen` row.
+
+    Raises:
+        SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if it doesn't exist.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if it isn't the caller's.
+    """
+    specimen = await db.get(Specimen, specimenId, with_for_update=True)
+    if specimen is None:
+        raise SpecimenNotFoundError(str(specimenId))
+    requireSpecimenAssigned(specimen, medtechId)
+    return specimen
+
+
+def requireResultEditable(result: AnalysisResult, isSupervisor: bool) -> None:
+    """Reject a change to a result that its status doesn't allow.
+
+    A MedTech may change a result only in `MEDTECH_EDITABLE_RESULT_STATUSES`,
+    a Supervisor only in `SUPERVISOR_EDITABLE_RESULT_STATUSES`. Check the
+    status after taking the specimen lock (see `getAssignedSpecimen`).
+
+    Raises:
+        UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
+            APPROVED or RELEASED (checked first, so this code wins for everyone).
+        ConflictException: `RESULT_NOT_EDITABLE`, for any other status the
+            caller's role may not change.
+    """
+    if result.status in FINALISED_RESULT_STATUSES:
+        raise UnprocessableException(
+            code="RESULT_ALREADY_FINALISED",
+            message="This result has been finalised and can't be changed.",
+        )
+    allowed = SUPERVISOR_EDITABLE_RESULT_STATUSES if isSupervisor else MEDTECH_EDITABLE_RESULT_STATUSES
+    if result.status not in allowed:
+        raise ConflictException(
+            code="RESULT_NOT_EDITABLE",
+            message="This result can't be changed in its current status.",
+        )
+
+
+def isMedtech(role: str) -> bool:
+    """Whether a `role` claim is MEDTECH (claims are compared case-insensitively)."""
+    return role.upper() == UserRole.MEDTECH
+
+
+async def requireResultReadable(
+    db: AsyncSession, resultId: uuid.UUID, viewerId: uuid.UUID, viewerRole: str
+) -> None:
+    """Let a MedTech read a result only for a specimen assigned to them.
+
+    Other roles are already limited by the route's `RequireRole` and pass
+    through (supervisors review every MedTech's work). Security audit F-22.
+
+    Raises:
+        NotFoundException: `RESULT_NOT_FOUND`, if the result doesn't exist.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for a
+            result whose specimen isn't theirs (or no longer exists).
+    """
+    if not isMedtech(viewerRole):
+        return
+    result = await db.get(AnalysisResult, resultId)
+    if result is None:
+        raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
+    specimen = await db.get(Specimen, result.specimenId)
+    if specimen is None:
+        raise ForbiddenException(code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you.")
+    requireSpecimenAssigned(specimen, viewerId)

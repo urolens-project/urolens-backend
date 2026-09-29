@@ -10,13 +10,17 @@ from fastapi import HTTPException, Request, status
 
 from src.core import audit_logger
 from src.core.auth_service import (
+    LOCKOUT_MINUTES,
     closeSession,
     createSession,
     incrementFailedAttempts,
+    isLockedOut,
     resetFailedAttempts,
+    spendPasswordCheck,
     verifyPassword,
 )
 from src.core.config import settings
+from src.core.rate_limit import clearLoginRateLimit, enforceLoginRateLimit
 from src.core.supabase import supabase
 from src.schemas.auth import PatientLoginResponse
 
@@ -69,11 +73,18 @@ async def patientLogin(patientUid: str, password: str, request: Request) -> Pati
     Raises:
         HTTPException: 401 (`INVALID_CREDENTIALS`), for an unknown patient
             UID, a user record that can't be resolved, or a password
-            mismatch. 423 (`ACCOUNT_LOCKED`), if the account is locked.
+            mismatch (every such path takes one bcrypt check, so timing
+            doesn't reveal which patient UIDs exist). 423 (`ACCOUNT_LOCKED`),
+            inside the `LOCKOUT_MINUTES` window after too many failures.
             403 (`ACCOUNT_INACTIVE`), if the account is inactive.
+        TooManyRequestsException: 429 (`TOO_MANY_LOGIN_ATTEMPTS`), if this
+            patient UID or client IP is over its login rate limit.
     """
     ipAddress = request.client.host if request.client else "unknown"
     userAgent = request.headers.get("user-agent")
+
+    # 0. Rate limit before any lookup or password check (UROLENS-222, F-06)
+    enforceLoginRateLimit("patient", patientUid, ipAddress)
 
     # 1. Look up patient by patient_uid (plaintext column — safe to query directly)
     patientResult = await supabase.table("patients").select("*").eq(
@@ -82,6 +93,7 @@ async def patientLogin(patientUid: str, password: str, request: Request) -> Pati
     patient = patientResult.data
 
     if patient is None:
+        await spendPasswordCheck(password)  # same timing as a wrong password
         await audit_logger.logPatientLoginFailed(ipAddress)
         raise _invalidCreds()
 
@@ -92,24 +104,31 @@ async def patientLogin(patientUid: str, password: str, request: Request) -> Pati
     user = userResult.data
 
     if user is None:
+        await spendPasswordCheck(password)
         await audit_logger.logPatientLoginFailed(ipAddress, patientId=patient["patient_id"])
         raise _invalidCreds()
 
-    # 3. Password must be correct (check before lock/active to avoid timing attacks)
-    if not await verifyPassword(password, user["hashed_password"]):
+    # 3. The password is always checked (same timing either way)...
+    passwordOk = await verifyPassword(password, user["hashed_password"])
+
+    # 4. ...but while locked, the answer is 423 whether it was right or wrong,
+    # and nothing is counted: a wrong guess can't extend the lock, and the
+    # response can't tell an attacker their guess was right (UROLENS-222, F-07).
+    if isLockedOut(user):
+        if not passwordOk:
+            await audit_logger.logPatientLoginFailed(ipAddress, patientId=patient["patient_id"])
+        raise _apiError(
+            status.HTTP_423_LOCKED,
+            "ACCOUNT_LOCKED",
+            f"Your account is temporarily locked. Try again in {LOCKOUT_MINUTES} minutes or contact the laboratory.",
+        )
+
+    if not passwordOk:
         await asyncio.gather(
             incrementFailedAttempts(user["user_id"]),
             audit_logger.logPatientLoginFailed(ipAddress, patientId=patient["patient_id"]),
         )
         raise _invalidCreds()
-
-    # 4. Account must not be locked
-    if user.get("locked_at") is not None:
-        raise _apiError(
-            status.HTTP_423_LOCKED,
-            "ACCOUNT_LOCKED",
-            "Your account is locked. Contact the laboratory.",
-        )
 
     # 5. Account must be active
     if not user.get("is_active", True):
@@ -125,6 +144,7 @@ async def patientLogin(patientUid: str, password: str, request: Request) -> Pati
         createSession(user["user_id"], "PATIENT", ipAddress, userAgent),
     )
 
+    clearLoginRateLimit("patient", patientUid)
     token = _issuePatientJwt(user["user_id"], patientUid, sessionRecord["session_id"])
 
     await audit_logger.logPatientLoginSuccess(

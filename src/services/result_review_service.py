@@ -24,12 +24,15 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.encryption import decryptPii
+from ..core.audit_logger import AuditLogger
+from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     UnprocessableException,
 )
@@ -47,6 +50,12 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .specimen_access import (
+    getAssignedSpecimen,
+    isMedtech,
+    requireResultEditable,
+    requireSpecimenAssigned,
+)
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -65,25 +74,15 @@ def _computeAge(dobStr: str | None) -> int | None:
 
 
 
-def _decryptOrNone(ciphertext: str | None) -> str | None:
-    # Decrypts PII, returning None (rather than raising) for an unset or
-    # undecryptable value.
-    if not ciphertext:
-        return None
-    try:
-        return decryptPii(ciphertext)
-    except Exception:
-        return None
-
-
 class ResultReviewService:
     """Owns the supervisor review/approval workflow: pending queue, approved/
     escalated lists, full result detail, annotation, and the
     approve/return/escalate transitions.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, auditLogger: AuditLogger | None = None) -> None:
         self.db = db
+        self.auditLogger = auditLogger
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -141,9 +140,9 @@ class ResultReviewService:
         """Returns (patient_name, patient_age, patient_sex) for a list row."""
         if spec is None:
             return "", None, None
-        patientName = _decryptOrNone(spec.patientName) or ""
+        patientName = decryptStoredPii(spec.patientName) or ""
         pat = patMap.get(spec.patientUid) if spec.patientUid else None
-        age = _computeAge(_decryptOrNone(pat.dateOfBirth)) if pat else None
+        age = _computeAge(decryptStoredPii(pat.dateOfBirth)) if pat else None
         sex = pat.sex if pat else None
         return patientName, age, sex
 
@@ -400,17 +399,35 @@ class ResultReviewService:
 
     # ── Full result detail ────────────────────────────────────────────────
 
-    async def getFullResult(self, resultId: uuid.UUID) -> dict[str, Any]:
+    async def getFullResult(
+        self,
+        resultId: uuid.UUID,
+        viewerId: uuid.UUID | None = None,
+        request: Request | None = None,
+        viewerRole: str | None = None,
+    ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
         patient/medtech context, AI findings, manual overrides, the latest
         annotation, and Smart Diagnosis (if attached).
+
+        Args:
+            resultId: the result to assemble.
+            viewerId: the caller. When given (and an `auditLogger` was
+                injected), the view is recorded as `RESULT_DETAIL_VIEWED` in
+                the same transaction — no view without an audit row.
+            request: the inbound request, for the audit row's client IP.
+            viewerRole: the caller's `role` claim. A MEDTECH may only read
+                results for specimens assigned to them (F-22); checked before
+                any patient data is decrypted.
 
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
             always `None` — see the module docstring's schema-drift note.
 
         Raises:
-            NotFoundException: `result_id` doesn't exist.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
+                another MedTech's result.
         """
         ar = await self.db.get(AnalysisResult, resultId)
         if ar is None:
@@ -419,6 +436,13 @@ class ResultReviewService:
             )
 
         spec = await self.db.get(Specimen, ar.specimenId)
+        isMedtechViewer = viewerRole is not None and isMedtech(viewerRole)
+        if isMedtechViewer:
+            if spec is None:
+                raise ForbiddenException(
+                    code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you."
+                )
+            requireSpecimenAssigned(spec, viewerId)
 
         pat: Patient | None = None
         if spec and spec.patientUid:
@@ -482,15 +506,30 @@ class ResultReviewService:
                 "engineVersion": sdo.engineVersion,
             }
 
-        first = _decryptOrNone(pat.firstName) if pat else None
-        last = _decryptOrNone(pat.lastName) if pat else None
-        dob = _decryptOrNone(pat.dateOfBirth) if pat else None
+        dob = decryptStoredPii(pat.dateOfBirth) if pat else None
         sex = pat.sex if pat else None
-        patientName = f"{first or ''} {last or ''}".strip() or (
-            _decryptOrNone(spec.patientName) if spec else ""
-        ) or ""
+        # A MedTech identifies the patient by code only (the mobile app's
+        # privacy decision, UROLENS-225/226): their name isn't even decrypted.
+        patientName: str | None = None
+        if not isMedtechViewer:
+            first = decryptStoredPii(pat.firstName) if pat else None
+            last = decryptStoredPii(pat.lastName) if pat else None
+            patientName = f"{first or ''} {last or ''}".strip() or (
+                decryptStoredPii(spec.patientName) if spec else ""
+            ) or ""
 
-        return {
+        returnReason: str | None = None
+        if ar.status == ResultStatus.RETURNED_FOR_CORRECTION:
+            returnReason = (
+                await self.db.execute(
+                    select(ResultReturn.reason)
+                    .where(ResultReturn.resultId == resultId)
+                    .order_by(ResultReturn.returnedAt.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
+        detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
             "patientUid": spec.patientUid if spec else "",
@@ -509,9 +548,23 @@ class ResultReviewService:
             "smartDiagnosis": smartDiagnosis,
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,
+            "returnReason": returnReason,
             "annotationNotes": latestAnnotation,
             "spatialAnnotations": latestSpatial,
         }
+        if viewerId is not None and self.auditLogger is not None:
+            # RA 10173: record who viewed which patient's result.
+            await self.auditLogger.record(
+                eventType="RESULT_DETAIL_VIEWED",
+                entityType="analysis_result",
+                entityId=ar.resultId,
+                userId=viewerId,
+                db=self.db,
+                detailJson={"specimen_id": str(ar.specimenId)},
+                request=request,
+            )
+            await self.db.commit()
+        return detail
 
     # ── Annotation ────────────────────────────────────────────────────────
 
@@ -519,20 +572,40 @@ class ResultReviewService:
         self,
         resultId: uuid.UUID,
         userId: uuid.UUID,
+        callerRole: str,
         annotationNotes: str,
         spatialAnnotations: list | None = None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
-        """Upsert a supervisor's annotation on a result.
+        """Upsert the caller's annotation on a result.
 
-        `spatial_annotations` is only written when the caller supplies a
-        value (matching the pre-port behavior) — omitting it on a later call
-        leaves a previously-saved value in place rather than clearing it.
+        Same access rules as a manual override: a MedTech may annotate only a
+        specimen assigned to them, while the result is `PENDING_CONFIRM` or
+        `RETURNED_FOR_CORRECTION`; a Supervisor only while it is
+        `PENDING_SUPERVISOR_APPROVAL`. The audit row commits with the change
+        and never carries the note text.
+
+        `spatialAnnotations` is only written when the caller supplies a
+        value — omitting it on a later call leaves a previously-saved value in
+        place rather than clearing it.
+
+        Raises:
+            NotFoundException: `RESULT_NOT_FOUND`, if the result doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech annotates
+                another MedTech's (or an unassigned) specimen.
+            UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
+                APPROVED or RELEASED.
+            ConflictException: `RESULT_NOT_EDITABLE`, for any other status the
+                caller's role may not change.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
-        if ar is None:
-            raise NotFoundException(
-                code="RESULT_NOT_FOUND", message="Analysis result not found."
-            )
+        ar = await self._getAnnotatableResult(resultId)
+        isSupervisor = not isMedtech(callerRole)
+        if not isSupervisor:
+            # Ownership before any state check, so a non-owner learns nothing;
+            # then re-read under the specimen lock (see getAssignedSpecimen).
+            await getAssignedSpecimen(self.db, ar.specimenId, userId)
+            ar = await self._getAnnotatableResult(resultId, fresh=True)
+        requireResultEditable(ar, isSupervisor)
 
         existing = (
             await self.db.execute(
@@ -557,6 +630,18 @@ class ResultReviewService:
                 )
             )
 
+        await self.auditLogger.record(
+            eventType="ANNOTATION_SAVED",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=userId,
+            db=self.db,
+            detailJson={
+                "resultStatus": ar.status.value,
+                "hasSpatialAnnotations": spatialAnnotations is not None,
+            },
+            request=request,
+        )
         await self.db.commit()
 
         return {
@@ -564,6 +649,16 @@ class ResultReviewService:
             "annotationNotes": annotationNotes,
             "spatialAnnotations": spatialAnnotations,
         }
+
+    async def _getAnnotatableResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
+        # `fresh` overwrites the already-loaded object with current DB state.
+        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        ar = (await self.db.execute(stmt)).scalar_one_or_none()
+        if ar is None:
+            raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
+        return ar
 
     # ── Approve ───────────────────────────────────────────────────────────
 
