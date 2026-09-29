@@ -29,6 +29,7 @@ from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
 from src.services import sync_service
 from src.services.result_confirmation_service import ResultConfirmationService
+from tests.conftest import makeSyncDb
 
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 
@@ -78,12 +79,6 @@ def _makeSyncSupabase(specimenRows: list[dict], resultRows: list[dict]) -> Magic
     return sb
 
 
-def _makeReasonsDb(rows: list[tuple[uuid.UUID, str]]) -> AsyncMock:
-    db = AsyncMock()
-    db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
-    return db
-
-
 async def _pull(db, specimens, results):
     with patch.object(sync_service, "supabase", _makeSyncSupabase(specimens, results)), \
          patch.object(sync_service, "AuditLogger", return_value=MagicMock(record=AsyncMock())):
@@ -95,17 +90,18 @@ async def test_syncNeverSendsPatientNamesInAnyForm():
     # The app shows only the patient code, so the name has no reason to be on
     # the phone — not as plaintext, not as ciphertext (RA 10173 minimization).
     # Even if a row carried a name, it must not come through.
+    encrypted, legacy, none = (str(uuid.uuid4()) for _ in range(3))
     specimens = [
-        {"specimen_id": "s-encrypted", "patient_uid": "PAT-000001", "patient_name": encryptPii("Juan Dela Cruz")},
-        {"specimen_id": "s-legacy", "patient_uid": "PAT-000002", "patient_name": "Maria Santos"},
-        {"specimen_id": "s-none", "patient_uid": "PAT-000003"},
+        {"specimen_id": encrypted, "patient_uid": "PAT-000001", "patient_name": encryptPii("Juan Dela Cruz")},
+        {"specimen_id": legacy, "patient_uid": "PAT-000002", "patient_name": "Maria Santos"},
+        {"specimen_id": none, "patient_uid": "PAT-000003"},
     ]
 
-    payload = await _pull(AsyncMock(), specimens, [])
+    payload = await _pull(makeSyncDb(), specimens, [])
 
     rows = payload["changes"]["specimens"]["created"]
     # Kept as "" (not dropped/null): the app's local column is a required string.
-    assert {r["id"]: r["patient_name"] for r in rows} == {"s-encrypted": "", "s-legacy": "", "s-none": ""}
+    assert {r["id"]: r["patient_name"] for r in rows} == {encrypted: "", legacy: "", none: ""}
     assert {r["patient_uid"] for r in rows} == {"PAT-000001", "PAT-000002", "PAT-000003"}
     body = json.dumps(payload)
     assert "Juan" not in body and "Maria" not in body and "gAAAAA" not in body
@@ -122,13 +118,14 @@ def test_syncDoesNotEvenReadThePatientNameColumn():
 async def test_returnedResultsCarryTheLatestSupervisorReason():
     returnedId = uuid.uuid4()
     pendingId = uuid.uuid4()
-    specimen = {"specimen_id": "s1", "patient_name": None}
+    specimenId = str(uuid.uuid4())
+    specimen = {"specimen_id": specimenId, "patient_name": None}
     results = [
-        {"result_id": str(returnedId), "specimen_id": "s1", "status": "RETURNED_FOR_CORRECTION"},
-        {"result_id": str(pendingId), "specimen_id": "s1", "status": "PENDING_CONFIRM"},
+        {"result_id": str(returnedId), "specimen_id": specimenId, "status": "RETURNED_FOR_CORRECTION"},
+        {"result_id": str(pendingId), "specimen_id": specimenId, "status": "PENDING_CONFIRM"},
     ]
     # Newest first, as the query orders them: the first reason per result wins.
-    db = _makeReasonsDb([(returnedId, "Recount RBC"), (returnedId, "Older reason")])
+    db = makeSyncDb(reasons=[(returnedId, "Recount RBC"), (returnedId, "Older reason")])
 
     payload = await _pull(db, [specimen], results)
 
@@ -140,13 +137,15 @@ async def test_returnedResultsCarryTheLatestSupervisorReason():
 
 @pytest.mark.asyncio
 async def test_noReturnReasonQueryWhenNothingIsReturned():
-    db = AsyncMock()
-    results = [{"result_id": str(uuid.uuid4()), "specimen_id": "s1", "status": "PENDING_CONFIRM"}]
+    db = makeSyncDb()
+    specimenId = str(uuid.uuid4())
+    results = [{"result_id": str(uuid.uuid4()), "specimen_id": specimenId, "status": "PENDING_CONFIRM"}]
 
-    payload = await _pull(db, [{"specimen_id": "s1", "patient_name": None}], results)
+    payload = await _pull(db, [{"specimen_id": specimenId, "patient_name": None}], results)
 
     assert payload["changes"]["analysisResults"]["created"][0]["return_reason"] is None
-    db.execute.assert_not_awaited()
+    queried = [c.args[0].column_descriptions[0]["entity"] for c in db.execute.await_args_list]
+    assert ResultReturn not in queried
 
 
 # ── GET /results/medtech/pending ──────────────────────────────────────────────

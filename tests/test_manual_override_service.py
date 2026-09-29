@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import Request
+from sqlalchemy import Select
 
 from src.core.audit_logger import AuditLogger
 from src.core.enums import UserRole
@@ -56,11 +57,21 @@ def _makeSpecimen(medtechId: uuid.UUID = MEDTECH_ID) -> Specimen:
     return specimen
 
 
-def _makeDbMock(result: AnalysisResult, specimen: Specimen | None = None) -> AsyncMock:
+def _makeDbMock(
+    result: AnalysisResult | None,
+    specimen: Specimen | None = None,
+    latestOverride: str | None = None,
+) -> AsyncMock:
+    """Result queries return `result`; the "latest override" lookup `latestOverride`."""
     db = AsyncMock()
-    executeResult = MagicMock()
-    executeResult.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=executeResult)
+
+    def _execute(stmt: Select) -> MagicMock:
+        entity = stmt.column_descriptions[0].get("entity")
+        executeResult = MagicMock()
+        executeResult.scalar_one_or_none.return_value = latestOverride if entity is ManualOverride else result
+        return executeResult
+
+    db.execute = AsyncMock(side_effect=_execute)
     db.get = AsyncMock(return_value=specimen if specimen is not None else _makeSpecimen())
     db.add = MagicMock()
     db.commit = AsyncMock()
@@ -80,11 +91,12 @@ async def _override(
     callerRole: str = UserRole.MEDTECH,
     parameter: str = "rbc_casts",
     originalAiValue: float | None = 1.0,
+    correctedValue: int = 3,
 ) -> ManualOverride:
     return await service.overrideParameter(
         resultId=RESULT_ID,
         parameter=parameter,
-        correctedValue=3.0,
+        correctedValue=correctedValue,
         rationale="Recount under supervision",
         originalAiValue=originalAiValue,
         medtechId=callerId,
