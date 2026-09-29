@@ -40,7 +40,7 @@ from typing import Any
 
 from fastapi import Request, UploadFile
 from PIL import Image as PILImage
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
@@ -55,6 +55,7 @@ from ..core.supabase import supabase as sb
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.lab_request import LabRequest
+from ..models.manual_override import ManualOverride
 from ..models.specimen import Specimen
 from .consent_check import requireProcessingConsent
 from .specimen_access import (
@@ -153,6 +154,7 @@ class AIIntegrationService:
         await self.db.flush([image])
 
         result = await self._getOrCreateResult(specimenId, image.imageId)
+        clearedOverrides = await self._clearManualOverrides(result.resultId)
 
         findings = await self._runInference(result, rawBytes)
         if findings:
@@ -170,6 +172,7 @@ class AIIntegrationService:
                 "width_px": width,
                 "height_px": height,
                 "file_size_bytes": len(rawBytes),
+                "manual_overrides_cleared": clearedOverrides,
             },
             request=request,
         )
@@ -342,6 +345,19 @@ class AIIntegrationService:
             await self.db.flush([result])
 
         return result
+
+    async def _clearManualOverrides(self, resultId: uuid.UUID) -> int:
+        """Delete the result's manual overrides; return how many were removed.
+
+        A new image replaces the findings those overrides corrected (UROLENS-227,
+        UROLENS-228), and confirmation merges every override into
+        `particle_classes` — so a kept override would silently correct the new
+        analysis with a count taken from the old image. The mobile app warns
+        the MedTech before a retake and clears its own copy. The deleted
+        values stay in the audit log (`RESULT_OVERRIDDEN` rows).
+        """
+        deleted = await self.db.execute(delete(ManualOverride).where(ManualOverride.resultId == resultId))
+        return deleted.rowcount or 0
 
     async def _runInference(
         self, result: AnalysisResult, rawBytes: bytes

@@ -3,6 +3,55 @@
 ## Unreleased
 
 ### Fixed
+- **A retake kept the old image's overrides, so confirming applied corrections from
+  the previous image to the new analysis; overrides accepted no rationale, fractions,
+  Infinity and any size of count (UROLENS-227).**
+  - **New image clears overrides.** An upload reuses the specimen's result and resets
+    its findings, but left its `manual_overrides` in place. Confirmation merges every
+    override into `particle_classes`, so the new analysis was silently "corrected"
+    with counts from the old image, and the supervisor saw that image's history.
+    Uploading now deletes the result's overrides in the same transaction; the
+    `IMAGE_UPLOADED` audit row records `manual_overrides_cleared`, and the deleted
+    values stay in the audit log (`RESULT_OVERRIDDEN`). The app already warns the
+    MedTech before a retake and clears its own copy (UROLENS-228).
+  - **Latest override wins at confirmation.** `AnalysisResult.manualOverrides` had no
+    order, so a parameter corrected twice was confirmed with whichever row loaded last.
+    It's now ordered by `overridden_at`.
+  - `POST /results/{id}/override` validation (422 `VALIDATION_ERROR`):
+    - `rationale` is **required** and can't be blank (was defaulted to "No rationale
+      provided"). The mobile and web forms already require it.
+    - `correctedValue` is a **whole count from 0 to 300** (`MAX_OVERRIDE_COUNT`): the AI
+      reports at most 300 detections per image, and lab reporting tops out at ">100"
+      per field (CLSI GP16). Fractions, `Infinity`/`NaN` and larger values are refused.
+  - New 422 **`OVERRIDE_UNCHANGED`** when the corrected value equals the parameter's
+    current count (its latest override, else the AI's) — UROLENS-150. Changing back to
+    the AI's value after an override is allowed.
+  - **`GET /sync/pull` sends overrides to the phone** (new `changes.manualOverrides`).
+    The phone only knew the overrides made on that device, so a supervisor's correction
+    on a returned result, or corrections made before a reinstall, never showed. Every
+    override on the MedTech's results (any author) is sent on a full sync; a delta sends
+    those added since `lastSyncedAt` (overrides are never edited). Rows are snake_case
+    like the other sync rows: `id`, `result_id`, `parameter_name`, `original_ai_value`
+    and `corrected_value` (numbers), `rationale`, `medtech_id` (the author),
+    `overridden_at`. Read with SQLAlchemy; the `SYNC_PULLED` audit row lists
+    `override_ids`. Existing app versions ignore the new key.
+  Not changed: routes, stored value format ("7.0"). Sync has no deletion channel, so an
+  override cleared by a retake on another device stays on this phone until its next
+  full sync (the retaking phone clears its own copy). **Client follow-ups (mobile,
+  UROLENS-172):** map `manualOverrides` in `pullChanges.ts` (`parameter_name` →
+  `parameter`, `medtech_id` → `overridden_by`, `overridden_at` → `created_at`) and
+  store the `id` from the override response as `server_id`, or a phone's own
+  overrides arrive twice; the override form accepts decimals and has no upper limit,
+  so it should match.
+  - **The override also accepts `parameterName`** for `parameter`. The web supervisor
+    screen sends `parameter_name` (written for the May `web-10` endpoint; the August
+    results consolidation kept the version that names it `parameter`), and its
+    case-conversion bridge turns that into `parameterName`, so every web override got a
+    422. `parameter` still works, wins if both are sent, and is the only name in the API
+    docs and responses. Deliberate exception to the one-name-per-field contract, to
+    unblock the web without a web release. **Web:** needs the case-conversion bridge
+    (`fix/api-case-conversion-bridge`, not yet in web `v1.0.0`); once the web sends
+    `parameter`, this alias can be removed.
 - **Restored #56–#60 to `development` — they had merged into their stacked base
   branches, never into `development`.** Only #55 (SEC-0/SEC-1) reached
   `development`. SEC-2 (#56), UROLENS-222 (#57), SEC-4 (#58), UROLENS-225 (#59) and

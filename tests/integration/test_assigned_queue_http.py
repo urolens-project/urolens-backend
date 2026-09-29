@@ -18,6 +18,7 @@ from src.api.results import getConfirmationService
 from src.core.config import settings
 from src.core.database import getDb
 from src.core.encryption import encryptPii
+from tests.conftest import makeSyncDb
 from tests.integration.conftest import MEDTECH_USER_ID
 
 
@@ -60,7 +61,7 @@ async def test_syncIsForbiddenToEveryRoleButMedtech(asyncClient, role: str) -> N
 
 @pytest.mark.asyncio
 async def test_medtechSyncReturnsThePatientCodeButNeverTheName(asyncClient) -> None:
-    db = AsyncMock()
+    db = makeSyncDb()
 
     async def _override():
         yield db

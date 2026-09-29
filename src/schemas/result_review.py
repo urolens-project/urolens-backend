@@ -8,7 +8,13 @@ from datetime import datetime
 from typing import Any, Literal, get_args
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
+
+# The largest particle count an override may set (UROLENS-227). The AI engine
+# reports at most 300 detections per image (YOLO's default `max_det`), and lab
+# reporting tops out at ">100" per field (CLSI GP16), so anything larger is a
+# typo (e.g. an extra zero), not a count. Raise it here if the lab asks.
+MAX_OVERRIDE_COUNT = 300
 
 
 class ConfirmResultResponse(BaseModel):
@@ -31,13 +37,23 @@ class ConfirmResultResponse(BaseModel):
 class OverrideRequest(BaseModel):
     """Request body for overriding a single AI-generated result parameter."""
 
-    parameter: str = Field(..., min_length=1, max_length=100)
-    correctedValue: float = Field(..., ge=0)
-    rationale: str = Field("No rationale provided", max_length=2000)
-    """Not Optional despite having a default: `ManualOverride.rationale` is a
-    NOT NULL column, so an explicit `"rationale": null` in the request must
-    be rejected by Pydantic (a clean 422) rather than reach the service and
-    fail as an unhandled IntegrityError."""
+    parameter: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        validation_alias=AliasChoices("parameter", "parameterName"),
+    )
+    """The AI findings key being corrected. Also accepted as `parameterName`: the
+    web supervisor screen sends `parameter_name` (written for the May web-10
+    endpoint), which its case-conversion bridge turns into `parameterName`
+    (UROLENS-227). `parameter` wins if both are sent; responses always say
+    `parameter`."""
+    correctedValue: int = Field(..., ge=0, le=MAX_OVERRIDE_COUNT)
+    """A particle count: a whole number from 0 to `MAX_OVERRIDE_COUNT`. Fractions
+    (3.7) and non-finite values (Infinity) are rejected with a 422."""
+    rationale: str = Field(..., min_length=1, max_length=2000)
+    """Required (UROLENS-146/150): every correction must say why. Blank or
+    whitespace-only is rejected; surrounding whitespace is stripped."""
     originalAiValue: float | None = Field(
         None,
         ge=0,
@@ -55,6 +71,14 @@ class OverrideRequest(BaseModel):
         """
         if not v.strip():
             raise ValueError("parameter must not be blank")
+        return v.strip()
+
+    @field_validator("rationale")
+    @classmethod
+    def rationaleNoWhitespaceOnly(cls, v: str) -> str:
+        """Reject a blank or whitespace-only `rationale`; strips surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("rationale must not be blank")
         return v.strip()
 
 
