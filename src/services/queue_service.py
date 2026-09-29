@@ -216,6 +216,7 @@ class QueueService:
                 "medtech_id": str(data.medtechId),
             },
             request=request,
+            db=db,
         )
 
         await db.commit()

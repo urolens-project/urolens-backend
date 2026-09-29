@@ -245,6 +245,17 @@ Upload failure is logged and ignored by design, so a result can reference an ima
 that doesn't exist. Now visible as `imageUrl: null` (SEC-0b) rather than a broken
 link; decide in SEC-5 whether to fail the upload instead.
 
+
+### F-22 🟡 Medium — Any MedTech can read any patient's result detail *(found during UROLENS-222)*
+**File:** [results.py `GET /results/{result_id}`](../src/api/results.py) → `ResultReviewService.getFullResult`
+**Issue:** the route is open to MEDTECH and SUPERVISOR with no ownership check for
+MedTechs. SEC-2 added ownership to writes only.
+**Impact:** a MedTech can read the name, age, sex, findings and image of patients
+whose specimens aren't assigned to them. Now at least recorded
+(`RESULT_DETAIL_VIEWED`, UROLENS-222), but not prevented.
+**Fix:** apply `requireSpecimenAssigned` for MEDTECH callers (supervisors keep full
+access) — confirm first that no mobile screen shows other MedTechs' results.
+
 ---
 
 ## Dependency scan
@@ -305,13 +316,15 @@ All four repos are **public**, so this needs to stay true — see *Recommendatio
 
 | Finding | Where it gets fixed | Status |
 |---|---|---|
-| F-01, F-02 | SEC-0, SEC-0b — this branch | ✅ Fixed |
-| F-03, F-04, F-08 | **SEC-2** (`fix/UROLENS-220-sec-2-access-control-upload-hardening`) — ownership + editable-status guards | 🔜 Planned, Sprint 5 |
-| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG only, 10 MB cap) | 🔜 Planned, Sprint 5 |
-| F-10, F-14, F-15, F-16 | **SEC-2** — dependency batch 1 (cryptography 50.0.0 as a later batch 2) | 🔜 Planned, Sprint 5 |
-| F-06, F-07 | SEC-2, or UROLENS-81 (JWT/RBAC hardening) — confirm with its owner | ⏳ Pending that decision |
+| F-01, F-02 | SEC-0, SEC-0b (`feat/UROLENS-220-supabase-security-compliance`) | ✅ Fixed |
+| F-03, F-04, F-08 | **SEC-2** (`fix/UROLENS-220-sec-2-access-control-upload-hardening`) — ownership + editable-status guards (`services/specimen_access.py`), specimen row lock | ✅ Fixed |
+| F-05, F-09, F-18 | **SEC-2** — upload hardening (JPEG/PNG decoders only, 10 MB cap, migration `0042`) | ✅ Fixed |
+| F-10, F-14, F-16 | **SEC-2** — dependency batch 1 | ✅ Fixed |
+| F-15 | SEC-2 took cryptography to 48.0.1 (OpenSSL fix); the X.509/PKCS#7 advisories need 50.0.0 | 🟡 Partly — batch 2 |
+| F-06, F-07 | UROLENS-222 — login rate limit (5/5 min per account, 30/min per IP), dummy-hash timing, 15-minute lock expiry | ✅ Fixed |
 | F-12 | Pin the AI engine commit (one line; coordinate with the AI engine owner) | 🔜 Planned |
-| F-11 | SEC-3 (`feat/UROLENS-220-sec-3-ra10173-controls`) | Next sprint |
+| F-11 | UROLENS-222 (`feat/UROLENS-222-ra10173-consent-and-audit`) — audit rows written in the action's transaction | ✅ Fixed |
+| F-22 | UROLENS-222 — MedTechs read only their own specimens' results (detail + Smart Diagnosis) | ✅ Fixed |
 | F-13, F-17, F-21 | SEC-5 (`feat/UROLENS-220-sec-5-production-readiness`) | Partly Sprint 5 |
 | F-19, F-20 | SEC-5 cleanup | Next sprint |
 

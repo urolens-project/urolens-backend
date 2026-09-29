@@ -219,6 +219,7 @@ async def createLabRequest(
         )
 
     await AuditLogger().record(
+        db=db,
         eventType="REQUEST_SUBMITTED",
         entityType="lab_request",
         entityId=labRequest.labRequestId,

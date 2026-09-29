@@ -19,15 +19,18 @@ class SexEnum(StrEnum):
 class ConsentData(BaseModel):
     """A patient's consent answers, recorded alongside their intake.
 
-    Registration cannot proceed unless all three are explicitly confirmed —
-    each field is validated independently so a request with more than one
-    unconfirmed consent surfaces one inline error per item, not just the
-    first.
+    Processing (`consentGiven`) and storage consent are required for
+    registration — each is validated independently so a request with both
+    unconfirmed surfaces one inline error per item, not just the first.
+    Research consent is optional: consent that is a condition of receiving
+    care isn't freely given (RA 10173), and research isn't needed to run the
+    lab test (UROLENS-222).
     """
 
     consentGiven: bool
     consentStorage: bool
-    consentResearch: bool
+    consentResearch: bool = False
+    """Optional; defaults to `False` (not consented) when omitted."""
 
     @field_validator("consentGiven")
     @classmethod
@@ -39,13 +42,6 @@ class ConsentData(BaseModel):
     @field_validator("consentStorage")
     @classmethod
     def consentStorageMustBeTrue(cls, v: bool) -> bool:
-        if not v:
-            raise ValueError(_CONSENT_REQUIRED_MESSAGE)
-        return v
-
-    @field_validator("consentResearch")
-    @classmethod
-    def consentResearchMustBeTrue(cls, v: bool) -> bool:
         if not v:
             raise ValueError(_CONSENT_REQUIRED_MESSAGE)
         return v
