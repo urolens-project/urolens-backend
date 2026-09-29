@@ -9,6 +9,7 @@ not a port of pre-existing tests.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -122,7 +123,8 @@ async def test_patientLoginUnknownPatientUidRejected():
 
 @pytest.mark.asyncio
 async def test_patientLoginLockedAccountRejectedAfterPasswordCheck():
-    sb = _mockSupabase(_patientRow(), _userRow(locked_at="2026-09-24T00:00:00+00:00"))
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    sb = _mockSupabase(_patientRow(), _userRow(locked_at=lockedMinuteAgo))
     with patch.object(patient_auth_service, "supabase", sb):
         with pytest.raises(HTTPException) as excInfo:
             await patient_auth_service.patientLogin(
@@ -130,6 +132,19 @@ async def test_patientLoginLockedAccountRejectedAfterPasswordCheck():
             )
     assert excInfo.value.status_code == 423
     assert excInfo.value.errorCode == "ACCOUNT_LOCKED"
+
+
+@pytest.mark.asyncio
+async def test_patientLoginWrongGuessWhileLockedGets423AndIsNotCounted():
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    sb = _mockSupabase(_patientRow(), _userRow(locked_at=lockedMinuteAgo))
+    with patch.object(patient_auth_service, "supabase", sb):
+        with pytest.raises(HTTPException) as excInfo:
+            await patient_auth_service.patientLogin(
+                "PAT-000001", "WRONG-GUESS", request=MagicMock(client=None, headers={})
+            )
+    assert excInfo.value.status_code == 423
+    patient_auth_service.incrementFailedAttempts.assert_not_awaited()
 
 
 @pytest.mark.asyncio

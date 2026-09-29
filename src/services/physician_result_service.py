@@ -275,6 +275,7 @@ class PhysicianResultService:
         self.db.add(retrieval)
 
         await self.auditLogger.record(
+            db=self.db,
             eventType="RESULT_RETRIEVED",
             entityType="analysis_result",
             entityId=resultId,

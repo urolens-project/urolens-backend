@@ -1,6 +1,17 @@
 """Audit-log writing: the single `audit_logs`-table code path (`AuditLogger.record`)
 plus a set of auth-flow convenience wrappers around it (login/logout/access-denied
 events).
+
+Two write paths, chosen by whether the caller passes its database session:
+
+- **With `db`** (every service): the row is added to the caller's session, so
+  it commits or rolls back *with the action it records*. An action can no
+  longer succeed while its audit row is silently lost, and a failed audit
+  write fails the request (RA 10173 accountability; security audit F-11).
+- **Without `db`** (auth-flow helpers, which have no session): best-effort
+  Supabase REST insert. A failure is logged at ERROR with the fixed marker
+  `AUDIT_WRITE_FAILED` so log monitoring can alert on it; it never turns an
+  intended 401 into a 500.
 """
 from __future__ import annotations
 
@@ -8,15 +19,26 @@ import logging
 import uuid
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..models.audit_log import AuditLog
 from .config import settings
 from .supabase import supabase
 
 logger = logging.getLogger(__name__)
 
+AUDIT_WRITE_FAILED = "AUDIT_WRITE_FAILED"
+"""Log marker for a lost best-effort audit write — alert on it."""
+
+
+def _asUuid(value: uuid.UUID | str) -> uuid.UUID:
+    return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
 class AuditLogger:
     """Writes to the shared `audit_logs` table. The one audit-writing code
     path in this app — the auth-flow helpers below are thin wrappers around
-    `record()`, not a second path (they were, until this consolidation).
+    `record()`, not a second path.
     """
 
     async def record(
@@ -25,24 +47,41 @@ class AuditLogger:
         entityType: str,
         entityId: uuid.UUID | str,
         userId: uuid.UUID | str | None,
-        db: Any = None,          # kept for backward compatibility, ignored
+        db: AsyncSession | None = None,
         detailJson: dict[str, Any] | None = None,
         request: Any = None,
         ipAddress: str | None = None,
     ) -> None:
-        """Insert one audit_logs row. Never raises — a failure to write the
-        audit entry must not break whatever the caller was actually doing.
+        """Record one `audit_logs` row.
 
         Args:
-            db: unused, kept only so existing call sites that still pass a
-                SQLAlchemy session don't need updating.
-            request: if given and `ip_address` isn't, the client IP is read
+            db: the caller's session. When given, the row is added to it and
+                is committed (or rolled back) by the caller together with the
+                action — the caller must commit after this call. When omitted,
+                the row is written immediately through Supabase REST, best
+                effort.
+            request: if given and `ipAddress` isn't, the client IP is read
                 from `request.client.host`.
-            ip_address: takes precedence over `request` — for callers that
+            ipAddress: takes precedence over `request` — for callers that
                 already have a raw IP string rather than a Request object.
+
+        Raises:
+            ValueError: `entityId`/`userId` isn't a UUID (session path only).
+                The best-effort path never raises.
         """
         if ipAddress is None and request and hasattr(request, "client") and request.client:
             ipAddress = request.client.host
+
+        if db is not None:
+            db.add(AuditLog(
+                eventType=eventType,
+                entityType=entityType,
+                entityId=_asUuid(entityId),
+                userId=_asUuid(userId) if userId else None,
+                detailJson=detailJson or {},
+                ipAddress=ipAddress,
+            ))
+            return
 
         try:
             await supabase.table("audit_logs").insert({
@@ -55,9 +94,13 @@ class AuditLogger:
                 "ip_address": ipAddress,
             }).execute()
         except Exception:
-            # Audit must never break the main transaction
-            logger.exception("Failed to log audit entry.")
-            pass
+            # Best-effort path: never break the caller (e.g. rbac's 401), but
+            # make the loss loud and greppable.
+            logger.error(
+                "%s event_type=%s entity_type=%s entity_id=%s",
+                AUDIT_WRITE_FAILED, eventType, entityType, entityId,
+                exc_info=True,
+            )
 
 
 def getAuditLogger() -> AuditLogger:
@@ -83,13 +126,13 @@ def getAuditLogger() -> AuditLogger:
 #     in this codebase — the old version json.dumps()'d it into a string
 #     first, which would have stored a JSON-encoded string inside a JSONB
 #     column instead of a structured object.
-#   - a failure to write the audit entry itself is now swallowed (via
-#     record()'s try/except), not propagated. Propagating meant an audit-
-#     logging glitch could turn an intended 401 (see get_current_user in
-#     core/rbac.py, which calls log_access_denied before raising) into an
-#     unrelated 500 — strictly worse, and inconsistent with record()'s own
-#     "audit must never break the main transaction" design that every other
-#     caller in this app already relies on.
+#   - a failure to write the audit entry itself is swallowed (these helpers
+#     take record()'s best-effort, no-session path, which logs
+#     AUDIT_WRITE_FAILED at ERROR), not propagated. Propagating meant an
+#     audit-logging glitch could turn an intended 401 (see getCurrentUser in
+#     core/rbac.py, which calls logAccessDenied before raising) into an
+#     unrelated 500. Services are different: they pass their session, so
+#     their audit row commits or fails together with the action.
 
 _auditLogger = AuditLogger()
 

@@ -82,7 +82,7 @@ def test_middleNameBlankIsUnaffected():
     assert req.middleName is None
 
 
-@pytest.mark.parametrize("field", ["consentGiven", "consentStorage", "consentResearch"])
+@pytest.mark.parametrize("field", ["consentGiven", "consentStorage"])
 def test_unconfirmedConsentRejected(field):
     consent = _validConsent()
     consent[field] = False
@@ -90,14 +90,26 @@ def test_unconfirmedConsentRejected(field):
         ConsentData(**consent)
 
 
-def test_allConsentsFalseReportsEachFieldIndependently():
-    """All three unconfirmed at once must each surface their own error, not
-    just the first one Pydantic happens to hit.
+def test_allConsentsFalseReportsEachRequiredFieldIndependently():
+    """Both required consents unconfirmed at once must each surface their own
+    error, not just the first one Pydantic happens to hit — and the optional
+    research consent must not be among them.
     """
     with pytest.raises(ValidationError) as excInfo:
         ConsentData(consentGiven=False, consentStorage=False, consentResearch=False)
     fieldsReported = {str(e["loc"][-1]) for e in excInfo.value.errors()}
-    assert fieldsReported == {"consentGiven", "consentStorage", "consentResearch"}
+    assert fieldsReported == {"consentGiven", "consentStorage"}
+
+
+def test_researchConsentCanBeDeclined():
+    # UROLENS-222: consent forced as a condition of care isn't freely given.
+    consent = ConsentData(consentGiven=True, consentStorage=True, consentResearch=False)
+    assert consent.consentResearch is False
+
+
+def test_researchConsentDefaultsToNotGivenWhenOmitted():
+    consent = ConsentData(consentGiven=True, consentStorage=True)
+    assert consent.consentResearch is False
 
 
 def test_validPayloadPasses():

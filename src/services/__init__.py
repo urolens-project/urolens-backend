@@ -39,6 +39,7 @@ from .result_review_service import (  # noqa: F401
     getSmartDiagnosis,
 )
 from .smart_diagnosis_service import SmartDiagnosisService  # noqa: F401
+from .specimen_access import getAssignedSpecimen, requireSpecimenAssigned  # noqa: F401
 from .specimen_service import (  # noqa: F401
     listSpecimens,
     receiveSpecimen,

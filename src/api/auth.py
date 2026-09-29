@@ -13,14 +13,18 @@ from fastapi import (
 
 from src.core import audit_logger
 from src.core.auth_service import (
+    LOCKOUT_MINUTES,
     closeSession,
     createSession,
     getUserByUsername,
     incrementFailedAttempts,
+    isLockedOut,
     issueJwt,
     resetFailedAttempts,
+    spendPasswordCheck,
     verifyPassword,
 )
+from src.core.rate_limit import clearLoginRateLimit, enforceLoginRateLimit
 from src.core.rbac import getCurrentUser
 from src.schemas.auth import LoginRequest, LoginResponse
 
@@ -47,29 +51,47 @@ async def login(body: LoginRequest, request: Request, backgroundTasks: Backgroun
 
     Raises:
         HTTPException: 401 (`INVALID_CREDENTIALS`), for an unknown username
-            or wrong password. 423 (`ACCOUNT_LOCKED`), if the account is
-            locked. 403 (`ACCOUNT_INACTIVE`), if the account is inactive.
+            or wrong password (both take one bcrypt check, so timing doesn't
+            reveal which usernames exist). 423 (`ACCOUNT_LOCKED`), inside the
+            `LOCKOUT_MINUTES` window after too many failures. 403
+            (`ACCOUNT_INACTIVE`), if the account is inactive.
+        TooManyRequestsException: 429 (`TOO_MANY_LOGIN_ATTEMPTS`), if this
+            username or client IP is over its login rate limit.
     """
     ipAddress = request.client.host if request.client else "unknown"
     userAgent = request.headers.get("user-agent")
 
+    # 0. Rate limit before any lookup or password check (UROLENS-222, F-06)
+    enforceLoginRateLimit("staff", body.username, ipAddress)
+
     # 1. User must exist
     user = await getUserByUsername(body.username)
     if user is None:
+        await spendPasswordCheck(body.password)  # same timing as a wrong password
         await audit_logger.logLoginFailed(ipAddress)
         raise _apiError(status.HTTP_401_UNAUTHORIZED, "INVALID_CREDENTIALS", "Username or password is incorrect.")
 
-    # 2. Password must be correct (check before lock/active to avoid timing attacks)
-    if not await verifyPassword(body.password, user["hashed_password"]):
+    # 2. The password is always checked (same timing either way)...
+    passwordOk = await verifyPassword(body.password, user["hashed_password"])
+
+    # 3. ...but while locked, the answer is 423 whether it was right or wrong,
+    # and nothing is counted: a wrong guess can't extend the lock, and the
+    # response can't tell an attacker their guess was right (UROLENS-222, F-07).
+    if isLockedOut(user):
+        if not passwordOk:
+            await audit_logger.logLoginFailed(ipAddress, userId=user["user_id"])
+        raise _apiError(
+            status.HTTP_423_LOCKED,
+            "ACCOUNT_LOCKED",
+            f"Your account is temporarily locked. Try again in {LOCKOUT_MINUTES} minutes or contact an administrator.",
+        )
+
+    if not passwordOk:
         await asyncio.gather(
             incrementFailedAttempts(user["user_id"]),
             audit_logger.logLoginFailed(ipAddress, userId=user["user_id"]),
         )
         raise _apiError(status.HTTP_401_UNAUTHORIZED, "INVALID_CREDENTIALS", "Username or password is incorrect.")
-
-    # 3. Account must not be locked (checked after password so lock only triggers on correct username)
-    if user.get("locked_at") is not None:
-        raise _apiError(status.HTTP_423_LOCKED, "ACCOUNT_LOCKED", "Your account is locked. Contact an administrator.")
 
     # 4. Account must be active
     if not user.get("is_active", True):
@@ -80,6 +102,7 @@ async def login(body: LoginRequest, request: Request, backgroundTasks: Backgroun
         resetFailedAttempts(user["user_id"]),
         createSession(user["user_id"], user["role"], ipAddress, userAgent),
     )
+    clearLoginRateLimit("staff", body.username)
     token = issueJwt(user["user_id"], user["username"], user["role"], sessionRecord["session_id"])
 
     # Audit write doesn't need to block the response

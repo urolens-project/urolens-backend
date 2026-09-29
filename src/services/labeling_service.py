@@ -218,6 +218,7 @@ async def generateLabel(
     ).scalar_one()
 
     await AuditLogger().record(
+        db=db,
         eventType="LABEL_GENERATED",
         entityType="specimen",
         entityId=specimenId,
@@ -279,6 +280,7 @@ async def printLabel(
     await db.flush([printJob])
 
     await AuditLogger().record(
+        db=db,
         eventType="LABEL_PRINTED",
         entityType="specimen",
         entityId=specimenId,
@@ -370,6 +372,7 @@ async def confirmLabelAffixed(
     label.affixedAt = datetime.now(UTC)
 
     await AuditLogger().record(
+        db=db,
         eventType="LABEL_CONFIRMED",
         entityType="specimen",
         entityId=specimenId,
