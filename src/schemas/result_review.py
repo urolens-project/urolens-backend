@@ -151,6 +151,8 @@ class PendingResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
@@ -177,6 +179,8 @@ class ApprovedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
@@ -200,6 +204,8 @@ class EscalatedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
