@@ -579,6 +579,7 @@ class ResultReviewService:
         detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "sampleUid": spec.sampleUid if spec else None,
             "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),

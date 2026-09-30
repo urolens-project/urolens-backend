@@ -611,6 +611,38 @@ async def test_getFullResultReturnsPatientSex() -> None:
     assert detail["patientSex"] == "FEMALE"
 
 
+@pytest.mark.asyncio
+async def test_getFullResultIncludesSampleUidFromSpecimen() -> None:
+    """UROLENS-150: the detail view must surface the specimen's human-facing
+    sampleUid (e.g. SMP-...), not just its internal UUID — same fix as
+    UROLENS-148's queue-list endpoints, applied here to getFullResult.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+
+    specimen = _makeSpecimen()
+    specimen.sampleUid = "SMP-20260928-12345"
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarOneResult(None),  # latest ResultReview
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert detail["sampleUid"] == "SMP-20260928-12345"
+    assert detail["sampleUid"] != str(SPECIMEN_ID)
+
+
 # ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──
 
 class _FakeSupabaseQuery:
