@@ -3,6 +3,40 @@
 ## Unreleased
 
 ### Fixed
+- **Two concurrent supervisor actions on the same result could both succeed —
+  approve-vs-escalate included, not just two of the same action — and
+  `ReturnRequest.reason` had no non-blank validation (UROLENS-151).**
+  - **Race fix, same class as UROLENS-142/143.** `_requirePending` reads
+    `analysis_results.status` then each of approve/return/escalate wrote it
+    separately, with no conditional UPDATE and no unique constraint on
+    `result_approvals`/`result_returns`/`escalations` — two concurrent calls
+    could both pass the read-check and both commit. New
+    `ResultReviewService._transitionIfPending`: a single
+    `UPDATE analysis_results SET status = <new> WHERE result_id = :id AND
+    status = 'PENDING_SUPERVISOR_APPROVAL'`, checked by rowcount, called by
+    all three actions right before commit. The losing side rolls back and
+    gets the same 409 **`INVALID_RESULT_STATUS`** `_requirePending` already
+    raises in the non-race case — unchanged code, so the frontend's existing
+    message for it still applies. **Deliberately no new migration**, unlike
+    142/143: those each protect one action against itself via a child-table
+    unique constraint, but three *different* actions writing to three
+    *different* child tables need protection on the resource they actually
+    share — `analysis_results.status` — which the conditional UPDATE already
+    guards directly, for every combination. Proven with a real 3-way
+    concurrent-HTTP test (approve + return + escalate fired at once via
+    `asyncio.gather`, `asyncio.Barrier`-synchronized so it doesn't flake):
+    exactly one 200, the other two 409 `INVALID_RESULT_STATUS`, in the actual
+    response bodies.
+  - **`POST /results/{id}/return` validation (422 `VALIDATION_ERROR`):**
+    `reason` is now **required and can't be blank** (min 1 char after
+    trimming whitespace, max 2000) — previously any string, including `""`,
+    was accepted. Same convention as `OverrideRequest.rationale`
+    (UROLENS-146/150): required, stripped, blank/whitespace-only rejected.
+  - **Known issue, not fixed here:** this branch's base still has the
+    duplicate-`0042`-revision Alembic collision (two heads: `0042`, `0043`)
+    from before the `0044` renumber landed on `development` — pre-existing,
+    unrelated to this fix, and not a blocker since no migration was added.
+    Rebase onto current `development` before merging.
 - **A retake kept the old image's overrides, so confirming applied corrections from
   the previous image to the new analysis; overrides accepted no rationale, fractions,
   Infinity and any size of count (UROLENS-227).**
