@@ -73,6 +73,7 @@ def _specimen(medtechId: uuid.UUID) -> Specimen:
     specimen = MagicMock(spec=Specimen)
     specimen.specimenId = SPECIMEN_ID
     specimen.medtechId = medtechId
+    specimen.sampleUid = "SMP-20260928-00012"
     specimen.patientUid = "PAT-000001"
     specimen.patientName = None
     return specimen
