@@ -266,6 +266,8 @@ class FullResultDetail(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str | None = None
     """`null` for a MedTech caller — they identify the patient by
