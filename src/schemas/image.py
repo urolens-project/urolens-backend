@@ -19,6 +19,9 @@ class AnalysisResultResponse(BaseModel):
     aiFindings: dict | None = None
     flaggedAnomalies: dict | None = None
     smartDiagnosis: dict | None = None
+    smartDiagnosisUnavailable: bool = False
+    """True when the Smart Diagnosis engine failed for this image, so the app
+    can show the "not available" notice straight away (UROLENS-230)."""
 
 
 class ImageDiscardResponse(BaseModel):

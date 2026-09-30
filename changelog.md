@@ -3,6 +3,54 @@
 ## Unreleased
 
 ### Fixed
+- **A failed AI analysis passed for "no particles", a failed storage write left a
+  broken image, a retake kept the old image's Smart Diagnosis, and every
+  resubmitted result reported its diagnosis as failed (UROLENS-230).**
+  - **Nothing is saved unless the image is analyzed and stored.** `POST
+    /images/upload` used to log both failures and return 201: an AI failure left empty
+    findings the app showed as "No particles detected" (and the MedTech could
+    confirm), and a storage failure left an image row pointing at a file that was
+    never stored. Now 503 **`AI_ANALYSIS_FAILED`** or **`STORAGE_ERROR`**, and the
+    request rolls back; the image is analyzed before it's stored, so a failed
+    analysis leaves nothing in the bucket. The app keeps the image for a retry.
+  - **Model weights.** The engine's default weights path is relative to its own repo,
+    and the `urolens_ai` package doesn't ship its weights, so without
+    `MODEL_WEIGHTS_PATH` inference failed on every upload — silently, until now.
+    `config` now uses `urolens_ai/models/yolov8/weights.pt` inside the installed
+    package when that file exists (`settings.modelWeightsPath`).
+    **Deploy — blocker:** the server must have the weights file and
+    `MODEL_WEIGHTS_PATH` set (or the file at that package path) **before** this is
+    deployed, or every upload returns `AI_ANALYSIS_FAILED`.
+  - **Metadata is stripped on the server.** EXIF (location, device) and PNG text are
+    removed by re-encoding before the image is stored or analyzed — the app does this
+    too, but the server can't rely on it (RA 10173). JPEG quality is kept
+    (`quality="keep"`).
+  - **A retake resets everything from the old image:** findings, `smart_diagnosis`,
+    `smart_diagnosis_unavailable`, the `smart_diagnosis_outputs` row and
+    `model_version` (overrides already, UROLENS-227). A **returned result stays
+    `RETURNED_FOR_CORRECTION`** instead of becoming `PENDING_CONFIRM`, so the MedTech
+    keeps the supervisor's reason and confirming is a resubmission (`resubmitted:
+    true`).
+  - **Re-confirming no longer breaks Smart Diagnosis.** `smart_diagnosis_outputs` has
+    one row per result, but confirmation always inserted one: every resubmission hit
+    the unique constraint, was marked diagnosis-unavailable, logged a false
+    `ENGINE_FAILED` and notified the supervisor, while the old diagnosis kept showing.
+    It now updates the existing row and clears the unavailable flag; a real failure
+    flags an earlier row `FLAGGED_UNAVAILABLE`.
+  - **A discarded image's result can't be confirmed:** 422 `PENDING_RETAKE` (existing
+    code) until a new image is uploaded — discard keeps the old findings.
+  - **An upload starts a specimen that wasn't started** (ASSIGNED/IN_QUEUE →
+    PROCESSING), e.g. when "Begin Analysis" is still queued offline. "Begin Analysis"
+    and this now write a `SPECIMEN_ANALYSIS_STARTED` audit row (shared
+    `specimen_service.markProcessing`); `IMAGE_UPLOADED` records `started_analysis`.
+  - The upload response adds **`smartDiagnosisUnavailable`**, now `true` when Smart
+    Diagnosis fails at upload (it was left `false`, so the app couldn't show the "not
+    available" notice); confirmation retries it and clears the flag on success.
+  Not changed: routes, no migration, no new result statuses (the app doesn't know
+  IMAGE_RETAKE_REQUESTED/FAILED). **Mobile follow-ups (UROLENS-229):** read
+  `smartDiagnosisUnavailable` from the upload response instead of assuming `false`;
+  treat 503 `AI_ANALYSIS_FAILED`/`STORAGE_ERROR` as a failed upload (keep the
+  preview); a queued confirm answered with `PENDING_RETAKE` is a failure, not done.
 - **A retake kept the old image's overrides, so confirming applied corrections from
   the previous image to the new analysis; overrides accepted no rationale, fractions,
   Infinity and any size of count (UROLENS-227).**
