@@ -129,8 +129,13 @@ async def test_uploadValidImageReturns201(
     """Valid 800×600 JPEG → 201 with PENDING_CONFIRM status."""
     sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
     jpegBytes = _makeJpeg(800, 600)
+    mockInferFn = MagicMock()
+    mockInferFn.return_value.particles = FAKE_AI_FINDINGS
 
-    with patch("src.services.ai_integration_service.sb", sbMock):
+    with (
+        patch("src.services.ai_integration_service.sb", sbMock),
+        patch("builtins.__import__", _makeImportMock("urolens_ai", "infer", mockInferFn)),
+    ):
         response = await asyncClient.post(
             "/api/v1/images/upload",
             headers={"Authorization": f"Bearer {medtechToken}"},
@@ -247,14 +252,14 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
 
 
 @pytest.mark.asyncio
-async def test_uploadSucceedsWhenAiInferenceFails(
+async def test_uploadFailsAndSavesNothingWhenAiInferenceFails(
     asyncClient,
     medtechToken: str,
     testSpecimen: uuid.UUID,
     mockSqlDb,
 ) -> None:
-    """AI failure must not break the upload. The endpoint returns 201 and
-    ai_findings is None (the result row stays PENDING_CONFIRM with empty findings).
+    """A failed analysis must not pass for "no particles" (UROLENS-230): 503
+    AI_ANALYSIS_FAILED, nothing stored in the bucket, nothing committed.
     """
     sbMock = _makeSbMock(imagesRows=[], analysisRows=[])
     jpegBytes = _makeJpeg()
@@ -273,10 +278,10 @@ async def test_uploadSucceedsWhenAiInferenceFails(
             data={"specimen_id": str(testSpecimen)},
         )
 
-    assert response.status_code == 201, response.text
-    body = response.json()
-    assert body["status"] == "PENDING_CONFIRM"
-    assert body["aiFindings"] is None
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["code"] == "AI_ANALYSIS_FAILED"
+    sbMock.storage.from_.return_value.upload.assert_not_called()
+    mockSqlDb.commit.assert_not_awaited()
 
 
 # ── Discard tests ─────────────────────────────────────────────────────────────
