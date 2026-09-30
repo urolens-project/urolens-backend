@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
+from .patient_portal import PARTICLE_LABELS
+
 # The largest particle count an override may set (UROLENS-227). The AI engine
 # reports at most 300 detections per image (YOLO's default `max_det`), and lab
 # reporting tops out at ">100" per field (CLSI GP16), so anything larger is a
@@ -234,6 +236,32 @@ class ManualOverrideItem(BaseModel):
     correctedValue: str
     rationale: str
     overriddenAt: datetime
+    overriddenBy: UUID
+    overriddenByName: str
+    """Resolved from `overriddenBy` via a batched `User` lookup; `""` if the
+    user record can't be found (mirrors `medtechName`'s fallback elsewhere)."""
+
+
+class SpatialAnnotationItem(BaseModel):
+    """One point-plus-particle-type spatial annotation on a result's image.
+
+    (UROLENS-149). `id` is client-supplied and stable across saves, so the
+    frontend can remove or adjust a single annotation by resending the full
+    list without it — `saveAnnotation` always replaces the whole list.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    x: float = Field(..., ge=0)
+    y: float = Field(..., ge=0)
+    particleType: str
+
+    @field_validator("particleType")
+    @classmethod
+    def particleTypeMustBeKnown(cls, v: str) -> str:
+        """Reject a `particleType` not in the canonical `PARTICLE_LABELS` set."""
+        if v not in PARTICLE_LABELS:
+            raise ValueError(f"particleType must be one of {PARTICLE_LABELS}")
+        return v
 
 
 class FullResultDetail(BaseModel):
@@ -269,17 +297,16 @@ class FullResultDetail(BaseModel):
     """The supervisor's latest reason, only while the result is
     RETURNED_FOR_CORRECTION (UROLENS-226)."""
     annotationNotes: str | None = None
-    spatialAnnotations: list[dict[str, Any]] | None = None
-    """Persisted as of migration 0034 (JSONB) — type inferred from pre-port
-    code, not yet verified against a live database. See the ResultReview
-    model's docstring."""
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
+    """Persisted as of migration 0034 (JSONB); validated at this response
+    boundary as of UROLENS-149 (previously an untyped list[dict])."""
 
 
 class AnnotationRequest(BaseModel):
     """Request body for saving a supervisor's annotation on a result."""
 
     annotationNotes: str
-    spatialAnnotations: list[dict[str, Any]] | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
 
 
 class AnnotationResponse(BaseModel):
@@ -287,7 +314,7 @@ class AnnotationResponse(BaseModel):
 
     resultId: UUID
     annotationNotes: str
-    spatialAnnotations: list[dict[str, Any]] | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
 
 
 class ApproveRequest(BaseModel):
