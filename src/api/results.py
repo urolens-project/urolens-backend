@@ -267,7 +267,10 @@ async def annotateResult(
         userId=uuid.UUID(currentUser["user_id"]),
         callerRole=currentUser["role"],
         annotationNotes=body.annotationNotes,
-        spatialAnnotations=body.spatialAnnotations,
+        spatialAnnotations=(
+            [item.model_dump() for item in body.spatialAnnotations]
+            if body.spatialAnnotations is not None else None
+        ),
         request=request,
     )
     return AnnotationResponse(**result)

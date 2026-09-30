@@ -96,6 +96,7 @@ from .result_review import (  # noqa: F401
     SmartDiagnosisAttached,
     SmartDiagnosisResponse,
     SmartDiagnosisUnavailable,
+    SpatialAnnotationItem,
     SupervisorStatsResponse,
 )
 from .specimen import (  # noqa: F401
