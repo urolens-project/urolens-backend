@@ -31,6 +31,10 @@ from .labeling import (  # noqa: F401
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
 )
+from .medtech_history import (  # noqa: F401
+    MedtechHistoryItem,
+    MedtechHistoryListResponse,
+)
 from .notifications import NotificationOut, PushTokenRequest  # noqa: F401
 from .patient import (  # noqa: F401
     ConsentData,

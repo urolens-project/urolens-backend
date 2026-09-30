@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
@@ -18,7 +18,7 @@ from src.api.results import getConfirmationService
 from src.core.config import settings
 from src.core.database import getDb
 from src.core.encryption import encryptPii
-from tests.conftest import makeSyncDb
+from tests.conftest import makeSyncDb, syncSpecimen
 from tests.integration.conftest import MEDTECH_USER_ID
 
 
@@ -37,19 +37,6 @@ def _token(role: str) -> str:
     )
 
 
-def _syncSupabase(specimenRows: list[dict]) -> MagicMock:
-    def _table(name: str) -> MagicMock:
-        query = MagicMock()
-        for method in ("select", "eq", "gt", "in_"):
-            getattr(query, method).return_value = query
-        query.execute = AsyncMock(return_value=MagicMock(data=specimenRows if name == "specimens" else []))
-        return query
-
-    sb = MagicMock()
-    sb.table.side_effect = _table
-    return sb
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["SUPERVISOR", "RECEPTIONIST", "PHYSICIAN", "PATIENT"])
 async def test_syncIsForbiddenToEveryRoleButMedtech(asyncClient, role: str) -> None:
@@ -61,19 +48,17 @@ async def test_syncIsForbiddenToEveryRoleButMedtech(asyncClient, role: str) -> N
 
 @pytest.mark.asyncio
 async def test_medtechSyncReturnsThePatientCodeButNeverTheName(asyncClient) -> None:
-    db = makeSyncDb()
+    specimen = syncSpecimen(patientUid="PAT-000001", patientName=encryptPii("Juan Dela Cruz"))
+    db = makeSyncDb(rows=[(specimen, None)])
 
     async def _override():
         yield db
 
     app.dependency_overrides[getDb] = _override
     try:
-        with patch("src.services.sync_service.supabase", _syncSupabase(
-            [{"specimen_id": str(uuid.uuid4()), "patient_uid": "PAT-000001", "patient_name": encryptPii("Juan Dela Cruz")}]
-        )):
-            response = await asyncClient.get(
-                "/api/v1/sync/pull", headers={"Authorization": f"Bearer {_token('MEDTECH')}"}
-            )
+        response = await asyncClient.get(
+            "/api/v1/sync/pull", headers={"Authorization": f"Bearer {_token('MEDTECH')}"}
+        )
     finally:
         app.dependency_overrides.pop(getDb, None)
 
