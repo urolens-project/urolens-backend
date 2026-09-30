@@ -31,6 +31,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Select
 
 from src.core.exceptions import (
     ConflictException,
@@ -45,6 +46,7 @@ from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
 from src.models.specimen import Specimen
+from src.models.user import User
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
@@ -511,15 +513,72 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
 
 
 @pytest.mark.asyncio
-async def test_getFullResultPatientSexRaisesAttributeErrorKnownGap():
-    """Documents a known, already-flagged gap (changelog.md, "Pyright scan"
-    entry: "Patient model has no sex column, but it's read as .sex in 4
-    places... deciding whether to add the column or remove the reads is a
-    product call, not something to guess at here") — not fixed in this
-    change, per that same standing policy. This test locks in the *current*
-    (broken) behavior so a silent, accidental fix doesn't go unnoticed
-    either: if this starts failing, someone made the product decision and
-    this test should be updated to assert the real value instead.
+async def test_getFullResultResolvesWhoMadeEachOverride() -> None:
+    """UROLENS-149: the override-history list must say who made each
+    correction, not just what/when — resolved via a batched User lookup
+    (same pattern as `medtechName` elsewhere in this method). A user id with
+    no matching row falls back to `""`, mirroring `medtechName`'s fallback.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    knownUserId = uuid.uuid4()
+    unknownUserId = uuid.uuid4()
+
+    overrideByKnownUser = _makeOverride("RBC", datetime(2026, 1, 1, tzinfo=UTC))
+    overrideByKnownUser.overriddenBy = knownUserId
+    overrideByUnknownUser = _makeOverride("WBC", datetime(2026, 1, 2, tzinfo=UTC))
+    overrideByUnknownUser.overriddenBy = unknownUserId
+
+    knownUser = MagicMock(spec=User)
+    knownUser.userId = knownUserId
+    knownUser.username = "jdelacruz"
+
+    capturedStatements: list[Select] = []
+
+    async def _executeSideEffect(stmt: Select) -> MagicMock:
+        capturedStatements.append(stmt)
+        if len(capturedStatements) == 1:
+            return _makeScalarsResult([overrideByKnownUser, overrideByUnknownUser])
+        if len(capturedStatements) == 2:
+            return _makeScalarsResult([knownUser])  # unknownUserId has no matching row
+        return _makeScalarOneResult(None)
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(side_effect=_executeSideEffect)
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    overridesById = {o["overriddenBy"]: o for o in detail["manualOverrides"]}
+    assert overridesById[knownUserId]["overriddenByName"] == "jdelacruz"
+    assert overridesById[unknownUserId]["overriddenByName"] == ""
+
+
+@pytest.mark.asyncio
+async def test_getFullResultReturnsPatientSex() -> None:
+    """`Patient.sex` is a real column (src/models/patient.py) and
+    `getFullResult` reads it correctly.
+
+    This test used to assert the opposite — that reading `.sex` raised
+    `AttributeError` as a "documented, known gap". That was never actually
+    about `.sex`: the test stubbed `db.execute` with one fixed return value
+    standing in for four different queries `getFullResult` makes (Patient,
+    ManualOverride, ResultReview, SmartDiagnosisOutput), so the ResultReview
+    query wrongly got the Patient mock back, and `review.annotationNotes`
+    (not `.sex`) was what actually raised. Fixed here with a proper
+    side_effect per query, matching the real call order.
     """
     ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
     ar.imageId = None
@@ -527,19 +586,29 @@ async def test_getFullResultPatientSexRaisesAttributeErrorKnownGap():
     specimen = _makeSpecimen()
     specimen.patientUid = "PT-001"
     specimen.medtechId = None
+    specimen.patientName = None
 
     patient = MagicMock(spec=Patient)  # spec= enforces the real model's attribute set
     patient.firstName = None
     patient.lastName = None
     patient.dateOfBirth = None
+    patient.sex = "FEMALE"
 
     db = AsyncMock()
     db.get = AsyncMock(side_effect=[ar, specimen])
-    db.execute = AsyncMock(return_value=_makeScalarOneResult(patient))  # Patient lookup
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(patient),  # Patient lookup
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarOneResult(None),  # latest ResultReview
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
 
     _service = ResultReviewService(db=db)
-    with pytest.raises(AttributeError):
-        await _service.getFullResult(RESULT_ID)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert detail["patientSex"] == "FEMALE"
 
 
 # ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──
