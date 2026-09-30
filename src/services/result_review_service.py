@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
@@ -102,6 +102,47 @@ class ResultReviewService:
                 message=f"Action not allowed in status '{result.status}'.",
             )
         return result
+
+    async def _transitionIfPending(self, resultId: uuid.UUID, newStatus: ResultStatus) -> None:
+        """The actual race-safety gate behind approve/return/escalate
+        (UROLENS-151, mirrors UROLENS-142/143's conditional-UPDATE-plus-
+        rowcount pattern).
+
+        `_requirePending`'s read-then-check above is not race-safe alone:
+        two concurrent actions on the same result — any mix of approve,
+        return, and escalate, not just two calls to the same action — could
+        both read PENDING_SUPERVISOR_APPROVAL and both pass that check before
+        either writes. This conditional UPDATE is the real gate: it only
+        moves the row if it is *still* PENDING_SUPERVISOR_APPROVAL at the
+        moment of the write, and Postgres serializes concurrent UPDATEs
+        against the same row, so at most one of any number of competing
+        actions can ever see `rowcount == 1`. No unique constraint or new
+        migration is needed here (unlike 142/143): those each protect a
+        single action against itself via a child-table constraint, but the
+        shared resource three *different* actions actually contend for is
+        `analysis_results.status` itself, which this UPDATE already guards
+        directly for every combination.
+
+        Raises:
+            ConflictException: `INVALID_RESULT_STATUS` — the same code
+                `_requirePending` raises in the non-race case, since neither
+                the caller nor the frontend can (or needs to) tell the two
+                apart — if another action won the race first.
+        """
+        result = await self.db.execute(
+            update(AnalysisResult)
+            .where(
+                AnalysisResult.resultId == resultId,
+                AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            )
+            .values(status=newStatus)
+        )
+        if result.rowcount == 0:
+            await self.db.rollback()
+            raise ConflictException(
+                code="INVALID_RESULT_STATUS",
+                message="Another action has already changed this result's status.",
+            )
 
     async def _batchPatientContext(
         self, specimenIds: list[uuid.UUID]
@@ -709,8 +750,10 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`,
-                or its specimen has been rejected (`SPECIMEN_REJECTED`).
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first;
+                `SPECIMEN_REJECTED`, if its specimen has been rejected.
         """
         ar = await self._requirePending(resultId)
 
@@ -725,7 +768,7 @@ class ResultReviewService:
 
         now = datetime.now(_PHT)
         self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
-        ar.status = ResultStatus.APPROVED
+        await self._transitionIfPending(resultId, ResultStatus.APPROVED)
 
         if specimen is not None:
             specimen.status = "COMPLETED"
@@ -751,13 +794,15 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
         """
-        ar = await self._requirePending(resultId)
+        await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
-        ar.status = ResultStatus.RETURNED_FOR_CORRECTION
+        await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
 
         await self.db.commit()
 
@@ -791,7 +836,9 @@ class ResultReviewService:
         Raises:
             UnprocessableException: `escalation_path` isn't a valid path.
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
         """
         if escalationPath not in VALID_ESCALATION_PATHS:
             raise UnprocessableException(
@@ -799,7 +846,7 @@ class ResultReviewService:
                 message=f"Invalid escalation_path '{escalationPath}'.",
             )
 
-        ar = await self._requirePending(resultId)
+        await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(
@@ -811,7 +858,7 @@ class ResultReviewService:
                 escalatedAt=now,
             )
         )
-        ar.status = ResultStatus.CRITICAL_ESCALATED
+        await self._transitionIfPending(resultId, ResultStatus.CRITICAL_ESCALATED)
 
         await self.db.commit()
 
