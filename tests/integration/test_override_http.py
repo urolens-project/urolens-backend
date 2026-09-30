@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
@@ -157,17 +157,6 @@ async def test_syncSendsTheOverridesOnTheMedtechsResultsToThePhone(asyncClient: 
         overrideId=uuid.uuid4(), resultId=RESULT_ID, parameterName="erythrocytes", originalAiValue="7.0",
         correctedValue="4.0", rationale="Recounted", medtechId=uuid.uuid4(), overriddenAt=datetime.now(UTC),
     )
-    def _table(name: str) -> MagicMock:
-        # Only the specimen is returned; no result or assignment rows changed.
-        query = MagicMock()
-        for method in ("select", "eq", "gt", "in_"):
-            getattr(query, method).return_value = query
-        rows = [{"specimen_id": str(SPECIMEN_ID)}] if name == "specimens" else []
-        query.execute = AsyncMock(return_value=MagicMock(data=rows))
-        return query
-
-    sb = MagicMock()
-    sb.table.side_effect = _table
     db = makeSyncDb(overrides=[override])
 
     async def _getDb() -> AsyncIterator[AsyncMock]:
@@ -175,8 +164,7 @@ async def test_syncSendsTheOverridesOnTheMedtechsResultsToThePhone(asyncClient: 
 
     app.dependency_overrides[getDb] = _getDb
     try:
-        with patch("src.services.sync_service.supabase", sb):
-            response = await asyncClient.get("/api/v1/sync/pull", headers=_headers())
+        response = await asyncClient.get("/api/v1/sync/pull", headers=_headers())
     finally:
         app.dependency_overrides.pop(getDb, None)
 

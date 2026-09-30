@@ -3,6 +3,29 @@
 ## Unreleased
 
 ### Fixed
+- **Sync would break as a MedTech's history grew, kept every finished sample on
+  the phone forever, and sent no approval or release dates (UROLENS-236).**
+  - **`GET /sync/pull` reads with SQLAlchemy.** The Supabase REST version
+    downloaded every specimen the MedTech ever had on every sync (filtering deltas
+    in Python) and put every specimen ID in the results request's URL (~37 bytes
+    each, over common URL limits at a few hundred specimens — breaking the Queue
+    too). Filtering is now in SQL; the REST path is deleted (rule 14). The
+    patient's name is still never read (`defer(..., raiseload=True)`).
+  - **30-day window** (`HISTORY_WINDOW_DAYS`, RA 10173 data minimization):
+    unfinished work always syncs; a finished sample (COMPLETED or REJECTED) syncs
+    until 30 days after it was released, approved or rejected.
+  - **Removal lists:** each table's new `deleted` holds the IDs the phone should
+    drop — samples that aged out of the window since the last sync, and samples
+    no longer assigned to the MedTech (there's no reassignment feature today; this
+    covers database changes and a future one), with their results, the MedTech's
+    assignments and the overrides on them. Delta syncs only. Existing apps ignore it.
+  - **New row fields:** specimens `completed_at`; results `approved_at` (latest
+    approval), `released_at`, `particle_classes` (the confirmed counts). Reports
+    sorted Approved/Released items by the MedTech's confirmation time.
+  - `queue_assignments` has no `updated_at` in any migration, yet sync selected and
+    filtered on it; assignments (created, never edited) now delta on `assigned_at`.
+  - `SYNC_PULLED` records `removed_specimen_ids`.
+
 - **A retake kept the old image's overrides, so confirming applied corrections from
   the previous image to the new analysis; overrides accepted no rationale, fractions,
   Infinity and any size of count (UROLENS-227).**
@@ -121,6 +144,19 @@
   block non-MedTech logins rather than show 403s.
 
 ### Added
+- **`GET /results/medtech/history`** (UROLENS-236): a MedTech's full sample history,
+  including samples older than the phone's sync window. `category` (required):
+  `PENDING_APPROVAL` | `APPROVED` | `RELEASED` | `REJECTED`; `page`, `pageSize`
+  (≤ 100). Only the caller's own samples, newest first by when each reached the
+  category (confirmed / approved / released / rejected), stable by specimen ID;
+  patient code only. Audited as `MEDTECH_HISTORY_VIEWED`. MedTech-only (403
+  otherwise). Route count 50 → 51.
+  **Mobile follow-ups (UROLENS-235):** process each table's `deleted` in
+  `pullChanges.ts` (and purge local finished samples older than 30 days once, for
+  data synced before this change); map `completed_at`, `approved_at`,
+  `released_at`, `particle_classes`, sorting Approved/Released by
+  approval/release time; use the history endpoint for samples beyond 30 days;
+  escalated results (CRITICAL_ESCALATED) appear in neither the Queue nor Reports.
 - **Load-test tool and proposed p95 targets for the mobile routes (UROLENS-220,
   SEC-4).** `scripts/perf_baseline.py` measures sync pull (full/delta), the MedTech
   and supervisor pending lists, result detail and image upload (incl. AI inference)
