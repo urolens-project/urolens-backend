@@ -3,6 +3,39 @@
 ## Unreleased
 
 ### Fixed
+- **"Keep me logged in for this shift" couldn't work, an active MedTech was signed
+  out at exactly 60 minutes, and any staff role could log into the MedTech app
+  (UROLENS-244).**
+  - **Staying signed in.** Every token expired after 60 minutes and couldn't be
+    renewed, so the app's "keep me logged in" only saved a token that died within the
+    hour. `POST /auth/login` now takes `keepSignedIn`: on, the token lasts the whole
+    shift (`JWT_EXPIRY_HOURS`, 8 — previously unused); off, 60 minutes as before. The
+    reply adds `expiresAt` (this token) and `sessionExpiresAt` (end of the shift).
+    Tokens carry `session_start` and `keep` claims.
+  - **New `POST /auth/refresh`**: swaps a valid token for a new one for the same
+    session while the user is active — one more token lifetime, never past the end of
+    the shift (then 401 `SESSION_EXPIRED`). Staff only (403 `ROLE_NOT_ALLOWED` for
+    patient tokens); a logged-out session can't be refreshed (401 `SESSION_ENDED`).
+    Route count 51 → 52.
+  - **The mobile app is for MedTechs.** With `client: "mobile"`, a non-MedTech
+    account gets 403 **`ROLE_NOT_ALLOWED`** ("This app is for Medical Technologists.
+    Please use the web portal."), checked only after the password is proven correct
+    (a wrong password still gets `INVALID_CREDENTIALS`, revealing nothing) and before
+    any session is created; recorded as `ACCESS_DENIED`. The web (`client` omitted or
+    `"web"`) is unaffected.
+  - **401s say why:** an expired token is `SESSION_EXPIRED`, a logged-out or revoked
+    session `SESSION_ENDED` (was the generic `UNAUTHORIZED`, still used for a garbled
+    token). Same status, so existing clients keep working.
+  - **Credentials are checked:** blank or whitespace-only username or password → 422
+    (they used to run a full lookup and password check); the username is trimmed;
+    length caps 150 / 256.
+  Not changed: no migration; the login's lock, inactive and rate-limit behavior.
+  **Mobile follow-ups (UROLENS-174):** send `keepSignedIn` and `client: "mobile"`;
+  call `/auth/refresh` before `expiresAt` while the MedTech is active (an expired
+  token can't be refreshed); show `ROLE_NOT_ALLOWED`, `SESSION_EXPIRED` and 429 (too
+  many attempts) messages; show the backend's locked message (it includes "try again
+  in 15 minutes"). **Web (UROLENS-243):** can use `/auth/refresh` and the new codes;
+  nothing required.
 - **Sync would break as a MedTech's history grew, kept every finished sample on
   the phone forever, and sent no approval or release dates (UROLENS-236).**
   - **`GET /sync/pull` reads with SQLAlchemy.** The Supabase REST version
