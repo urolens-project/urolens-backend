@@ -1,12 +1,35 @@
 """Staff and patient-portal login/logout request/response shapes."""
-from pydantic import BaseModel
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+LoginClient = Literal["web", "mobile"]
+"""Which app is logging in. The mobile app is for MedTechs only (UROLENS-244)."""
 
 
 class LoginRequest(BaseModel):
     """Request body for staff login."""
 
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=150)
+    """Trimmed; blank is refused (UROLENS-244)."""
+    password: str = Field(..., min_length=1, max_length=256)
+    keepSignedIn: bool = False
+    """"Keep me signed in for this shift": the session lasts a whole shift
+    (`settings.jwtExpiryHours`) instead of one access-token lifetime."""
+    client: LoginClient | None = None
+    """`"mobile"` refuses non-MedTech accounts with `ROLE_NOT_ALLOWED`. The web
+    may omit it."""
+
+    @field_validator("username")
+    @classmethod
+    def usernameNotBlank(cls, v: str) -> str:
+        """Strip surrounding whitespace; reject a username that is only whitespace."""
+        if not v.strip():
+            raise ValueError("username must not be blank")
+        return v.strip()
 
 
 class LoginResponse(BaseModel):
@@ -16,6 +39,19 @@ class LoginResponse(BaseModel):
     tokenType: str = "Bearer"
     role: str
     userId: str
+    expiresAt: datetime
+    """When this access token expires; refresh before then to keep working."""
+    sessionExpiresAt: datetime
+    """When the session ends for good (end of the shift); no refresh goes past it."""
+
+
+class TokenRefreshResponse(BaseModel):
+    """Response body for `POST /auth/refresh` — a new token for the same session."""
+
+    accessToken: str
+    tokenType: str = "Bearer"
+    expiresAt: datetime
+    sessionExpiresAt: datetime
 
 
 class PatientLoginRequest(BaseModel):
