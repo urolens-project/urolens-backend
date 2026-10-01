@@ -13,7 +13,9 @@ reaches ResultReviewService.return_result.
 
 SpatialAnnotationItem (UROLENS-149) gets the same treatment for particleType:
 rejected by Pydantic against the existing PARTICLE_LABELS source of truth
-before a request reaches ResultReviewService.saveAnnotation.
+before a request reaches ResultReviewService.saveAnnotation. `w`/`h` are
+required box dimensions (bug fix: the frontend's AnnotationCanvas always
+sends a bounding box, never a bare point) — missing either is rejected too.
 """
 from __future__ import annotations
 
@@ -58,10 +60,18 @@ def test_missingReturnReasonRejectedAtSchemaLevel() -> None:
 
 def test_validParticleTypesAccepted() -> None:
     for particleType in PARTICLE_LABELS:
-        item = SpatialAnnotationItem(id="a1", x=10, y=20, particleType=particleType)
+        item = SpatialAnnotationItem(id="a1", x=10, y=20, w=5, h=5, particleType=particleType)
         assert item.particleType == particleType
 
 
 def test_invalidParticleTypeRejectedAtSchemaLevel() -> None:
     with pytest.raises(ValidationError):
-        SpatialAnnotationItem(id="a1", x=10, y=20, particleType="not_a_real_particle")
+        SpatialAnnotationItem(id="a1", x=10, y=20, w=5, h=5, particleType="not_a_real_particle")
+
+
+@pytest.mark.parametrize("missingField", ["w", "h"])
+def test_missingBoxDimensionRejectedAtSchemaLevel(missingField: str) -> None:
+    fields = {"id": "a1", "x": 10, "y": 20, "w": 5, "h": 5, "particleType": "urinary_casts"}
+    del fields[missingField]
+    with pytest.raises(ValidationError):
+        SpatialAnnotationItem(**fields)
