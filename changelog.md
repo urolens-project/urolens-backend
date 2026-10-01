@@ -32,11 +32,83 @@
     trimming whitespace, max 2000) — previously any string, including `""`,
     was accepted. Same convention as `OverrideRequest.rationale`
     (UROLENS-146/150): required, stripped, blank/whitespace-only rejected.
-  - **Known issue, not fixed here:** this branch's base still has the
-    duplicate-`0042`-revision Alembic collision (two heads: `0042`, `0043`)
-    from before the `0044` renumber landed on `development` — pre-existing,
-    unrelated to this fix, and not a blocker since no migration was added.
-    Rebase onto current `development` before merging.
+  - **Known issue on this branch, resolved by this merge:** this branch's base
+    had the duplicate-`0042`-revision Alembic collision (two heads: `0042`,
+    `0043`) from before the `0044` renumber landed on `development` —
+    pre-existing, unrelated to this fix. Fixed on this branch directly
+    (same renumber, independently of `development`'s own copy of it) before
+    merging `development` in.
+- **Sync would break as a MedTech's history grew, kept every finished sample on
+  the phone forever, and sent no approval or release dates (UROLENS-236).**
+  - **`GET /sync/pull` reads with SQLAlchemy.** The Supabase REST version
+    downloaded every specimen the MedTech ever had on every sync (filtering deltas
+    in Python) and put every specimen ID in the results request's URL (~37 bytes
+    each, over common URL limits at a few hundred specimens — breaking the Queue
+    too). Filtering is now in SQL; the REST path is deleted (rule 14). The
+    patient's name is still never read (`defer(..., raiseload=True)`).
+  - **30-day window** (`HISTORY_WINDOW_DAYS`, RA 10173 data minimization):
+    unfinished work always syncs; a finished sample (COMPLETED or REJECTED) syncs
+    until 30 days after it was released, approved or rejected.
+  - **Removal lists:** each table's new `deleted` holds the IDs the phone should
+    drop — samples that aged out of the window since the last sync, and samples
+    no longer assigned to the MedTech (there's no reassignment feature today; this
+    covers database changes and a future one), with their results, the MedTech's
+    assignments and the overrides on them. Delta syncs only. Existing apps ignore it.
+  - **New row fields:** specimens `completed_at`; results `approved_at` (latest
+    approval), `released_at`, `particle_classes` (the confirmed counts). Reports
+    sorted Approved/Released items by the MedTech's confirmation time.
+  - `queue_assignments` has no `updated_at` in any migration, yet sync selected and
+    filtered on it; assignments (created, never edited) now delta on `assigned_at`.
+  - `SYNC_PULLED` records `removed_specimen_ids`.
+
+- **A failed AI analysis passed for "no particles", a failed storage write left a
+  broken image, a retake kept the old image's Smart Diagnosis, and every
+  resubmitted result reported its diagnosis as failed (UROLENS-230).**
+  - **Nothing is saved unless the image is analyzed and stored.** `POST
+    /images/upload` used to log both failures and return 201: an AI failure left empty
+    findings the app showed as "No particles detected" (and the MedTech could
+    confirm), and a storage failure left an image row pointing at a file that was
+    never stored. Now 503 **`AI_ANALYSIS_FAILED`** or **`STORAGE_ERROR`**, and the
+    request rolls back; the image is analyzed before it's stored, so a failed
+    analysis leaves nothing in the bucket. The app keeps the image for a retry.
+  - **Model weights.** The engine's default weights path is relative to its own repo,
+    and the `urolens_ai` package doesn't ship its weights, so without
+    `MODEL_WEIGHTS_PATH` inference failed on every upload — silently, until now.
+    `config` now uses `urolens_ai/models/yolov8/weights.pt` inside the installed
+    package when that file exists (`settings.modelWeightsPath`).
+    **Deploy — blocker:** the server must have the weights file and
+    `MODEL_WEIGHTS_PATH` set (or the file at that package path) **before** this is
+    deployed, or every upload returns `AI_ANALYSIS_FAILED`.
+  - **Metadata is stripped on the server.** EXIF (location, device) and PNG text are
+    removed by re-encoding before the image is stored or analyzed — the app does this
+    too, but the server can't rely on it (RA 10173). JPEG quality is kept
+    (`quality="keep"`).
+  - **A retake resets everything from the old image:** findings, `smart_diagnosis`,
+    `smart_diagnosis_unavailable`, the `smart_diagnosis_outputs` row and
+    `model_version` (overrides already, UROLENS-227). A **returned result stays
+    `RETURNED_FOR_CORRECTION`** instead of becoming `PENDING_CONFIRM`, so the MedTech
+    keeps the supervisor's reason and confirming is a resubmission (`resubmitted:
+    true`).
+  - **Re-confirming no longer breaks Smart Diagnosis.** `smart_diagnosis_outputs` has
+    one row per result, but confirmation always inserted one: every resubmission hit
+    the unique constraint, was marked diagnosis-unavailable, logged a false
+    `ENGINE_FAILED` and notified the supervisor, while the old diagnosis kept showing.
+    It now updates the existing row and clears the unavailable flag; a real failure
+    flags an earlier row `FLAGGED_UNAVAILABLE`.
+  - **A discarded image's result can't be confirmed:** 422 `PENDING_RETAKE` (existing
+    code) until a new image is uploaded — discard keeps the old findings.
+  - **An upload starts a specimen that wasn't started** (ASSIGNED/IN_QUEUE →
+    PROCESSING), e.g. when "Begin Analysis" is still queued offline. "Begin Analysis"
+    and this now write a `SPECIMEN_ANALYSIS_STARTED` audit row (shared
+    `specimen_service.markProcessing`); `IMAGE_UPLOADED` records `started_analysis`.
+  - The upload response adds **`smartDiagnosisUnavailable`**, now `true` when Smart
+    Diagnosis fails at upload (it was left `false`, so the app couldn't show the "not
+    available" notice); confirmation retries it and clears the flag on success.
+  Not changed: routes, no migration, no new result statuses (the app doesn't know
+  IMAGE_RETAKE_REQUESTED/FAILED). **Mobile follow-ups (UROLENS-229):** read
+  `smartDiagnosisUnavailable` from the upload response instead of assuming `false`;
+  treat 503 `AI_ANALYSIS_FAILED`/`STORAGE_ERROR` as a failed upload (keep the
+  preview); a queued confirm answered with `PENDING_RETAKE` is a failure, not done.
 - **A retake kept the old image's overrides, so confirming applied corrections from
   the previous image to the new analysis; overrides accepted no rationale, fractions,
   Infinity and any size of count (UROLENS-227).**
@@ -155,6 +227,19 @@
   block non-MedTech logins rather than show 403s.
 
 ### Added
+- **`GET /results/medtech/history`** (UROLENS-236): a MedTech's full sample history,
+  including samples older than the phone's sync window. `category` (required):
+  `PENDING_APPROVAL` | `APPROVED` | `RELEASED` | `REJECTED`; `page`, `pageSize`
+  (≤ 100). Only the caller's own samples, newest first by when each reached the
+  category (confirmed / approved / released / rejected), stable by specimen ID;
+  patient code only. Audited as `MEDTECH_HISTORY_VIEWED`. MedTech-only (403
+  otherwise). Route count 50 → 51.
+  **Mobile follow-ups (UROLENS-235):** process each table's `deleted` in
+  `pullChanges.ts` (and purge local finished samples older than 30 days once, for
+  data synced before this change); map `completed_at`, `approved_at`,
+  `released_at`, `particle_classes`, sorting Approved/Released by
+  approval/release time; use the history endpoint for samples beyond 30 days;
+  escalated results (CRITICAL_ESCALATED) appear in neither the Queue nor Reports.
 - **Load-test tool and proposed p95 targets for the mobile routes (UROLENS-220,
   SEC-4).** `scripts/perf_baseline.py` measures sync pull (full/delta), the MedTech
   and supervisor pending lists, result detail and image upload (incl. AI inference)

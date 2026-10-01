@@ -1,4 +1,4 @@
-"""Unit tests — schemas/result_review.py's EscalateRequest and ReturnRequest
+"""Unit tests — schemas/result_review.py's EscalateRequest, ReturnRequest, and SpatialAnnotationItem
 
 Covers the request-boundary validation added when consolidating
 VALID_ESCALATION_PATHS into a single Literal-backed source of truth (see
@@ -10,16 +10,22 @@ runtime check.
 ReturnRequest.reason gets the same treatment (UROLENS-151): a blank or
 whitespace-only reason is now rejected by Pydantic before the request
 reaches ResultReviewService.return_result.
+
+SpatialAnnotationItem (UROLENS-149) gets the same treatment for particleType:
+rejected by Pydantic against the existing PARTICLE_LABELS source of truth
+before a request reaches ResultReviewService.saveAnnotation.
 """
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
+from src.schemas.patient_portal import PARTICLE_LABELS
 from src.schemas.result_review import (
     VALID_ESCALATION_PATHS,
     EscalateRequest,
     ReturnRequest,
+    SpatialAnnotationItem,
 )
 
 
@@ -48,3 +54,14 @@ def test_blankOrWhitespaceOnlyReturnReasonRejectedAtSchemaLevel(reason: str) -> 
 def test_missingReturnReasonRejectedAtSchemaLevel() -> None:
     with pytest.raises(ValidationError):
         ReturnRequest()
+
+
+def test_validParticleTypesAccepted() -> None:
+    for particleType in PARTICLE_LABELS:
+        item = SpatialAnnotationItem(id="a1", x=10, y=20, particleType=particleType)
+        assert item.particleType == particleType
+
+
+def test_invalidParticleTypeRejectedAtSchemaLevel() -> None:
+    with pytest.raises(ValidationError):
+        SpatialAnnotationItem(id="a1", x=10, y=20, particleType="not_a_real_particle")

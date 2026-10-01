@@ -129,6 +129,7 @@ def _makeResult(
     result.status = status
     result.aiFindings = aiFindings or {"uric_acid_crystals": 15, "rbc_casts": 3}
     result.smartDiagnosisUnavailable = False
+    result.smartDiagnosisOutput = None  # first confirmation: no output row yet
     result.image = None
     result.confirmedBy = None
     result.confirmedAt = None

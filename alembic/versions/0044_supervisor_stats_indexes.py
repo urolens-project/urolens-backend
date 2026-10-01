@@ -14,9 +14,9 @@ started resolving revision '0040' to *this* file instead of the RLS one
 (ambiguous module lookup by revision id). Chained after the real tip (0041)
 instead. Content unchanged from the original 0040 version.
 
-Renumbered again from 0042 to 0044 (fix/UROLENS-151 branch): a `development`
-merge brought in both this file (`revision = '0042'`, from feat/UROLENS-169)
-and 0042_result_releases_result_id_unique.py (`revision = '0042'`, from
+Renumbered again from 0042 to 0044: a `development` merge brought in both
+this file (`revision = '0042'`, from feat/UROLENS-169) and
+0042_result_releases_result_id_unique.py (`revision = '0042'`, from
 UROLENS-143) — the exact coordination gap this file's own docstring above
 already predicted, since both branches independently claimed '0042' off the
 same 0041 tip with no way for either to know about the other. Alembic
@@ -24,9 +24,10 @@ reported two heads again and `0043_set_image_bucket_size_limit.py`'s
 `down_revision = '0042'` became ambiguous between the two files. The
 `result_releases` migration (UROLENS-143) keeps '0042' unchanged — it was
 already independently confirmed as the survivor before this file was
-touched (same fix already applied identically on feat/UROLENS-148,
-feat/UROLENS-150, and fix/UROLENS-150). This file is renumbered to 0044 and
-rechained after 0043 instead. Content unchanged.
+touched (the same fix was applied identically and independently on
+feat/UROLENS-148, feat/UROLENS-150, fix/UROLENS-150, and fix/UROLENS-151,
+each hitting this same collision off the same stale base). This file is
+renumbered to 0044 and rechained after 0043 instead. Content unchanged.
 
 UROLENS-169: `GET /api/v1/results/supervisor/stats` (and the three queue-list
 endpoints it summarizes — `/pending`, `/approved-today`, `/escalated`) filter
