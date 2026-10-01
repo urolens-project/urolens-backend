@@ -336,7 +336,17 @@ class ApproveResponse(BaseModel):
 class ReturnRequest(BaseModel):
     """Request body for returning a pending result for correction."""
 
-    reason: str
+    reason: str = Field(..., min_length=1, max_length=2000)
+    """Required: every return must say why. Blank or whitespace-only is
+    rejected; surrounding whitespace is stripped (UROLENS-151)."""
+
+    @field_validator("reason")
+    @classmethod
+    def reasonNoWhitespaceOnly(cls, v: str) -> str:
+        """Reject a blank or whitespace-only `reason`; strips surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("reason must not be blank")
+        return v.strip()
 
 
 class ReturnResponse(BaseModel):
