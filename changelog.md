@@ -3,6 +3,38 @@
 ## Unreleased
 
 ### Fixed
+- **Physician-portal patient search never matched on Patient ID at all — only
+  on name, via a 100-row Supabase-REST scan that decrypted every candidate
+  (UROLENS-152).** `physician_service.searchPatients` was still the original
+  pure-Supabase-REST implementation: fetched up to 100 patient rows, decrypted
+  every one's name fields, substring-matched against first/last name only.
+  `patient_uid` was never part of the match condition, so a physician
+  searching by Patient ID — the UAC's explicit requirement, and what the
+  frontend's placeholder text already promises — always got zero results.
+  - **Not the same fix as UROLENS-137.** That ticket minimized
+    `PatientService.searchPatients`'s *response shape* (full `PatientResponse`
+    → slim `PatientSearchItem`, patientId/patientUid only) and added a 3-char
+    minimum query length — it never touched that path's match field, which is
+    still name-based today (a separate, pre-existing gap in the
+    receptionist-facing search; out of scope here, not silently fixed).
+  - **Fix:** `AsyncSession` (not Supabase REST), SQL-filtered on `patient_uid`
+    only via `ilike` — name matching is fully removed, not deprioritized.
+    Matches 137's 3-char minimum convention (route `Query(min_length=3)`,
+    enforced again inside the function itself since it's callable directly).
+  - **Response shape deviates from 137's `PatientSearchItem` on purpose:**
+    returns `patientId`, `patientUid`, `dateOfBirth`, `sex` — two more fields
+    than 137's bare minimum. The UAC explicitly names these two as a
+    clinical-safety requirement (visually confirming the right person before
+    selecting), not scope creep. Still excludes firstName/lastName/contactNo/
+    address/clinicalHistory per RA 10173. `dateOfBirth` is Fernet-encrypted at
+    rest (`Patient.dateOfBirth`); decrypting it here is bounded to the
+    already patient_uid-filtered, small result set — not the
+    find-everyone-then-decrypt-all pattern this bug and 137 both eliminated.
+  - Lab-request creation for the physician portal (`POST
+    /physician/lab-requests`) was already correct and unaffected — it already
+    calls the shared `lab_request_service.createLabRequest` directly (see this
+    changelog's earlier "Duplicate lab-request creation implementations"
+    entry); this fix is scoped to search only.
 - **Two concurrent supervisor actions on the same result could both succeed —
   approve-vs-escalate included, not just two of the same action — and
   `ReturnRequest.reason` had no non-blank validation (UROLENS-151).**
