@@ -35,7 +35,7 @@ from src.schemas.result_review import MAX_OVERRIDE_COUNT, OverrideRequest
 from src.services import sync_service
 from src.services.ai_integration_service import AIIntegrationService
 from src.services.manual_override_service import ManualOverrideService
-from tests.conftest import makeSyncDb
+from tests.conftest import makeSyncDb, syncQueries
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-0000000002a1")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-0000000002a2")
@@ -249,11 +249,12 @@ async def test_uploadClearsTheResultsOverridesAndAuditsHowMany() -> None:
         _readWithinLimit=AsyncMock(return_value=b"jpeg"),
         _requireUploadAllowed=AsyncMock(),
         _validateImage=AsyncMock(return_value=(800, 600)),
+        _stripMetadata=AsyncMock(return_value=b"jpeg"),
+        _infer=AsyncMock(return_value={}),
         _replacePreviousImage=AsyncMock(),
         _uploadToStorage=AsyncMock(),
         _getOrCreateResult=AsyncMock(return_value=result),
         _clearManualOverrides=AsyncMock(return_value=2),
-        _runInference=AsyncMock(return_value=None),
     ):
         await service.handleUpload(specimenId=SPECIMEN_ID, uploaderId=MEDTECH_ID, file=upload, request=None)
         service._clearManualOverrides.assert_awaited_once_with(RESULT_ID)
@@ -273,20 +274,6 @@ def test_manualOverridesAreOrderedOldestFirst() -> None:
 
 # ── Sync sends overrides to the phone ─────────────────────────────────────────
 
-def _syncSupabase(specimenIds: list[str]) -> MagicMock:
-    def _table(name: str) -> MagicMock:
-        query = MagicMock()
-        for method in ("select", "eq", "gt", "in_"):
-            getattr(query, method).return_value = query
-        rows = [{"specimen_id": s} for s in specimenIds] if name == "specimens" else []
-        query.execute = AsyncMock(return_value=MagicMock(data=rows))
-        return query
-
-    sb = MagicMock()
-    sb.table.side_effect = _table
-    return sb
-
-
 def _storedOverride() -> ManualOverride:
     return ManualOverride(
         overrideId=uuid.UUID("00000000-0000-0000-0000-0000000002c1"),
@@ -300,19 +287,15 @@ def _storedOverride() -> ManualOverride:
     )
 
 
-async def _syncPull(db: AsyncMock, specimenIds: list[str], since: datetime | None = None) -> dict:
+async def _syncPull(db: AsyncMock, since: datetime | None = None) -> dict:
     auditLogger = MagicMock(record=AsyncMock())
-    with patch.object(sync_service, "supabase", _syncSupabase(specimenIds)), \
-         patch.object(sync_service, "AuditLogger", return_value=auditLogger):
+    with patch.object(sync_service, "AuditLogger", return_value=auditLogger):
         payload = await sync_service.pull(db, str(MEDTECH_ID), since)
     return {"payload": payload, "auditLogger": auditLogger}
 
 
 def _overrideQuery(db: AsyncMock) -> Select:
-    [stmt] = [
-        c.args[0] for c in db.execute.await_args_list
-        if c.args[0].column_descriptions[0]["entity"] is ManualOverride
-    ]
+    [stmt] = syncQueries(db, ManualOverride, "ManualOverride")
     return stmt
 
 
@@ -320,7 +303,7 @@ def _overrideQuery(db: AsyncMock) -> Select:
 async def test_fullSyncSendsEveryOverrideOnTheMedtechsResultsAsNumbers() -> None:
     db = makeSyncDb(overrides=[_storedOverride()])
 
-    pulled = await _syncPull(db, [str(SPECIMEN_ID)])
+    pulled = await _syncPull(db)
 
     changes = pulled["payload"]["changes"]["manualOverrides"]
     assert changes["updated"] == []
@@ -336,7 +319,9 @@ async def test_fullSyncSendsEveryOverrideOnTheMedtechsResultsAsNumbers() -> None
     }]
     sql = str(_overrideQuery(db))
     assert "JOIN analysis_results ON manual_overrides.result_id = analysis_results.result_id" in sql
-    assert "analysis_results.specimen_id IN" in sql
+    # Only the MedTech's own specimens in the sync window.
+    assert "analysis_results.specimen_id IN (SELECT specimens.specimen_id" in sql
+    assert "specimens.medtech_id =" in sql
     assert "ORDER BY manual_overrides.overridden_at" in sql
     assert "overridden_at >" not in sql
 
@@ -346,7 +331,7 @@ async def test_deltaSyncSendsOnlyOverridesAddedSinceTheLastSyncAsUpdates() -> No
     db = makeSyncDb(overrides=[_storedOverride()])
     since = datetime(2026, 9, 29, 7, 0, tzinfo=UTC)
 
-    pulled = await _syncPull(db, [str(SPECIMEN_ID)], since)
+    pulled = await _syncPull(db, since)
 
     changes = pulled["payload"]["changes"]["manualOverrides"]
     assert (len(changes["created"]), len(changes["updated"])) == (0, 1)
@@ -360,7 +345,7 @@ async def test_aSyncCarryingOnlyOverridesIsStillAudited() -> None:
     # Delta where only a supervisor's correction changed: no specimen or result rows.
     db = makeSyncDb(overrides=[_storedOverride()])
 
-    pulled = await _syncPull(db, [str(SPECIMEN_ID)], since=datetime(2026, 9, 29, 7, 0, tzinfo=UTC))
+    pulled = await _syncPull(db, since=datetime(2026, 9, 29, 7, 0, tzinfo=UTC))
 
     kwargs = pulled["auditLogger"].record.await_args.kwargs
     assert kwargs["detailJson"]["override_ids"] == ["00000000-0000-0000-0000-0000000002c1"]
@@ -368,10 +353,9 @@ async def test_aSyncCarryingOnlyOverridesIsStillAudited() -> None:
 
 
 @pytest.mark.asyncio
-async def test_noOverrideQueryForAMedtechWithNoSpecimens() -> None:
+async def test_aMedtechWithNoOverridesGetsAnEmptyTable() -> None:
     db = makeSyncDb()
 
-    pulled = await _syncPull(db, [])
+    pulled = await _syncPull(db)
 
-    assert pulled["payload"]["changes"]["manualOverrides"] == {"created": [], "updated": []}
-    db.execute.assert_not_awaited()
+    assert pulled["payload"]["changes"]["manualOverrides"] == {"created": [], "updated": [], "deleted": []}

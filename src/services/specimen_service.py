@@ -360,18 +360,51 @@ async def _notifyReceptionistsOfRejection(db: AsyncSession, specimen: Specimen, 
         await db.rollback()
 
 
-_STARTABLE_STATUSES = {"ASSIGNED", "IN_QUEUE"}
+
+# A MedTech's specimen moves to PROCESSING from these statuses — on "Begin
+# Analysis", or on its first image upload if that reaches the server first
+# (e.g. "Begin Analysis" was queued offline).
+STARTABLE_SPECIMEN_STATUSES = frozenset({"ASSIGNED", "IN_QUEUE"})
+
+
+async def markProcessing(
+    db: AsyncSession, specimen: Specimen, userId: uuid.UUID, request: Request | None = None
+) -> bool:
+    """Move a startable specimen to `PROCESSING` and audit it, in `db`'s transaction.
+
+    The caller must hold the specimen's row lock (`getAssignedSpecimen`) and
+    commit. A specimen that isn't in `STARTABLE_SPECIMEN_STATUSES` is left as is.
+
+    Returns:
+        Whether the specimen moved.
+    """
+    if specimen.status not in STARTABLE_SPECIMEN_STATUSES:
+        return False
+    previousStatus = specimen.status
+    specimen.status = "PROCESSING"
+    await AuditLogger().record(
+        eventType="SPECIMEN_ANALYSIS_STARTED",
+        entityType="specimen",
+        entityId=specimen.specimenId,
+        userId=userId,
+        db=db,
+        detailJson={"previous_status": previousStatus},
+        request=request,
+    )
+    return True
 
 
 async def startAnalysis(
     db: AsyncSession,
     specimenId: uuid.UUID,
     userId: uuid.UUID,
+    request: Request | None = None,
 ) -> SpecimenStartAnalysisResponse:
     """Move a MedTech's assigned specimen to `PROCESSING` (mobile "Begin Analysis").
 
     Idempotent: a specimen already `PROCESSING` is returned as-is, so a
-    replayed offline sync action is harmless.
+    replayed offline sync action is harmless. The start is audited
+    (`SPECIMEN_ANALYSIS_STARTED`) with the change.
 
     Args:
         user_id: the authenticated MedTech; must match the specimen's
@@ -390,13 +423,11 @@ async def startAnalysis(
     if specimen.status == "PROCESSING":
         return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")
 
-    if specimen.status not in _STARTABLE_STATUSES:
+    if not await markProcessing(db, specimen, userId, request):
         raise ConflictException(
             code="SPECIMEN_NOT_STARTABLE",
             message=f"Specimen in status {specimen.status} cannot be started.",
         )
-
-    specimen.status = "PROCESSING"
     await db.commit()
 
     return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")

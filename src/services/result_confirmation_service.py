@@ -21,6 +21,7 @@ from ..core.exceptions import (
     UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
+from ..models.image import Image, ImageStatus
 from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
 from ..models.result_return import ResultReturn
@@ -115,7 +116,9 @@ class ResultConfirmationService:
                 can't be confirmed.
             ConflictException: (`SPECIMEN_REJECTED`) the result's specimen has
                 been rejected.
-            UnprocessableException: a pending image retake blocks confirmation.
+            UnprocessableException: `PENDING_RETAKE`, if an image retake is
+                pending — including when the result's image was discarded and
+                no new one uploaded yet.
             SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if the result's
                 specimen no longer exists.
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
@@ -426,8 +429,17 @@ class ResultConfirmationService:
         return result
 
     async def _validateNoPendingRetake(self, result: AnalysisResult) -> None:
-        """A result with status IMAGE_RETAKE_REQUESTED cannot be confirmed."""
-        if result.status == ResultStatus.IMAGE_RETAKE_REQUESTED:
+        """Refuse to confirm while a retake is pending.
+
+        That's a result marked IMAGE_RETAKE_REQUESTED, or one whose image was
+        discarded (UROLENS-230): discarding keeps the old findings until a new
+        image is uploaded, and they must not reach the supervisor.
+        """
+        retakePending = result.status == ResultStatus.IMAGE_RETAKE_REQUESTED
+        if not retakePending and result.imageId is not None:
+            image = await self.db.get(Image, result.imageId)
+            retakePending = image is not None and image.status != ImageStatus.ACTIVE
+        if retakePending:
             raise UnprocessableException(
                 code="PENDING_RETAKE",
                 message="Cannot confirm a result while an image retake is pending.",

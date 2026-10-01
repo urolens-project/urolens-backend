@@ -504,6 +504,15 @@ class ResultReviewService:
                 .order_by(ManualOverride.overriddenAt)
             )
         ).scalars().all()
+
+        overriddenByIds = list({o.overriddenBy for o in overridesRows})
+        overriddenByUserMap: dict[uuid.UUID, str] = {}
+        if overriddenByIds:
+            overriddenByRows = (
+                await self.db.execute(select(User).where(User.userId.in_(overriddenByIds)))
+            ).scalars().all()
+            overriddenByUserMap = {u.userId: u.username for u in overriddenByRows}
+
         overrides = [
             {
                 "overrideId": o.overrideId,
@@ -512,6 +521,8 @@ class ResultReviewService:
                 "correctedValue": o.correctedValue,
                 "rationale": o.rationale,
                 "overriddenAt": o.overriddenAt,
+                "overriddenBy": o.overriddenBy,
+                "overriddenByName": overriddenByUserMap.get(o.overriddenBy, ""),
             }
             for o in overridesRows
         ]
@@ -569,6 +580,7 @@ class ResultReviewService:
         detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "sampleUid": spec.sampleUid if spec else None,
             "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),
