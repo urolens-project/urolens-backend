@@ -102,6 +102,27 @@ class NotificationService:
                 entityId=labRequestId,
             )
 
+    async def notifyReceptionistsSpecimenRejected(
+        self, specimenId: uuid.UUID, sampleUid: str, reason: str
+    ) -> None:
+        """Tell every active receptionist a MedTech rejected an assigned specimen.
+
+        The patient has to give a new specimen, and the web only shows desk
+        rejections (UROLENS-238). Identifies the sample by its sample ID — no
+        patient details in the message.
+        """
+        receptionistIds = await self._getActiveUserIds(UserRole.RECEPTIONIST)
+        for recId in receptionistIds:
+            await self.notify(
+                userId=recId,
+                message=(
+                    f"Specimen {sampleUid} was rejected by the MedTech ({reason}). "
+                    "A new specimen needs to be collected from the patient."
+                ),
+                notificationType="SPECIMEN_REJECTED",
+                entityId=specimenId,
+            )
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     async def _push(

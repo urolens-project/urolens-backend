@@ -29,6 +29,7 @@ from ..models.image import Image
 from .specimen_access import (
     MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES,
     getAssignedSpecimen,
+    requireSpecimenNotRejected,
 )
 
 
@@ -58,8 +59,9 @@ class ImageRetakeService:
                 assigned to `medtechId`.
             ConflictError: `CONFLICT`, if the image is already DISCARDED or
                 REPLACED.
-            ConflictException: `RESULT_NOT_EDITABLE`, if the specimen's result
-                has already been submitted, approved or released.
+            ConflictException: `SPECIMEN_REJECTED`, if the specimen was
+                rejected; `RESULT_NOT_EDITABLE`, if the specimen's result has
+                already been submitted, approved or released.
         """
         image = await self.db.get(Image, imageId)
         if image is None:
@@ -67,7 +69,8 @@ class ImageRetakeService:
         # Ownership before any state check, so a non-owner learns nothing.
         # Then re-read the image under the specimen lock, so two racing
         # discards (or a discard racing an upload) can't both pass.
-        await getAssignedSpecimen(self.db, image.specimenId, medtechId)
+        specimen = await getAssignedSpecimen(self.db, image.specimenId, medtechId)
+        requireSpecimenNotRejected(specimen)
         await self.db.refresh(image)
 
         if image.status == "DISCARDED":
