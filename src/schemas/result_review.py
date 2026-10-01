@@ -264,6 +264,24 @@ class SpatialAnnotationItem(BaseModel):
         return v
 
 
+class AnnotationItem(BaseModel):
+    """One reviewer's annotation on a result, as shown in a result's full detail view.
+
+    A MedTech's and a Supervisor's annotations on the same result are
+    independent (`ResultReview` rows are keyed by `resultId` + `reviewedBy`)
+    — this list surfaces every reviewer's annotation, attributed, instead of
+    collapsing to whichever one was saved most recently.
+    """
+
+    reviewedBy: UUID
+    reviewerRole: str
+    """Resolved from `reviewedBy` via a batched `User` lookup; `""` if the
+    user record can't be found (mirrors `overriddenByName`'s fallback)."""
+    annotationNotes: str | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
+    updatedAt: datetime
+
+
 class FullResultDetail(BaseModel):
     """Response body for the full single-result review/detail view.
 
@@ -298,10 +316,10 @@ class FullResultDetail(BaseModel):
     returnReason: str | None = None
     """The supervisor's latest reason, only while the result is
     RETURNED_FOR_CORRECTION (UROLENS-226)."""
-    annotationNotes: str | None = None
-    spatialAnnotations: list[SpatialAnnotationItem] | None = None
-    """Persisted as of migration 0034 (JSONB); validated at this response
-    boundary as of UROLENS-149 (previously an untyped list[dict])."""
+    annotations: list[AnnotationItem]
+    """Every reviewer's annotation, attributed. Previously flattened to a
+    single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer
+    had saved most recently, with no way to tell whose notes were showing."""
 
 
 class AnnotationRequest(BaseModel):
