@@ -7,9 +7,9 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,21 +32,30 @@ from ..schemas.specimen import (
     SpecimenRejectResponse,
     SpecimenStartAnalysisResponse,
 )
+from .notification_service import NotificationService
 from .specimen_access import getAssignedSpecimen
 
 log = logging.getLogger(__name__)
 
 _PHT = timezone(timedelta(hours=8))
-_VALID_REJECTION_REASONS = {"INSUFFICIENT_VOLUME", "WRONG_CONTAINER", "UNLABELED", "OTHER"}
+# Rejection reasons (desk and MedTech), with how a notification words them.
+_REJECTION_REASON_LABELS = {
+    "INSUFFICIENT_VOLUME": "insufficient volume",
+    "WRONG_CONTAINER": "wrong container",
+    "UNLABELED": "unlabeled",
+    "OTHER": "other",
+}
+_VALID_REJECTION_REASONS = frozenset(_REJECTION_REASON_LABELS)
 _UID_GENERATION_ATTEMPTS = 5
 
-# Result statuses that mean the result has left the MedTech's hands: it was
-# confirmed and sent to the supervisor, or the supervisor has already acted on
-# it. Past this point a rejection would strand a result the supervisor is
-# reviewing (or has approved/released) on a REJECTED specimen.
+# Result statuses that mean the result is with (or past) the supervisor: it was
+# confirmed and sent for review, escalated, or approved/released. Past this
+# point a rejection would strand a result the supervisor is reviewing (or has
+# approved/released) on a REJECTED specimen. RETURNED_FOR_CORRECTION is *not*
+# here: a returned result is back in the MedTech's hands, and returning it is
+# exactly what the blocked-rejection message tells them to ask for (UROLENS-238).
 _SUBMITTED_RESULT_STATUSES = {
     ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-    ResultStatus.RETURNED_FOR_CORRECTION,
     ResultStatus.CRITICAL_ESCALATED,
     ResultStatus.APPROVED,
     ResultStatus.RELEASED,
@@ -248,30 +257,35 @@ async def rejectSpecimen(
     userId: uuid.UUID,
     reasonCode: str,
     freeTextNote: str | None,
+    request: Request | None = None,
 ) -> SpecimenRejectResponse:
-    """Post-assignment MedTech rejection of an already-received specimen.
+    """Reject a specimen assigned to the calling MedTech (post-assignment).
 
-    Ported from app/services/specimen_service.py (Track A2 audit confirmed this
-    was the only surviving logic in that module — its auth pattern was
-    ownership-check-in-service, not a role gate, so nothing else carried over).
-    Distinct from the receiving-desk rejection in receive_specimen() above,
-    which logs to specimen_rejections instead of these columns.
+    Distinct from the receiving-desk rejection in `receiveSpecimen`, which logs
+    to `specimen_rejections` instead of these columns. Allowed until the result
+    is with the supervisor — including after a supervisor returns it for
+    correction. The rejection and its `SPECIMEN_REJECTED` audit row commit
+    together; then every active receptionist is notified (best effort) that a
+    new specimen must be collected (UROLENS-238).
 
     Args:
-        user_id: the authenticated MedTech; must match the specimen's
-            `medtech_id` (ownership check) or the call is rejected.
+        userId: the authenticated MedTech; must match the specimen's
+            `medtechId` (ownership check) or the call is rejected.
+        freeTextNote: optional detail; blank is stored as no note.
+        request: the inbound request, for the audit row's client IP.
 
     Returns:
-        Confirmation of the rejection, including the `rejected_at` timestamp.
+        Confirmation of the rejection, including the `rejectedAt` timestamp (UTC).
 
     Raises:
-        HTTPException: 422, if `reasonCode` isn't a valid reason.
+        UnprocessableException: `INVALID_REJECTION_REASON`, if `reasonCode`
+            isn't one of `_VALID_REJECTION_REASONS`.
         SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if `specimenId` doesn't exist.
         ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
             assigned to `userId`.
-        ConflictException: the specimen is already rejected
-            (`SPECIMEN_ALREADY_REJECTED`), or its result has already been
-            confirmed and sent to the supervisor (`RESULT_ALREADY_SUBMITTED`).
+        ConflictException: `SPECIMEN_ALREADY_REJECTED`, if it's already
+            rejected; `RESULT_ALREADY_SUBMITTED`, if its result is with (or
+            past) the supervisor.
     """
     if reasonCode not in _VALID_REJECTION_REASONS:
         raise UnprocessableException(
@@ -299,17 +313,51 @@ async def rejectSpecimen(
             ),
         )
 
-    rejectedAt = datetime.now(_PHT)
+    note = freeTextNote.strip() if freeTextNote and freeTextNote.strip() else None
+    previousStatus = specimen.status
+    rejectedAt = datetime.now(UTC)
     specimen.status = "REJECTED"
     specimen.rejectionReason = reasonCode
-    specimen.rejectionNote = freeTextNote
+    specimen.rejectionNote = note
     specimen.rejectedAt = rejectedAt
 
+    await AuditLogger().record(
+        eventType="SPECIMEN_REJECTED",
+        entityType="specimen",
+        entityId=specimenId,
+        userId=userId,
+        db=db,
+        detailJson={
+            "reason": reasonCode,
+            "has_note": note is not None,
+            "previous_status": previousStatus,
+            "result_status": getattr(resultStatus, "value", resultStatus),
+        },
+        request=request,
+    )
     await db.commit()
+
+    await _notifyReceptionistsOfRejection(db, specimen, reasonCode)
 
     return SpecimenRejectResponse(
         specimenId=specimenId, status="REJECTED", rejectedAt=rejectedAt.isoformat()
     )
+
+
+async def _notifyReceptionistsOfRejection(db: AsyncSession, specimen: Specimen, reasonCode: str) -> None:
+    # After the rejection is committed, so a notification problem can never undo
+    # it, and the specimen lock isn't held while push messages go out. Best
+    # effort: a failure is logged, never raised.
+    try:
+        await NotificationService(db).notifyReceptionistsSpecimenRejected(
+            specimenId=specimen.specimenId,
+            sampleUid=specimen.sampleUid or str(specimen.specimenId),
+            reason=_REJECTION_REASON_LABELS[reasonCode],
+        )
+        await db.commit()
+    except Exception:
+        log.exception("Failed to notify receptionists of rejected specimen_id=%s", specimen.specimenId)
+        await db.rollback()
 
 
 _STARTABLE_STATUSES = {"ASSIGNED", "IN_QUEUE"}

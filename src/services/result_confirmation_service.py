@@ -329,7 +329,12 @@ class ResultConfirmationService:
         """
         offset = (page - 1) * pageSize
         statuses = (status,) if status else _MEDTECH_QUEUE_STATUSES
-        inQueue = (Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
+        # A rejected specimen's result can never be confirmed (UROLENS-238).
+        inQueue = (
+            Specimen.medtechId == medtechId,
+            AnalysisResult.status.in_(statuses),
+            Specimen.status != "REJECTED",
+        )
 
         total = (
             await self.db.execute(
