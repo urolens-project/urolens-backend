@@ -100,7 +100,7 @@ class QueueService:
                 assignment insert or the specimen status update returns no data.
         """
         specimenResult = await self.db.table("specimens").select(
-            "specimen_id", "status"
+            "specimen_id", "status", "sample_uid", "patient_name"
         ).eq("specimen_id", str(data.specimenId)).execute()
 
         if not specimenResult.data:
@@ -179,9 +179,15 @@ class QueueService:
             ).execute()
             raise
 
+        try:
+            patientName = decryptPii(specimen["patient_name"]) if specimen.get("patient_name") else None
+        except Exception:
+            patientName = None
+
+        sampleLabel = patientName or specimen.get("sample_uid") or str(data.specimenId)
         await self._notificationService.notify(
             data.medtechId,
-            f"New specimen assigned: {data.specimenId}",
+            f"New specimen assigned: {sampleLabel}",
             "SAMPLE_ASSIGNED",
             entityId=data.specimenId,
         )
