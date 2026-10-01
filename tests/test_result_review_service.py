@@ -318,11 +318,9 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     writeDb.add = MagicMock()
     writeDb.commit = AsyncMock()
 
-<<<<<<< HEAD
-    _writeService = ResultReviewService(db=writeDb, notifService=AsyncMock())
-=======
-    _writeService = ResultReviewService(db=writeDb, auditLogger=MagicMock(record=AsyncMock()))
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
+    _writeService = ResultReviewService(
+        db=writeDb, notifService=AsyncMock(), auditLogger=MagicMock(record=AsyncMock())
+    )
     writeResponse = await _writeService.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
@@ -380,11 +378,9 @@ async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     )
     db.commit = AsyncMock()
 
-<<<<<<< HEAD
-    _service = ResultReviewService(db=db, notifService=AsyncMock())
-=======
-    _service = ResultReviewService(db=db, auditLogger=MagicMock(record=AsyncMock()))
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
+    _service = ResultReviewService(
+        db=db, notifService=AsyncMock(), auditLogger=MagicMock(record=AsyncMock())
+    )
     await _service.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
@@ -652,11 +648,6 @@ async def test_getFullResultReturnsPatientSex() -> None:
         ]
     )
 
-<<<<<<< HEAD
-    _service = ResultReviewService(db=db, notifService=AsyncMock())
-    with pytest.raises(AttributeError):
-        await _service.getFullResult(RESULT_ID)
-=======
     _service = ResultReviewService(db=db)
     detail = await _service.getFullResult(RESULT_ID)
 
@@ -796,7 +787,6 @@ async def test_getFullResultUnknownReviewerFallsBackToEmptyRole() -> None:
 
     [annotation] = detail["annotations"]
     assert annotation["reviewerRole"] == ""
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
 
 # ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──

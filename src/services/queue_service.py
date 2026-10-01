@@ -131,13 +131,7 @@ class QueueService:
             NotFoundException: `MEDTECH_NOT_FOUND`, if `data.medtech_id`
                 doesn't exist, isn't `MEDTECH`, or isn't active.
         """
-<<<<<<< HEAD
-        specimenResult = await self.db.table("specimens").select(
-            "specimen_id", "status", "sample_uid", "patient_name"
-        ).eq("specimen_id", str(data.specimenId)).execute()
-=======
         db = self.sqlalchemyDb
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
         specimen = await db.get(Specimen, data.specimenId)
         if specimen is None:
@@ -206,18 +200,14 @@ class QueueService:
             )
 
         try:
-            patientName = decryptPii(specimen["patient_name"]) if specimen.get("patient_name") else None
+            patientName = decryptPii(specimen.patientName) if specimen.patientName else None
         except Exception:
             patientName = None
 
-        sampleLabel = patientName or specimen.get("sample_uid") or str(data.specimenId)
+        sampleLabel = patientName or specimen.sampleUid or str(data.specimenId)
         await self._notificationService.notify(
             data.medtechId,
-<<<<<<< HEAD
             f"New specimen assigned: {sampleLabel}",
-=======
-            f"New specimen assigned: {specimen.sampleUid or data.specimenId}",
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
             "SAMPLE_ASSIGNED",
             entityId=data.specimenId,
         )

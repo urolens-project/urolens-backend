@@ -50,16 +50,13 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
-<<<<<<< HEAD
 from .notification_service import NotificationService
-=======
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
     requireResultEditable,
     requireSpecimenAssigned,
 )
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -84,15 +81,15 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
-<<<<<<< HEAD
-    def __init__(self, db: AsyncSession, notifService: NotificationService) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        notifService: NotificationService | None = None,
+        auditLogger: AuditLogger | None = None,
+    ) -> None:
         self.db = db
         self._notifService = notifService
-=======
-    def __init__(self, db: AsyncSession, auditLogger: AuditLogger | None = None) -> None:
-        self.db = db
         self.auditLogger = auditLogger
->>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -841,7 +838,7 @@ class ResultReviewService:
                 `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
                 return, or escalate) won a race for it first.
         """
-        await self._requirePending(resultId)
+        ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
@@ -849,7 +846,7 @@ class ResultReviewService:
 
         # Notify the MedTech — best-effort (notify() never raises); same
         # transaction as the status change, committed together below.
-        if ar.medtechId is not None:
+        if self._notifService is not None and ar.medtechId is not None:
             await self._notifService.notify(
                 userId=ar.medtechId,
                 message=f"A result was returned for correction: {reason}",
