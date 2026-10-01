@@ -19,7 +19,7 @@ from src.models.analysis_result import ResultStatus
 from src.services import sync_service
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.result_review_service import ResultReviewService
-from tests.conftest import makeSyncDb
+from tests.conftest import SYNC_MEDTECH_ID, makeSyncDb, syncResult, syncSpecimen
 from tests.test_result_review_service import (
     RESULT_ID,
     _makeResult,
@@ -133,41 +133,25 @@ async def test_emptyPendingListIsNotLogged():
 
 # ── Sync pull ─────────────────────────────────────────────────────────────────
 
-def _makeSyncSupabase(specimenRows: list[dict], resultRows: list[dict]) -> MagicMock:
-    # Every chain method returns the same query object; execute() answers per table.
-    def _table(name: str) -> MagicMock:
-        query = MagicMock()
-        for method in ("select", "eq", "gt", "in_"):
-            getattr(query, method).return_value = query
-        data = {"specimens": specimenRows, "analysis_results": resultRows}.get(name, [])
-        query.execute = AsyncMock(return_value=MagicMock(data=data))
-        return query
-
-    sb = MagicMock()
-    sb.table.side_effect = _table
-    return sb
-
-
 @pytest.mark.asyncio
 async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice():
-    db = makeSyncDb()
+    specimen = syncSpecimen()
+    result = syncResult(specimen)
+    db = makeSyncDb(rows=[(specimen, result)])
     auditLogger = _makeAuditLogger()
-    specimenId = str(uuid.uuid4())
-    resultId = str(uuid.uuid4())
-    sb = _makeSyncSupabase(
-        specimenRows=[{"specimen_id": specimenId, "patient_name": "ciphertext"}],
-        resultRows=[{"result_id": resultId, "specimen_id": specimenId}],
-    )
 
-    with patch.object(sync_service, "supabase", sb), \
-         patch.object(sync_service, "AuditLogger", return_value=auditLogger):
-        payload = await sync_service.pull(db, str(VIEWER_ID), None, request="req")
+    with patch.object(sync_service, "AuditLogger", return_value=auditLogger):
+        payload = await sync_service.pull(db, str(SYNC_MEDTECH_ID), None, request="req")
 
     assert len(payload["changes"]["specimens"]["created"]) == 1
     kwargs = auditLogger.record.call_args.kwargs
     assert kwargs["eventType"] == "SYNC_PULLED"
     assert kwargs["detailJson"] == {
-        "delta": False, "specimen_ids": [specimenId], "result_ids": [resultId], "override_ids": [],
+        "delta": False,
+        "specimen_ids": [str(specimen.specimenId)],
+        "result_ids": [str(result.resultId)],
+        "override_ids": [],
+        "removed_specimen_ids": [],
     }
     assert kwargs["db"] is db
     db.commit.assert_awaited_once()
@@ -175,12 +159,11 @@ async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice():
 
 @pytest.mark.asyncio
 async def test_emptySyncPullIsNotLogged():
-    db = AsyncMock()
+    db = makeSyncDb()
     auditLogger = _makeAuditLogger()
 
-    with patch.object(sync_service, "supabase", _makeSyncSupabase([], [])), \
-         patch.object(sync_service, "AuditLogger", return_value=auditLogger):
-        await sync_service.pull(db, str(VIEWER_ID), None)
+    with patch.object(sync_service, "AuditLogger", return_value=auditLogger):
+        await sync_service.pull(db, str(SYNC_MEDTECH_ID), None)
 
     auditLogger.record.assert_not_awaited()
     db.commit.assert_not_awaited()
@@ -190,35 +173,31 @@ async def test_emptySyncPullIsNotLogged():
 async def test_deltaPullRecordsResultsEvenWhenTheirSpecimensDidNotChange():
     # A supervisor returning a result changes the result, not the specimen:
     # the audit row must still say whose result reached the device.
-    db = makeSyncDb()
-    auditLogger = _makeAuditLogger()
     since = datetime.now(UTC) - timedelta(minutes=5)
-    oldSpecimen = {"specimen_id": str(uuid.uuid4()), "updated_at": (since - timedelta(days=1)).isoformat()}
-    resultId = str(uuid.uuid4())
-    sb = _makeSyncSupabase([oldSpecimen], [{"result_id": resultId, "specimen_id": oldSpecimen["specimen_id"]}])
+    specimen = syncSpecimen(updatedAt=since - timedelta(days=1))
+    result = syncResult(specimen, status="RETURNED_FOR_CORRECTION", updatedAt=since + timedelta(minutes=1))
+    db = makeSyncDb(rows=[(specimen, result)])
+    auditLogger = _makeAuditLogger()
 
-    with patch.object(sync_service, "supabase", sb), \
-         patch.object(sync_service, "AuditLogger", return_value=auditLogger):
-        await sync_service.pull(db, str(VIEWER_ID), since)
+    with patch.object(sync_service, "AuditLogger", return_value=auditLogger):
+        await sync_service.pull(db, str(SYNC_MEDTECH_ID), since)
 
     detail = auditLogger.record.call_args.kwargs["detailJson"]
     assert detail["specimen_ids"] == []
-    assert detail["result_ids"] == [resultId]
+    assert detail["result_ids"] == [str(result.resultId)]
 
 
 @pytest.mark.asyncio
 async def test_syncTimestampIsTakenBeforeTheReadsSoConcurrentUpdatesAreNotSkipped():
-    db = AsyncMock()
+    db = makeSyncDb()
     readStarted: list[str] = []
-    sb = _makeSyncSupabase([], [])
-    original = sb.table.side_effect
+    answer = db.execute.side_effect
 
-    def _recordingTable(name: str):
+    def _recordingExecute(stmt: object) -> object:
         readStarted.append(datetime.now(UTC).isoformat())
-        return original(name)
+        return answer(stmt)
 
-    sb.table.side_effect = _recordingTable
-    with patch.object(sync_service, "supabase", sb):
-        payload = await sync_service.pull(db, str(VIEWER_ID), None)
+    db.execute.side_effect = _recordingExecute
+    payload = await sync_service.pull(db, str(SYNC_MEDTECH_ID), None)
 
     assert payload["timestamp"] <= min(readStarted)

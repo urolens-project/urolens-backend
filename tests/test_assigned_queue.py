@@ -9,7 +9,7 @@ is the online equivalent. Covered:
 - the pending list: sample ID and queue fields per row, no patient name,
   latest return reason, status filter, returned-first + received-time order,
   and a real COUNT for the total.
-DB and Supabase are mocked.
+DB is mocked.
 """
 from __future__ import annotations
 
@@ -29,7 +29,13 @@ from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
 from src.services import sync_service
 from src.services.result_confirmation_service import ResultConfirmationService
-from tests.conftest import makeSyncDb
+from tests.conftest import (
+    SYNC_MEDTECH_ID,
+    makeSyncDb,
+    syncQueries,
+    syncResult,
+    syncSpecimen,
+)
 
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 
@@ -65,87 +71,72 @@ def test_ourCiphertextAlwaysHasTheDetectedPrefix():
 
 # ── Sync payload ──────────────────────────────────────────────────────────────
 
-def _makeSyncSupabase(specimenRows: list[dict], resultRows: list[dict]) -> MagicMock:
-    def _table(name: str) -> MagicMock:
-        query = MagicMock()
-        for method in ("select", "eq", "gt", "in_"):
-            getattr(query, method).return_value = query
-        data = {"specimens": specimenRows, "analysis_results": resultRows}.get(name, [])
-        query.execute = AsyncMock(return_value=MagicMock(data=data))
-        return query
-
-    sb = MagicMock()
-    sb.table.side_effect = _table
-    return sb
-
-
-async def _pull(db, specimens, results):
-    with patch.object(sync_service, "supabase", _makeSyncSupabase(specimens, results)), \
-         patch.object(sync_service, "AuditLogger", return_value=MagicMock(record=AsyncMock())):
-        return await sync_service.pull(db, str(MEDTECH_ID), None)
+async def _pull(db):
+    with patch.object(sync_service, "AuditLogger", return_value=MagicMock(record=AsyncMock())):
+        return await sync_service.pull(db, str(SYNC_MEDTECH_ID), None)
 
 
 @pytest.mark.asyncio
 async def test_syncNeverSendsPatientNamesInAnyForm():
     # The app shows only the patient code, so the name has no reason to be on
     # the phone — not as plaintext, not as ciphertext (RA 10173 minimization).
-    # Even if a row carried a name, it must not come through.
-    encrypted, legacy, none = (str(uuid.uuid4()) for _ in range(3))
-    specimens = [
-        {"specimen_id": encrypted, "patient_uid": "PAT-000001", "patient_name": encryptPii("Juan Dela Cruz")},
-        {"specimen_id": legacy, "patient_uid": "PAT-000002", "patient_name": "Maria Santos"},
-        {"specimen_id": none, "patient_uid": "PAT-000003"},
-    ]
+    # Even if a loaded row carried a name, it must not come through.
+    encrypted = syncSpecimen(patientUid="PAT-000001", patientName=encryptPii("Juan Dela Cruz"))
+    legacy = syncSpecimen(patientUid="PAT-000002", patientName="Maria Santos")
+    none = syncSpecimen(patientUid="PAT-000003")
 
-    payload = await _pull(makeSyncDb(), specimens, [])
+    payload = await _pull(makeSyncDb(rows=[(encrypted, None), (legacy, None), (none, None)]))
 
     rows = payload["changes"]["specimens"]["created"]
     # Kept as "" (not dropped/null): the app's local column is a required string.
-    assert {r["id"]: r["patient_name"] for r in rows} == {encrypted: "", legacy: "", none: ""}
+    assert {r["patient_name"] for r in rows} == {""}
     assert {r["patient_uid"] for r in rows} == {"PAT-000001", "PAT-000002", "PAT-000003"}
     body = json.dumps(payload)
     assert "Juan" not in body and "Maria" not in body and "gAAAAA" not in body
 
 
-def test_syncDoesNotEvenReadThePatientNameColumn():
-    # Minimization at the source: the Supabase select never asks for it.
-    columns = {c.strip() for c in sync_service._SPECIMEN_COLS.split(",")}
-    assert "patient_name" not in columns
-    assert {"patient_uid", "sample_uid", "status"} <= columns
+@pytest.mark.asyncio
+async def test_syncDoesNotEvenReadThePatientNameColumn():
+    # Minimization at the source: the specimen query never selects it.
+    db = makeSyncDb()
+
+    await _pull(db)
+
+    [query] = syncQueries(db, Specimen, "Specimen")
+    sql = _sql(query)
+    assert "specimens.patient_name" not in sql
+    assert "specimens.patient_uid" in sql and "specimens.sample_uid" in sql
 
 
 @pytest.mark.asyncio
 async def test_returnedResultsCarryTheLatestSupervisorReason():
-    returnedId = uuid.uuid4()
-    pendingId = uuid.uuid4()
-    specimenId = str(uuid.uuid4())
-    specimen = {"specimen_id": specimenId, "patient_name": None}
-    results = [
-        {"result_id": str(returnedId), "specimen_id": specimenId, "status": "RETURNED_FOR_CORRECTION"},
-        {"result_id": str(pendingId), "specimen_id": specimenId, "status": "PENDING_CONFIRM"},
-    ]
+    specimen = syncSpecimen()
+    returned = syncResult(specimen, status="RETURNED_FOR_CORRECTION")
+    other = syncSpecimen()
+    pending = syncResult(other, status="PENDING_CONFIRM")
     # Newest first, as the query orders them: the first reason per result wins.
-    db = makeSyncDb(reasons=[(returnedId, "Recount RBC"), (returnedId, "Older reason")])
+    db = makeSyncDb(
+        rows=[(specimen, returned), (other, pending)],
+        reasons=[(returned.resultId, "Recount RBC"), (returned.resultId, "Older reason")],
+    )
 
-    payload = await _pull(db, [specimen], results)
+    payload = await _pull(db)
 
     reasons = {r["id"]: r["return_reason"] for r in payload["changes"]["analysisResults"]["created"]}
-    assert reasons == {str(returnedId): "Recount RBC", str(pendingId): None}
-    query = db.execute.await_args_list[0].args[0]
+    assert reasons == {str(returned.resultId): "Recount RBC", str(pending.resultId): None}
+    [query] = syncQueries(db, ResultReturn, "resultId")
     assert "ORDER BY result_returns.returned_at DESC" in _sql(query)
 
 
 @pytest.mark.asyncio
 async def test_noReturnReasonQueryWhenNothingIsReturned():
-    db = makeSyncDb()
-    specimenId = str(uuid.uuid4())
-    results = [{"result_id": str(uuid.uuid4()), "specimen_id": specimenId, "status": "PENDING_CONFIRM"}]
+    specimen = syncSpecimen()
+    db = makeSyncDb(rows=[(specimen, syncResult(specimen))])
 
-    payload = await _pull(db, [{"specimen_id": specimenId, "patient_name": None}], results)
+    payload = await _pull(db)
 
     assert payload["changes"]["analysisResults"]["created"][0]["return_reason"] is None
-    queried = [c.args[0].column_descriptions[0]["entity"] for c in db.execute.await_args_list]
-    assert ResultReturn not in queried
+    assert syncQueries(db, ResultReturn, "resultId") == []
 
 
 # ── GET /results/medtech/pending ──────────────────────────────────────────────

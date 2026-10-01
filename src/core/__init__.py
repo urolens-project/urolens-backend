@@ -36,6 +36,7 @@ from .database import AsyncSessionLocal, engine, getDb  # noqa: F401
 from .encryption import decryptPii, decryptStoredPii, encryptPii  # noqa: F401
 from .enums import UserRole  # noqa: F401
 from .exceptions import (  # noqa: F401
+    AIAnalysisError,
     ConflictError,
     ConflictException,
     ForbiddenException,
