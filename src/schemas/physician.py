@@ -13,13 +13,17 @@ _TEST_TYPE_MAX_LENGTH = 255
 
 
 class PhysicianPatientItem(BaseModel):
-    """One patient, for the physician's patient-search results (decrypted)."""
+    """One patient, for the physician's patient-search results.
+
+    Minimized per RA 10173 (UROLENS-152): no firstName/lastName/contact/
+    address/clinicalHistory — only enough for the physician to visually
+    confirm they've found the right person before selecting (the UAC's own
+    stated clinical-safety requirement), on top of the already
+    patient_uid-filtered result set this search returns.
+    """
 
     patientId: UUID
     patientUid: str
-    firstName: str
-    middleName: str | None = None
-    lastName: str
     dateOfBirth: str
     sex: str
 
