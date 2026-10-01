@@ -62,6 +62,21 @@ class StorageError(HTTPException):
         self.errorCode = "STORAGE_ERROR"
 
 
+class AIAnalysisError(HTTPException):
+    """503 — AI analysis of an uploaded image failed, so nothing was saved.
+
+    `errorCode` is `"AI_ANALYSIS_FAILED"`. The client keeps the image and lets
+    the MedTech try again (UROLENS-230).
+    """
+
+    def __init__(
+        self, message: str = "The image couldn't be analyzed. Please try uploading it again."
+    ) -> None:
+        """Build the 503 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message)
+        self.errorCode = "AI_ANALYSIS_FAILED"
+
+
 class NotFoundError(HTTPException):
     """404 — the requested resource doesn't exist. `error_code` is `"NOT_FOUND"`."""
 

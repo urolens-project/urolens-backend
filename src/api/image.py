@@ -54,7 +54,7 @@ async def uploadImage(
     _service: AIIntegrationService = Depends(getAiIntegrationService),
 ) -> AnalysisResultResponse:
     """Upload a microscopy image for a specimen and run AI inference; see
-    `AIIntegrationService.handle_upload`.
+    `AIIntegrationService.handleUpload`.
     """
     uploaderId = uuid.UUID(claims["user_id"])
     result = await _service.handleUpload(specimen_id, uploaderId, file, request)
@@ -67,6 +67,7 @@ async def uploadImage(
         aiFindings=result.aiFindings,
         flaggedAnomalies=result.flaggedAnomalies,
         smartDiagnosis=result.smartDiagnosis,
+        smartDiagnosisUnavailable=result.smartDiagnosisUnavailable,
     )
 
 

@@ -85,6 +85,7 @@ async def rejectSpecimenEndpoint(
 @router.post("/{specimen_id}/start-analysis", response_model=SpecimenStartAnalysisResponse)
 async def startAnalysisEndpoint(
     specimen_id: UUID,
+    request: Request,
     currentUser: dict = Depends(_medtech),
     db: AsyncSession = Depends(getDb),
 ):
@@ -92,4 +93,4 @@ async def startAnalysisEndpoint(
     `specimen_service.startAnalysis`.
     """
     userId = uuid.UUID(currentUser["user_id"])
-    return await specimen_service.startAnalysis(db, specimen_id, userId)
+    return await specimen_service.startAnalysis(db, specimen_id, userId, request)

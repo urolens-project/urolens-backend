@@ -27,6 +27,7 @@ from ..core.audit_logger import AuditLogger, getAuditLogger
 from ..core.database import getDb
 from ..core.enums import UserRole
 from ..core.rbac import RequireRole
+from ..schemas.medtech_history import MedtechHistoryCategory, MedtechHistoryListResponse
 from ..schemas.result_review import (
     AnnotationRequest,
     AnnotationResponse,
@@ -49,6 +50,7 @@ from ..schemas.result_review import (
     SmartDiagnosisResponse,
     SupervisorStatsResponse,
 )
+from ..services import medtech_history_service
 from ..services.manual_override_service import ManualOverrideService
 from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
@@ -192,6 +194,28 @@ async def getSupervisorStats(
     return SupervisorStatsResponse(**await _service.getSupervisorStats())
 
 
+@router.get("/medtech/history", response_model=MedtechHistoryListResponse)
+async def listMedtechHistory(
+    request: Request,
+    category: MedtechHistoryCategory = Query(..., description="The Reports category to list."),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    db: AsyncSession = Depends(getDb),
+) -> MedtechHistoryListResponse:
+    """List the MedTech's own samples in one Reports category, newest first, including
+    those older than the phone's sync window; see `medtech_history_service.listHistory`.
+    """
+    return await medtech_history_service.listHistory(
+        db,
+        medtechId=uuid.UUID(currentUser["user_id"]),
+        category=category,
+        page=page,
+        pageSize=pageSize,
+        request=request,
+    )
+
+
 @router.get("/approved-today", response_model=ApprovedTodayListResponse)
 async def listApprovedToday(
     page: int = Query(1, ge=1),
@@ -243,7 +267,10 @@ async def annotateResult(
         userId=uuid.UUID(currentUser["user_id"]),
         callerRole=currentUser["role"],
         annotationNotes=body.annotationNotes,
-        spatialAnnotations=body.spatialAnnotations,
+        spatialAnnotations=(
+            [item.model_dump() for item in body.spatialAnnotations]
+            if body.spatialAnnotations is not None else None
+        ),
         request=request,
     )
     return AnnotationResponse(**result)

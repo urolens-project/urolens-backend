@@ -27,6 +27,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.image import Image, ImageStatus
 from src.models.result_confirmation import ResultConfirmation
 from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
@@ -37,6 +38,7 @@ RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000041")
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000042")
 OTHER_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000043")
+IMAGE_ID = uuid.UUID("00000000-0000-0000-0000-000000000044")
 
 
 def _makeResult(
@@ -52,7 +54,22 @@ def _makeResult(
     result.particleClasses = None
     result.confirmedBy = None
     result.confirmedAt = None
+    result.imageId = IMAGE_ID
     return result
+
+
+def _makeImage(status: str = ImageStatus.ACTIVE) -> Image:
+    image = MagicMock(spec=Image)
+    image.imageId = IMAGE_ID
+    image.status = status
+    return image
+
+
+def _getByModel(specimen: Specimen | None, image: Image | None = None) -> Callable:
+    # `db.get(Model, id)`: the specimen for Specimen, the result's image for Image.
+    async def _get(model: type, *args: object, **kwargs: object) -> object:
+        return (image if image is not None else _makeImage()) if model is Image else specimen
+    return _get
 
 
 def _makeSpecimen(status: str = "PROCESSING", medtechId: uuid.UUID = MEDTECH_ID) -> Specimen:
@@ -80,7 +97,7 @@ def _answerByEntity(
 
 def _makeDbMock(getResultReturn, specimen: Specimen | None = None) -> AsyncMock:
     db = AsyncMock()
-    db.get = AsyncMock(return_value=specimen if specimen is not None else _makeSpecimen())
+    db.get = AsyncMock(side_effect=_getByModel(specimen if specimen is not None else _makeSpecimen()))
     db.execute = AsyncMock(side_effect=_answerByEntity(getResultReturn))
     db.add = MagicMock()
     db.flush = AsyncMock()
@@ -182,7 +199,7 @@ async def test_confirmIsBlockedWhenSpecimenWasRejected(resultStatus):
     """
     result = _makeResult(status=resultStatus)
     db = _makeDbMock(getResultReturn=result)
-    db.get = AsyncMock(return_value=_makeSpecimen(status="REJECTED"))
+    db.get = AsyncMock(side_effect=_getByModel(_makeSpecimen(status="REJECTED")))
     service = _makeService(db)
 
     with pytest.raises(ConflictException) as excInfo:
