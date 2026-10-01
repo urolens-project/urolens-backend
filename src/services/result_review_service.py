@@ -47,6 +47,7 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .notification_service import NotificationService
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -90,8 +91,9 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, notifService: NotificationService) -> None:
         self.db = db
+        self._notifService = notifService
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -638,6 +640,16 @@ class ResultReviewService:
         now = datetime.now(_PHT)
         self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
         ar.status = ResultStatus.RETURNED_FOR_CORRECTION
+
+        # Notify the MedTech — best-effort (notify() never raises); same
+        # transaction as the status change, committed together below.
+        if ar.medtechId is not None:
+            await self._notifService.notify(
+                userId=ar.medtechId,
+                message=f"A result was returned for correction: {reason}",
+                notificationType="RESULT_RETURNED",
+                entityId=resultId,
+            )
 
         await self.db.commit()
 

@@ -48,6 +48,7 @@ from src.services.result_review_service import ResultReviewService, getSmartDiag
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")
 SUPERVISOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000032")
+MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000033")
 
 
 def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
@@ -55,6 +56,7 @@ def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> Analy
     result.resultId = RESULT_ID
     result.specimenId = SPECIMEN_ID
     result.status = status
+    result.medtechId = MEDTECH_ID
     return result
 
 
@@ -85,7 +87,7 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
     specimen = _makeSpecimen()
     db = _makeDbMock(getSideEffect=[result, specimen])
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     response = await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
 
     assert result.status == ResultStatus.APPROVED
@@ -110,8 +112,9 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     """
     result = _makeResult()
     db = _makeDbMock(getSideEffect=[result])
+    notifService = AsyncMock()
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=notifService)
     response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
 
     assert result.status == ResultStatus.RETURNED_FOR_CORRECTION
@@ -126,6 +129,13 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     assert added.reason == "Blurry image"
     db.commit.assert_awaited_once()
 
+    notifService.notify.assert_awaited_once_with(
+        userId=MEDTECH_ID,
+        message="A result was returned for correction: Blurry image",
+        notificationType="RESULT_RETURNED",
+        entityId=RESULT_ID,
+    )
+
 
 @pytest.mark.asyncio
 async def test_escalateResultTransitionsStatusAndRecordsPath():
@@ -135,7 +145,7 @@ async def test_escalateResultTransitionsStatusAndRecordsPath():
     result = _makeResult()
     db = _makeDbMock(getSideEffect=[result])
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     response = await _service.escalateResult(
         RESULT_ID, SUPERVISOR_ID, escalationPath="MARK_CRITICAL", escalationNote="Urgent"
     )
@@ -162,7 +172,7 @@ async def test_escalateResultRejectsInvalidEscalationPath():
     """
     db = _makeDbMock(getSideEffect=[])
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     with pytest.raises(UnprocessableException) as excInfo:
         await _service.escalateResult(
             RESULT_ID, SUPERVISOR_ID, escalationPath="NOT_A_REAL_PATH", escalationNote=None
@@ -180,7 +190,7 @@ async def test_approveResultRejectsResultNotPending():
     result = _makeResult(status=ResultStatus.APPROVED)
     db = _makeDbMock(getSideEffect=[result])
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     with pytest.raises(ConflictException) as excInfo:
         await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes=None)
     assert excInfo.value.errorCode == "INVALID_RESULT_STATUS"
@@ -198,7 +208,7 @@ async def test_approveResultRefusesResultOfRejectedSpecimen():
     specimen.status = "REJECTED"
     db = _makeDbMock(getSideEffect=[result, specimen])
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     with pytest.raises(ConflictException) as excInfo:
         await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes=None)
 
@@ -225,7 +235,7 @@ async def test_pendingQueueAndStatsExcludeRejectedSpecimens():
 
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=_execute)
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
 
     await _service.getPending(page=1, pageSize=10)
     await _service.getSupervisorStats()
@@ -278,7 +288,7 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     writeDb.add = MagicMock()
     writeDb.commit = AsyncMock()
 
-    _writeService = ResultReviewService(db=writeDb)
+    _writeService = ResultReviewService(db=writeDb, notifService=AsyncMock())
     writeResponse = await _writeService.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
@@ -308,7 +318,7 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
         ]
     )
 
-    _readService = ResultReviewService(db=readDb)
+    _readService = ResultReviewService(db=readDb, notifService=AsyncMock())
     detail = await _readService.getFullResult(RESULT_ID)
 
     assert detail["spatialAnnotations"] == payload
@@ -331,7 +341,7 @@ async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     db.execute = AsyncMock(return_value=_makeScalarOneResult(existingReview))
     db.commit = AsyncMock()
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     await _service.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
@@ -363,7 +373,7 @@ async def test_getFullResultRaisesNotFoundForMissingResult():
     db = AsyncMock()
     db.get = AsyncMock(return_value=None)
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     with pytest.raises(NotFoundException) as excInfo:
         await _service.getFullResult(RESULT_ID)
     assert excInfo.value.errorCode == "RESULT_NOT_FOUND"
@@ -400,7 +410,7 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
         ]
     )
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     detail = await _service.getFullResult(RESULT_ID)
 
     assert detail["resultId"] == RESULT_ID
@@ -447,7 +457,7 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
     db.get = AsyncMock(side_effect=[ar, specimen])
     db.execute = AsyncMock(side_effect=_executeSideEffect)
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     detail = await _service.getFullResult(RESULT_ID)
 
     assert [o["parameterName"] for o in detail["manualOverrides"]] == ["RBC", "WBC"]
@@ -482,7 +492,7 @@ async def test_getFullResultPatientSexRaisesAttributeErrorKnownGap():
     db.get = AsyncMock(side_effect=[ar, specimen])
     db.execute = AsyncMock(return_value=_makeScalarOneResult(patient))  # Patient lookup
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, notifService=AsyncMock())
     with pytest.raises(AttributeError):
         await _service.getFullResult(RESULT_ID)
 

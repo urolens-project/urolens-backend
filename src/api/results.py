@@ -99,9 +99,10 @@ async def getOverrideService(
 
 async def getResultReviewService(
     db: AsyncSession = Depends(getDb),
+    _notifService: NotificationService = Depends(getNotifService),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
-    return ResultReviewService(db=db)
+    return ResultReviewService(db=db, notifService=_notifService)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
