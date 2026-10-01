@@ -71,12 +71,31 @@ def _makeSpecimen() -> Specimen:
 
 
 def _makeDbMock(getSideEffect: list) -> AsyncMock:
-    """db.get(Model, id) returns the next item in get_side_effect, in call order."""
+    """db.get(Model, id) returns the next item in get_side_effect, in call
+    order. db.execute defaults to a winning conditional UPDATE (rowcount=1),
+    matching the non-race happy path — a test simulating a lost race
+    overrides db.execute itself.
+    """
     db = AsyncMock()
     db.get = AsyncMock(side_effect=getSideEffect)
     db.add = MagicMock()
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    executeResult = MagicMock()
+    executeResult.rowcount = 1
+    db.execute = AsyncMock(return_value=executeResult)
     return db
+
+
+def _compiledTransitionStatement(db: AsyncMock) -> str:
+    """The compiled SQL of the conditional-UPDATE transition statement
+    approve/return/escalate issue via `_transitionIfPending` — the literal
+    replacement for asserting on a mutated ORM attribute, since the new
+    race-safe implementation no longer sets `.status` directly on the
+    in-memory object.
+    """
+    stmt = db.execute.call_args[0][0]
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
 
 @pytest.mark.asyncio
@@ -92,7 +111,9 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
     _service = ResultReviewService(db=db)
     response = await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
 
-    assert result.status == ResultStatus.APPROVED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='APPROVED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert specimen.status == "COMPLETED"
     assert specimen.completedAt is not None
     assert response["resultId"] == RESULT_ID
@@ -118,7 +139,9 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     _service = ResultReviewService(db=db)
     response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
 
-    assert result.status == ResultStatus.RETURNED_FOR_CORRECTION
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='RETURNED_FOR_CORRECTION'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
 
@@ -144,7 +167,9 @@ async def test_escalateResultTransitionsStatusAndRecordsPath():
         RESULT_ID, SUPERVISOR_ID, escalationPath="MARK_CRITICAL", escalationNote="Urgent"
     )
 
-    assert result.status == ResultStatus.CRITICAL_ESCALATED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='CRITICAL_ESCALATED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.CRITICAL_ESCALATED.value
     assert response["escalationPath"] == "MARK_CRITICAL"
