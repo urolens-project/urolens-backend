@@ -243,16 +243,23 @@ class ManualOverrideItem(BaseModel):
 
 
 class SpatialAnnotationItem(BaseModel):
-    """One point-plus-particle-type spatial annotation on a result's image.
+    """One bounding-box particle-type annotation on a result's image.
 
-    (UROLENS-149). `id` is client-supplied and stable across saves, so the
-    frontend can remove or adjust a single annotation by resending the full
-    list without it — `saveAnnotation` always replaces the whole list.
+    (UROLENS-149, boxes added as a bug fix after launch). `id` is
+    client-supplied and stable across saves, so the frontend can remove or
+    adjust a single annotation by resending the full list without it —
+    `saveAnnotation` always replaces the whole list. `x`/`y`/`w`/`h` are
+    percentages of the image's displayed dimensions (0-100), matching the
+    frontend canvas's coordinate system, not pixels — a pixel conversion is
+    always derivable later via the result's `Image.widthPx`/`.heightPx`
+    (UROLENS-224).
     """
 
     id: str = Field(..., min_length=1, max_length=64)
     x: float = Field(..., ge=0)
     y: float = Field(..., ge=0)
+    w: float = Field(..., ge=0)
+    h: float = Field(..., ge=0)
     particleType: str
 
     @field_validator("particleType")
