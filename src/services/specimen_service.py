@@ -9,15 +9,15 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptPii, encryptPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
-    SpecimenNotFoundError,
     UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
@@ -32,6 +32,7 @@ from ..schemas.specimen import (
     SpecimenRejectResponse,
     SpecimenStartAnalysisResponse,
 )
+from .specimen_access import getAssignedSpecimen
 
 log = logging.getLogger(__name__)
 
@@ -85,13 +86,19 @@ async def receiveSpecimen(
 
     Returns:
         Confirmation including the specimen's ID, sample UID (if received),
-        and resulting status.
+        resulting status, and the parent lab request's `patientUid` (so
+        Sample Labeling doesn't need a second lookup).
 
     Raises:
         NotFoundException: `payload.lab_request_id` doesn't exist.
+        ConflictException: `SPECIMEN_ALREADY_RECEIVED`, if the lab request
+            is not in `PENDING_SAMPLE` — i.e. its specimen has already been
+            received or rejected at the receiving desk. Checked before any
+            DB write.
         HTTPException: 400, if the visual check failed but
             `payload.rejection_reason` is missing or not one of
-            `_VALID_REJECTION_REASONS`. 500, if unique sample UID generation
+            `_VALID_REJECTION_REASONS`. Checked before any DB write, alongside
+            the status guard above. 500, if unique sample UID generation
             fails (propagated from `_generate_sample_uid`).
     """
     labRequest = await db.get(LabRequest, payload.labRequestId)
@@ -99,6 +106,24 @@ async def receiveSpecimen(
         raise NotFoundException(
             code="LAB_REQUEST_NOT_FOUND", message="Parent laboratory request not found."
         )
+    if labRequest.status != "PENDING_SAMPLE":
+        raise ConflictException(
+            code="SPECIMEN_ALREADY_RECEIVED",
+            message="This lab request's specimen has already been received.",
+        )
+
+    if not payload.visualCheckPassed:
+        if not payload.rejectionReason:
+            exc = HTTPException(status_code=400, detail="A rejection reason code is required.")
+            exc.errorCode = "REJECTION_REASON_REQUIRED"
+            raise exc
+        if payload.rejectionReason not in _VALID_REJECTION_REASONS:
+            exc = HTTPException(
+                status_code=400,
+                detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
+            )
+            exc.errorCode = "INVALID_REJECTION_REASON"
+            raise exc
 
     patient = await db.get(Patient, labRequest.patientId)
     pNamePlain = "Unknown"
@@ -134,17 +159,6 @@ async def receiveSpecimen(
     await db.flush([specimen])
 
     if not payload.visualCheckPassed:
-        if not payload.rejectionReason:
-            exc = HTTPException(status_code=400, detail="A rejection reason code is required.")
-            exc.errorCode = "REJECTION_REASON_REQUIRED"
-            raise exc
-        if payload.rejectionReason not in _VALID_REJECTION_REASONS:
-            exc = HTTPException(
-                status_code=400,
-                detail=f"Invalid reason code. Must be one of: {sorted(_VALID_REJECTION_REASONS)}",
-            )
-            exc.errorCode = "INVALID_REJECTION_REASON"
-            raise exc
         db.add(
             SpecimenRejection(
                 specimenId=specimen.specimenId,
@@ -156,6 +170,20 @@ async def receiveSpecimen(
 
     labRequest.status = parentUpdateStatus
 
+    await AuditLogger().record(
+        db=db,
+        eventType="SPECIMEN_RECEIVED" if payload.visualCheckPassed else "SPECIMEN_REJECTED",
+        entityType="specimen",
+        entityId=specimen.specimenId,
+        userId=receptionistId,
+        detailJson={
+            "lab_request_id": str(payload.labRequestId),
+            "status": initialStatus,
+            "sample_uid": sampleUid,
+            "rejection_reason": payload.rejectionReason if not payload.visualCheckPassed else None,
+        },
+    )
+
     await db.commit()
     await db.refresh(specimen)
 
@@ -165,6 +193,7 @@ async def receiveSpecimen(
         sampleUid=sampleUid,
         status=initialStatus,
         message="Specimen received and recorded successfully.",
+        patientUid=pUid if pUid != "N/A" else None,
     )
 
 
@@ -236,9 +265,10 @@ async def rejectSpecimen(
         Confirmation of the rejection, including the `rejected_at` timestamp.
 
     Raises:
-        HTTPException: 422, if `reason_code` isn't a valid reason. 403, if
-            the specimen isn't assigned to `user_id`.
-        SpecimenNotFoundError: `specimen_id` doesn't exist.
+        HTTPException: 422, if `reasonCode` isn't a valid reason.
+        SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if `specimenId` doesn't exist.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+            assigned to `userId`.
         ConflictException: the specimen is already rejected
             (`SPECIMEN_ALREADY_REJECTED`), or its result has already been
             confirmed and sent to the supervisor (`RESULT_ALREADY_SUBMITTED`).
@@ -248,17 +278,7 @@ async def rejectSpecimen(
             code="INVALID_REJECTION_REASON", message=f"Invalid rejection reason: {reasonCode}."
         )
 
-    specimen = await db.get(Specimen, specimenId)
-    if specimen is None:
-        raise SpecimenNotFoundError(str(specimenId))
-
-    if specimen.medtechId != userId:
-        exc = HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Specimen is not assigned to you.",
-        )
-        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
-        raise exc
+    specimen = await getAssignedSpecimen(db, specimenId, userId)
     if specimen.status == "REJECTED":
         raise ConflictException(
             code="SPECIMEN_ALREADY_REJECTED", message="Specimen is already rejected."
@@ -292,18 +312,50 @@ async def rejectSpecimen(
     )
 
 
-_STARTABLE_STATUSES = {"ASSIGNED", "IN_QUEUE"}
+# A MedTech's specimen moves to PROCESSING from these statuses — on "Begin
+# Analysis", or on its first image upload if that reaches the server first
+# (e.g. "Begin Analysis" was queued offline).
+STARTABLE_SPECIMEN_STATUSES = frozenset({"ASSIGNED", "IN_QUEUE"})
+
+
+async def markProcessing(
+    db: AsyncSession, specimen: Specimen, userId: uuid.UUID, request: Request | None = None
+) -> bool:
+    """Move a startable specimen to `PROCESSING` and audit it, in `db`'s transaction.
+
+    The caller must hold the specimen's row lock (`getAssignedSpecimen`) and
+    commit. A specimen that isn't in `STARTABLE_SPECIMEN_STATUSES` is left as is.
+
+    Returns:
+        Whether the specimen moved.
+    """
+    if specimen.status not in STARTABLE_SPECIMEN_STATUSES:
+        return False
+    previousStatus = specimen.status
+    specimen.status = "PROCESSING"
+    await AuditLogger().record(
+        eventType="SPECIMEN_ANALYSIS_STARTED",
+        entityType="specimen",
+        entityId=specimen.specimenId,
+        userId=userId,
+        db=db,
+        detailJson={"previous_status": previousStatus},
+        request=request,
+    )
+    return True
 
 
 async def startAnalysis(
     db: AsyncSession,
     specimenId: uuid.UUID,
     userId: uuid.UUID,
+    request: Request | None = None,
 ) -> SpecimenStartAnalysisResponse:
     """Move a MedTech's assigned specimen to `PROCESSING` (mobile "Begin Analysis").
 
     Idempotent: a specimen already `PROCESSING` is returned as-is, so a
-    replayed offline sync action is harmless.
+    replayed offline sync action is harmless. The start is audited
+    (`SPECIMEN_ANALYSIS_STARTED`) with the change.
 
     Args:
         user_id: the authenticated MedTech; must match the specimen's
@@ -311,33 +363,22 @@ async def startAnalysis(
 
     Raises:
         SpecimenNotFoundError: `specimen_id` doesn't exist.
-        HTTPException: 403, if the specimen isn't assigned to `user_id`.
+        ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+            assigned to `userId`.
         ConflictException: `SPECIMEN_NOT_STARTABLE`, if the specimen is in
             a status that can't move to `PROCESSING` (e.g. rejected or
             completed).
     """
-    specimen = await db.get(Specimen, specimenId)
-    if specimen is None:
-        raise SpecimenNotFoundError(str(specimenId))
-
-    if specimen.medtechId != userId:
-        exc = HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Specimen is not assigned to you.",
-        )
-        exc.errorCode = "SPECIMEN_NOT_ASSIGNED"
-        raise exc
+    specimen = await getAssignedSpecimen(db, specimenId, userId)
 
     if specimen.status == "PROCESSING":
         return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")
 
-    if specimen.status not in _STARTABLE_STATUSES:
+    if not await markProcessing(db, specimen, userId, request):
         raise ConflictException(
             code="SPECIMEN_NOT_STARTABLE",
             message=f"Specimen in status {specimen.status} cannot be started.",
         )
-
-    specimen.status = "PROCESSING"
     await db.commit()
 
     return SpecimenStartAnalysisResponse(specimenId=specimenId, status="PROCESSING")

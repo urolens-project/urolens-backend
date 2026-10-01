@@ -11,6 +11,18 @@ import jwt
 from .config import settings
 from .supabase import supabase
 
+LOCKOUT_MINUTES = 15
+"""How long an account stays locked after `maxFailedAttempts` failures. Once
+it expires, the next attempt is allowed; a further failure locks it again
+(the failure count isn't reset until a successful login), so a locked
+account gets one guess per window (UROLENS-222, audit F-07)."""
+
+# bcrypt hash (cost 12, same as stored passwords) of a random value nobody
+# knows — checked against when a login names no account, so an unknown
+# username takes as long as a wrong password and doesn't reveal which
+# usernames exist (audit F-07).
+_TIMING_DUMMY_HASH = "$2b$12$g1pysAOpyNunXLw.kD7qIeV64YBwMj1TWBkhNgA6AMy3o3pFTAvcq"
+
 
 async def verifyPassword(plainPassword: str, hashedPassword: str) -> bool:
     """Check a plaintext password against a stored bcrypt hash.
@@ -35,6 +47,36 @@ async def verifyPassword(plainPassword: str, hashedPassword: str) -> bool:
         )
     except ValueError:
         return False
+
+
+async def spendPasswordCheck(plainPassword: str) -> None:
+    """Run one bcrypt check that always fails, to equalize login timing.
+
+    Call it on the "no such account" path so that response takes as long as
+    a real password check.
+    """
+    await verifyPassword(plainPassword, _TIMING_DUMMY_HASH)
+
+
+def isLockedOut(user: dict, now: datetime | None = None) -> bool:
+    """Whether a user row is inside its lockout window.
+
+    `locked_at` older than `LOCKOUT_MINUTES` no longer blocks — the lock
+    expires on its own instead of needing an administrator, so anyone who
+    knows a username can't keep that person locked out.
+
+    Args:
+        user: a `users` row as returned by Supabase (`locked_at` is an ISO
+            timestamp string or `None`).
+        now: current time; injectable for tests.
+    """
+    lockedAt = user.get("locked_at")
+    if lockedAt is None:
+        return False
+    if isinstance(lockedAt, str):
+        lockedAt = datetime.fromisoformat(lockedAt)
+    now = now or datetime.now(UTC)
+    return now - lockedAt < timedelta(minutes=LOCKOUT_MINUTES)
 
 
 def hashPassword(plainPassword: str) -> str:

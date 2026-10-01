@@ -29,7 +29,9 @@ runtime. Collapsing these into one would break one or the other.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
+from pathlib import Path
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -65,9 +67,19 @@ class Settings(BaseModel):
 
     # ── PHI encryption ────────────────────────────────────────────────────
     encryptionKey: str
+    dedupHashKey: str
+    """HMAC secret for the patient dedup-hash column — deliberately separate
+    from `encryptionKey` (Fernet, reversible) since this key drives a
+    one-way, keyed fingerprint used for exact-match duplicate lookups, not
+    encryption."""
 
     # ── AI integration ────────────────────────────────────────────────────
     aiModelVersion: str = "mvp-v1.0"
+    modelWeightsPath: str = ""
+    """YOLOv8 weights the AI engine loads (env `MODEL_WEIGHTS_PATH`). The engine
+    package doesn't ship its weights, so production must set this (or place the
+    file at `urolens_ai/models/yolov8/weights.pt`, the default when present).
+    Empty means every upload fails with `AI_ANALYSIS_FAILED`."""
 
     # ── Misc ──────────────────────────────────────────────────────────────
     zeroUuid: str = "00000000-0000-0000-0000-000000000000"
@@ -84,6 +96,19 @@ def _toAsyncDatabaseUrl(syncUrl: str) -> str:
     if syncUrl.startswith("postgres://"):
         return syncUrl.replace("postgres://", "postgresql+asyncpg://", 1)
     return syncUrl
+
+
+def _bundledModelWeightsPath() -> str:
+    # The engine's own default (`src/urolens_ai/models/yolov8/best.pt`, relative
+    # to the working directory) only exists inside the engine's repo, so an
+    # unset MODEL_WEIGHTS_PATH meant inference failed on every upload. Use a
+    # weights file placed inside the installed package, if there is one (found
+    # without importing the package).
+    spec = importlib.util.find_spec("urolens_ai")
+    if spec is None or not spec.submodule_search_locations:
+        return ""
+    weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "yolov8" / "weights.pt"
+    return str(weights) if weights.is_file() else ""
 
 
 def _loadSettings() -> Settings:
@@ -138,6 +163,18 @@ def _loadSettings() -> Settings:
             "Fernet.generate_key() and set it in the environment before starting the app."
         ) from exc
 
+    dedupHashKey = os.getenv("DEDUP_HASH_KEY", "")
+    if not dedupHashKey:
+        raise RuntimeError(
+            "DEDUP_HASH_KEY is unset. Set a long, random secret in the environment "
+            "before starting the app — the patient duplicate-check hash cannot run without it."
+        )
+
+    modelWeightsPath = os.getenv("MODEL_WEIGHTS_PATH") or _bundledModelWeightsPath()
+    if modelWeightsPath:
+        # The engine reads this variable itself when it loads the model.
+        os.environ["MODEL_WEIGHTS_PATH"] = modelWeightsPath
+
     return Settings(
         supabaseUrl=supabaseUrl,
         supabaseServiceKey=supabaseServiceKey,
@@ -150,7 +187,9 @@ def _loadSettings() -> Settings:
         accessTokenExpireMinutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")),
         maxFailedAttempts=int(os.getenv("MAX_FAILED_ATTEMPTS", "5")),
         encryptionKey=encryptionKey,
+        dedupHashKey=dedupHashKey,
         aiModelVersion=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
+        modelWeightsPath=modelWeightsPath,
     )
 
 

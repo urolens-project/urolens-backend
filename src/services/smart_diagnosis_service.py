@@ -5,6 +5,7 @@ error and marks the result diagnosis-unavailable without propagating (T3.1).
 import logging
 import traceback
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +75,7 @@ class SmartDiagnosisService:
                 from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
                 engineOutput = generate_smart_diagnosis(classification)
 
-                dbRecord = await self._persistOutput(engineOutput, resultId, db)
+                dbRecord = await self._persistOutput(engineOutput, result, db)
 
                 await self.auditLogger.record(
                     eventType="SMART_DIAGNOSIS_GENERATED",
@@ -123,36 +124,38 @@ class SmartDiagnosisService:
         return result
 
     async def _persistOutput(
-        self, engineOutput, resultId: uuid.UUID, db: AsyncSession
+        self, engineOutput, result: AnalysisResult, db: AsyncSession
     ) -> SmartDiagnosisOutput:
-        # Persists a SmartDiagnosisOutput row and denormalizes a summary onto
-        # analysis_results.smart_diagnosis for the mobile sync path to read.
+        """Save the diagnosis as the result's one output row, and denormalize it.
+
+        `smart_diagnosis_outputs` holds one row per result (UNIQUE `result_id`),
+        so a re-confirmation (after a supervisor return) updates the existing
+        row. Inserting a second one failed on that constraint, which marked
+        every resubmitted result's diagnosis unavailable (UROLENS-230).
+        `analysis_results.smart_diagnosis` gets a summary for the mobile sync.
+        """
         evidenceMap = _buildEvidenceMap(engineOutput)
-        record = SmartDiagnosisOutput(
-            resultId=resultId,
-            goutScore=engineOutput.gout.level.value,
-            gnScore=engineOutput.glomerulonephritis.level.value,
-            nephroScore=engineOutput.nephrolithiasis.level.value,
-            noSignificantIndicators=engineOutput.no_significant_indicators,
-            evidenceMap=evidenceMap,
-            engineVersion=engineOutput.engine_version,
-            status="ATTACHED",
-        )
-        db.add(record)
+        record = result.smartDiagnosisOutput  # loaded by _loadResult
+        if record is None:
+            record = SmartDiagnosisOutput(resultId=result.resultId)
+            db.add(record)
+        record.goutScore = engineOutput.gout.level.value
+        record.gnScore = engineOutput.glomerulonephritis.level.value
+        record.nephroScore = engineOutput.nephrolithiasis.level.value
+        record.noSignificantIndicators = engineOutput.no_significant_indicators
+        record.evidenceMap = evidenceMap
+        record.engineVersion = engineOutput.engine_version
+        record.status = "ATTACHED"
+        record.generatedAt = datetime.now(UTC)
 
-        # Denormalize into analysis_results.smart_diagnosis so that the
-        # mobile sync (which queries analysis_results directly) can read it.
-        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
-        row = await db.execute(stmt)
-        result = row.scalar_one_or_none()
-        if result is not None:
-            result.smartDiagnosis = {
-                "gout":               evidenceMap["gout"],
-                "glomerulonephritis": evidenceMap["glomerulonephritis"],
-                "nephrolithiasis":    evidenceMap["nephrolithiasis"],
-                "no_significant_indicators": engineOutput.no_significant_indicators,
-            }
-
+        result.smartDiagnosis = {
+            "gout":               evidenceMap["gout"],
+            "glomerulonephritis": evidenceMap["glomerulonephritis"],
+            "nephrolithiasis":    evidenceMap["nephrolithiasis"],
+            "no_significant_indicators": engineOutput.no_significant_indicators,
+        }
+        # A diagnosis that failed earlier (e.g. before a return) is available now.
+        result.smartDiagnosisUnavailable = False
         return record
 
     async def _handleFailure(
@@ -180,6 +183,15 @@ class SmartDiagnosisService:
                 result = row.scalar_one_or_none()
                 if result:
                     result.smartDiagnosisUnavailable = True
+                # An earlier diagnosis (e.g. from before a return) no longer
+                # describes this result, so it mustn't keep showing as attached.
+                previous = (
+                    await db.execute(
+                        select(SmartDiagnosisOutput).where(SmartDiagnosisOutput.resultId == resultId)
+                    )
+                ).scalar_one_or_none()
+                if previous is not None:
+                    previous.status = "FLAGGED_UNAVAILABLE"
 
                 await self.auditLogger.record(
                     eventType="ENGINE_FAILED",

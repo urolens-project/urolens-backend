@@ -27,8 +27,13 @@ from .labeling import (  # noqa: F401
     LabelConfirmRequest,
     LabelConfirmResponse,
     LabelPreviewData,
+    PrintJobResponse,
     PrintLabelResponse,
     ReceivedSpecimenSearchItem,
+)
+from .medtech_history import (  # noqa: F401
+    MedtechHistoryItem,
+    MedtechHistoryListResponse,
 )
 from .notifications import NotificationOut, PushTokenRequest  # noqa: F401
 from .patient import (  # noqa: F401
@@ -91,6 +96,7 @@ from .result_review import (  # noqa: F401
     SmartDiagnosisAttached,
     SmartDiagnosisResponse,
     SmartDiagnosisUnavailable,
+    SpatialAnnotationItem,
     SupervisorStatsResponse,
 )
 from .specimen import (  # noqa: F401

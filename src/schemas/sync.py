@@ -11,6 +11,10 @@ class TableChanges(BaseModel):
 
     created: list[Any]
     updated: list[Any]
+    deleted: list[str] = []
+    """IDs the phone should remove (UROLENS-236): samples that aged out of the
+    sync window or are no longer assigned to the MedTech. Only filled on a
+    delta sync; existing app versions ignore it."""
 
 
 class SyncChanges(BaseModel):
@@ -19,6 +23,8 @@ class SyncChanges(BaseModel):
     specimens: TableChanges
     queueAssignments: TableChanges
     analysisResults: TableChanges
+    manualOverrides: TableChanges
+    """Corrections on the MedTech's results, from any author (UROLENS-227)."""
 
 
 class SyncPullResponse(BaseModel):

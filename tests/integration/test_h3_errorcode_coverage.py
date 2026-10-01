@@ -32,8 +32,8 @@ from httpx import ASGITransport, AsyncClient
 from main import app
 from src.core.config import settings
 from src.core.database import getDb
-from src.core.encryption import encryptPii
 from src.models.patient import Patient
+from src.models.specimen import Specimen
 
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
 TEST_RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000091")
@@ -99,13 +99,20 @@ async def test_physicianResultDetailNotFoundReturnsFlatEnvelope(asyncClient):
 
 @pytest.mark.asyncio
 async def test_confirmLabelAffixedNoLabelReturnsFlatEnvelope(asyncClient):
+    """Labeling is Receptionist-gated (UROLENS-142 RBAC fix) — minted as
+    RECEPTIONIST, not MEDTECH, so this still reaches the LABEL_NOT_FOUND
+    path being tested rather than 403ing on the role check.
+    """
     db = AsyncMock()
+    specimen = MagicMock(spec=Specimen)
+    specimen.status = "RECEIVED"
+    db.get = AsyncMock(return_value=specimen)
     executeResult = MagicMock()
     executeResult.scalars.return_value.first.return_value = None
     db.execute = AsyncMock(return_value=executeResult)
     _overrideDb(db)
     try:
-        token = _mintToken("MEDTECH")
+        token = _mintToken("RECEPTIONIST")
         with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
             response = await asyncClient.post(
                 f"/api/v1/specimens/{TEST_LABEL_SPECIMEN_ID}/label/confirm",
@@ -143,7 +150,11 @@ async def test_createLabRequestUidExhaustionReturnsFlatEnvelope(asyncClient):
             response = await asyncClient.post(
                 "/api/v1/lab-requests",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"patientId": str(TEST_PATIENT_ID), "testType": "Urinalysis"},
+                json={
+                    "patientId": str(TEST_PATIENT_ID),
+                    "testType": "Urinalysis",
+                    "physicianName": "Dr. Santos",
+                },
             )
     finally:
         _clearDbOverride()
@@ -159,9 +170,8 @@ async def test_createLabRequestUidExhaustionReturnsFlatEnvelope(asyncClient):
 @pytest.mark.asyncio
 async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
     db = AsyncMock()
-    existingRow = (encryptPii("Jane"), encryptPii("Doe"), encryptPii("2000-01-01"))
     duplicateCheck = MagicMock()
-    duplicateCheck.all.return_value = [existingRow]
+    duplicateCheck.scalar_one_or_none.return_value = uuid.uuid4()
     db.execute = AsyncMock(return_value=duplicateCheck)
 
     _overrideDb(db)
@@ -180,7 +190,7 @@ async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
                     "consent": {
                         "consentGiven": True,
                         "consentStorage": True,
-                        "consentResearch": False,
+                        "consentResearch": True,
                     },
                 },
             )
@@ -189,7 +199,7 @@ async def test_createPatientDuplicateReturnsFlatEnvelope(asyncClient):
 
     assert response.status_code == 409
     body = response.json()
-    assert body["error"]["code"] == "CONFLICT"
+    assert body["error"]["code"] == "DUPLICATE_PATIENT"
     assert isinstance(body["error"]["message"], str)
 
 

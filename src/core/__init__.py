@@ -33,18 +33,23 @@ from .auth_service import (  # noqa: F401
 )
 from .config import Settings, settings  # noqa: F401
 from .database import AsyncSessionLocal, engine, getDb  # noqa: F401
-from .encryption import decryptPii, encryptPii  # noqa: F401
+from .encryption import decryptPii, decryptStoredPii, encryptPii  # noqa: F401
 from .enums import UserRole  # noqa: F401
 from .exceptions import (  # noqa: F401
+    AIAnalysisError,
     ConflictError,
     ConflictException,
+    ForbiddenException,
     ImageFormatError,
     ImageResolutionError,
+    ImageTooLargeError,
     NotFoundError,
     NotFoundException,
     SpecimenNotFoundError,
     StorageError,
+    TooManyRequestsException,
     UnprocessableException,
 )
 from .rbac import RequireRole, getCurrentUser, securityScheme  # noqa: F401
+from .storage import signedImageUrl  # noqa: F401
 from .supabase import getSupabase, supabase  # noqa: F401

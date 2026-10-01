@@ -149,7 +149,10 @@ class AnalysisResult(Base):
         back_populates="analysisResult", uselist=False
     )
     manualOverrides: Mapped[list[ManualOverride]] = relationship(
-        back_populates="analysisResult"
+        back_populates="analysisResult",
+        # Oldest first, so merging them in order leaves each parameter's
+        # latest override as its effective value (see confirmResult).
+        order_by="ManualOverride.overriddenAt",
     )
     smartDiagnosisOutput: Mapped[SmartDiagnosisOutput | None] = relationship(
         back_populates="analysisResult", uselist=False

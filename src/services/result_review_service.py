@@ -24,16 +24,19 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from fastapi import Request
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.config import settings
-from ..core.encryption import decryptPii
+from ..core.audit_logger import AuditLogger
+from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     UnprocessableException,
 )
+from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
@@ -47,7 +50,16 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+<<<<<<< HEAD
 from .notification_service import NotificationService
+=======
+from .specimen_access import (
+    getAssignedSpecimen,
+    isMedtech,
+    requireResultEditable,
+    requireSpecimenAssigned,
+)
+>>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -65,25 +77,6 @@ def _computeAge(dobStr: str | None) -> int | None:
         return None
 
 
-def _imagePublicUrl(storageKey: str | None) -> str | None:
-    # Builds the public Supabase storage URL for a specimen image; returns
-    # None if there's no storage key or no configured Supabase URL.
-    if not storageKey or not settings.supabaseUrl:
-        return None
-    base = settings.supabaseUrl.rstrip("/")
-    return f"{base}/storage/v1/object/public/{settings.supabaseImageBucket}/{storageKey}"
-
-
-def _decryptOrNone(ciphertext: str | None) -> str | None:
-    # Decrypts PII, returning None (rather than raising) for an unset or
-    # undecryptable value.
-    if not ciphertext:
-        return None
-    try:
-        return decryptPii(ciphertext)
-    except Exception:
-        return None
-
 
 class ResultReviewService:
     """Owns the supervisor review/approval workflow: pending queue, approved/
@@ -91,9 +84,15 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
+<<<<<<< HEAD
     def __init__(self, db: AsyncSession, notifService: NotificationService) -> None:
         self.db = db
         self._notifService = notifService
+=======
+    def __init__(self, db: AsyncSession, auditLogger: AuditLogger | None = None) -> None:
+        self.db = db
+        self.auditLogger = auditLogger
+>>>>>>> 62167e517b74744cf23ec401c7170898c16df18c
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -113,6 +112,47 @@ class ResultReviewService:
                 message=f"Action not allowed in status '{result.status}'.",
             )
         return result
+
+    async def _transitionIfPending(self, resultId: uuid.UUID, newStatus: ResultStatus) -> None:
+        """The actual race-safety gate behind approve/return/escalate
+        (UROLENS-151, mirrors UROLENS-142/143's conditional-UPDATE-plus-
+        rowcount pattern).
+
+        `_requirePending`'s read-then-check above is not race-safe alone:
+        two concurrent actions on the same result — any mix of approve,
+        return, and escalate, not just two calls to the same action — could
+        both read PENDING_SUPERVISOR_APPROVAL and both pass that check before
+        either writes. This conditional UPDATE is the real gate: it only
+        moves the row if it is *still* PENDING_SUPERVISOR_APPROVAL at the
+        moment of the write, and Postgres serializes concurrent UPDATEs
+        against the same row, so at most one of any number of competing
+        actions can ever see `rowcount == 1`. No unique constraint or new
+        migration is needed here (unlike 142/143): those each protect a
+        single action against itself via a child-table constraint, but the
+        shared resource three *different* actions actually contend for is
+        `analysis_results.status` itself, which this UPDATE already guards
+        directly for every combination.
+
+        Raises:
+            ConflictException: `INVALID_RESULT_STATUS` — the same code
+                `_requirePending` raises in the non-race case, since neither
+                the caller nor the frontend can (or needs to) tell the two
+                apart — if another action won the race first.
+        """
+        result = await self.db.execute(
+            update(AnalysisResult)
+            .where(
+                AnalysisResult.resultId == resultId,
+                AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            )
+            .values(status=newStatus)
+        )
+        if result.rowcount == 0:
+            await self.db.rollback()
+            raise ConflictException(
+                code="INVALID_RESULT_STATUS",
+                message="Another action has already changed this result's status.",
+            )
 
     async def _batchPatientContext(
         self, specimenIds: list[uuid.UUID]
@@ -151,60 +191,99 @@ class ResultReviewService:
         """Returns (patient_name, patient_age, patient_sex) for a list row."""
         if spec is None:
             return "", None, None
-        patientName = _decryptOrNone(spec.patientName) or ""
+        patientName = decryptStoredPii(spec.patientName) or ""
         pat = patMap.get(spec.patientUid) if spec.patientUid else None
-        age = _computeAge(_decryptOrNone(pat.dateOfBirth)) if pat else None
+        age = _computeAge(decryptStoredPii(pat.dateOfBirth)) if pat else None
         sex = pat.sex if pat else None
         return patientName, age, sex
+
+    # ── Shared filters (kept in one place so the dashboard counts can never
+    # drift from the queue list endpoints they summarize — see UROLENS-142's
+    # workload-count bug and UROLENS-143's release-race bug, both caused by
+    # the same definition living in two places) ─────────────────────────────
+
+    @staticmethod
+    def _pendingApprovalFilter() -> tuple[Any, ...]:
+        # Rejected specimens' results never show up for approval —
+        # shared by get_pending and get_supervisor_stats.
+        return (
+            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            Specimen.status != "REJECTED",
+        )
+
+    @staticmethod
+    def _escalatedFilter() -> tuple[Any, ...]:
+        return (AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED,)
+
+    @staticmethod
+    def _todayWindowPht() -> tuple[datetime, datetime]:
+        """The [start, end) instant bounds of "today" in Philippine time,
+        as timezone-aware datetimes.
+
+        Deliberately NOT a bare `date` compared against a `timestamptz`
+        column: asyncpg encodes a plain `datetime.date` using Postgres'
+        `date` OID, and comparing that to `timestamptz` triggers an
+        implicit cast that reinterprets the date's midnight in the
+        session's timezone (UTC here, unconfigured) rather than PHT —
+        silently shifting the "day" boundary to 8am PHT instead of
+        midnight PHT. Passing tz-aware datetimes instead makes the bound
+        an absolute instant, so the comparison is correct regardless of
+        the session's timezone setting.
+        """
+        nowPht = datetime.now(_PHT)
+        startPht = nowPht.replace(hour=0, minute=0, second=0, microsecond=0)
+        return startPht, startPht + timedelta(days=1)
+
+    @staticmethod
+    def _approvedTodayFilter(startPht: datetime, endPht: datetime) -> tuple[Any, ...]:
+        # Global across all supervisors, not per-approver — matches
+        # get_approved_today, which has no approved_by filter either.
+        return (
+            ResultApproval.approvedAt >= startPht,
+            ResultApproval.approvedAt < endPht,
+        )
 
     # ── Supervisor dashboard stats ───────────────────────────────────────
 
     async def getSupervisorStats(self) -> dict[str, int]:
-        """Dashboard counts for the supervisor's review queue.
+        """Dashboard counts for the supervisor's review queue, in one
+        round trip (three scalar subqueries in a single SELECT — this
+        endpoint is polled on an interval).
 
         Returns:
             A dict with `pendingCount` (results awaiting approval),
-            `approvedToday` (approvals recorded today, PHT), and
-            `escalatedCount` (results currently `CRITICAL_ESCALATED`).
+            `approvedToday` (approvals recorded today, PHT, across all
+            supervisors), and `escalatedCount` (results currently
+            `CRITICAL_ESCALATED`).
         """
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
+        startPht, endPht = self._todayWindowPht()
 
-        pendingCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-                .where(
-                    AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-                    Specimen.status != "REJECTED",
-                )
-            )
-        ).scalar_one()
+        pendingSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .where(*self._pendingApprovalFilter())
+            .scalar_subquery()
+        )
+        approvedSubq = (
+            select(func.count())
+            .select_from(ResultApproval)
+            .where(*self._approvedTodayFilter(startPht, endPht))
+            .scalar_subquery()
+        )
+        escalatedSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .where(*self._escalatedFilter())
+            .scalar_subquery()
+        )
 
-        approvedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(ResultApproval)
-                .where(
-                    ResultApproval.approvedAt >= todayPht,
-                    ResultApproval.approvedAt < tomorrowPht,
-                )
-            )
-        ).scalar_one()
-
-        escalatedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
-            )
-        ).scalar_one()
+        row = (await self.db.execute(select(pendingSubq, approvedSubq, escalatedSubq))).one()
 
         return {
-            "pendingCount": pendingCount,
-            "approvedToday": approvedCount,
-            "escalatedCount": escalatedCount,
+            "pendingCount": row[0],
+            "approvedToday": row[1],
+            "escalatedCount": row[2],
         }
 
     # ── Pending queue ─────────────────────────────────────────────────────
@@ -224,10 +303,7 @@ class ResultReviewService:
 
         # Results of rejected specimens never show up for approval (approveResult
         # would refuse them anyway) — same filter as getSupervisorStats.
-        awaitingApproval = (
-            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-            Specimen.status != "REJECTED",
-        )
+        awaitingApproval = self._pendingApprovalFilter()
 
         total = (
             await self.db.execute(
@@ -262,6 +338,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -287,10 +364,8 @@ class ResultReviewService:
             `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
-
-        window = (ResultApproval.approvedAt >= todayPht, ResultApproval.approvedAt < tomorrowPht)
+        startPht, endPht = self._todayWindowPht()
+        window = self._approvedTodayFilter(startPht, endPht)
 
         total = (
             await self.db.execute(
@@ -331,6 +406,7 @@ class ResultReviewService:
                 {
                     "resultId": resultId,
                     "specimenId": ar.specimenId if ar else None,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -356,19 +432,18 @@ class ResultReviewService:
             per row), `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
+        escalated = self._escalatedFilter()
 
         total = (
             await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                select(func.count()).select_from(AnalysisResult).where(*escalated)
             )
         ).scalar_one()
 
         arRows = (
             await self.db.execute(
                 select(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                .where(*escalated)
                 .order_by(AnalysisResult.updatedAt.desc())
                 .offset(offset)
                 .limit(pageSize)
@@ -396,6 +471,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -410,17 +486,38 @@ class ResultReviewService:
 
     # ── Full result detail ────────────────────────────────────────────────
 
-    async def getFullResult(self, resultId: uuid.UUID) -> dict[str, Any]:
+    async def getFullResult(
+        self,
+        resultId: uuid.UUID,
+        viewerId: uuid.UUID | None = None,
+        request: Request | None = None,
+        viewerRole: str | None = None,
+    ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
-        patient/medtech context, AI findings, manual overrides, the latest
-        annotation, and Smart Diagnosis (if attached).
+        patient/medtech context, AI findings, manual overrides, every
+        reviewer's annotation, and Smart Diagnosis (if attached).
+
+        Args:
+            resultId: the result to assemble.
+            viewerId: the caller. When given (and an `auditLogger` was
+                injected), the view is recorded as `RESULT_DETAIL_VIEWED` in
+                the same transaction — no view without an audit row.
+            request: the inbound request, for the audit row's client IP.
+            viewerRole: the caller's `role` claim. A MEDTECH may only read
+                results for specimens assigned to them (F-22); checked before
+                any patient data is decrypted.
 
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
             always `None` — see the module docstring's schema-drift note.
+            `annotations` lists every reviewer's row (oldest first) — a
+            MedTech's and a Supervisor's annotations on the same result are
+            independent, not collapsed to whichever was saved most recently.
 
         Raises:
-            NotFoundException: `result_id` doesn't exist.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
+                another MedTech's result.
         """
         ar = await self.db.get(AnalysisResult, resultId)
         if ar is None:
@@ -429,6 +526,13 @@ class ResultReviewService:
             )
 
         spec = await self.db.get(Specimen, ar.specimenId)
+        isMedtechViewer = viewerRole is not None and isMedtech(viewerRole)
+        if isMedtechViewer:
+            if spec is None:
+                raise ForbiddenException(
+                    code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you."
+                )
+            requireSpecimenAssigned(spec, viewerId)
 
         pat: Patient | None = None
         if spec and spec.patientUid:
@@ -444,7 +548,7 @@ class ResultReviewService:
         imageUrl: str | None = None
         if ar.imageId:
             image = await self.db.get(Image, ar.imageId)
-            imageUrl = _imagePublicUrl(image.storageKey) if image else None
+            imageUrl = await signedImageUrl(image.storageKey) if image else None
 
         overridesRows = (
             await self.db.execute(
@@ -453,6 +557,15 @@ class ResultReviewService:
                 .order_by(ManualOverride.overriddenAt)
             )
         ).scalars().all()
+
+        overriddenByIds = list({o.overriddenBy for o in overridesRows})
+        overriddenByUserMap: dict[uuid.UUID, str] = {}
+        if overriddenByIds:
+            overriddenByRows = (
+                await self.db.execute(select(User).where(User.userId.in_(overriddenByIds)))
+            ).scalars().all()
+            overriddenByUserMap = {u.userId: u.username for u in overriddenByRows}
+
         overrides = [
             {
                 "overrideId": o.overrideId,
@@ -461,20 +574,38 @@ class ResultReviewService:
                 "correctedValue": o.correctedValue,
                 "rationale": o.rationale,
                 "overriddenAt": o.overriddenAt,
+                "overriddenBy": o.overriddenBy,
+                "overriddenByName": overriddenByUserMap.get(o.overriddenBy, ""),
             }
             for o in overridesRows
         ]
 
-        review = (
+        reviewRows = (
             await self.db.execute(
                 select(ResultReview)
                 .where(ResultReview.resultId == resultId)
-                .order_by(ResultReview.updatedAt.desc())
-                .limit(1)
+                .order_by(ResultReview.updatedAt)
             )
-        ).scalar_one_or_none()
-        latestAnnotation = review.annotationNotes if review else None
-        latestSpatial = review.spatialAnnotations if review else None
+        ).scalars().all()
+
+        reviewedByIds = list({r.reviewedBy for r in reviewRows})
+        reviewerRoleMap: dict[uuid.UUID, str] = {}
+        if reviewedByIds:
+            reviewerRows = (
+                await self.db.execute(select(User).where(User.userId.in_(reviewedByIds)))
+            ).scalars().all()
+            reviewerRoleMap = {u.userId: u.role for u in reviewerRows}
+
+        annotations = [
+            {
+                "reviewedBy": r.reviewedBy,
+                "reviewerRole": reviewerRoleMap.get(r.reviewedBy, ""),
+                "annotationNotes": r.annotationNotes,
+                "spatialAnnotations": r.spatialAnnotations,
+                "updatedAt": r.updatedAt,
+            }
+            for r in reviewRows
+        ]
 
         sdo = (
             await self.db.execute(
@@ -492,17 +623,33 @@ class ResultReviewService:
                 "engineVersion": sdo.engineVersion,
             }
 
-        first = _decryptOrNone(pat.firstName) if pat else None
-        last = _decryptOrNone(pat.lastName) if pat else None
-        dob = _decryptOrNone(pat.dateOfBirth) if pat else None
+        dob = decryptStoredPii(pat.dateOfBirth) if pat else None
         sex = pat.sex if pat else None
-        patientName = f"{first or ''} {last or ''}".strip() or (
-            _decryptOrNone(spec.patientName) if spec else ""
-        ) or ""
+        # A MedTech identifies the patient by code only (the mobile app's
+        # privacy decision, UROLENS-225/226): their name isn't even decrypted.
+        patientName: str | None = None
+        if not isMedtechViewer:
+            first = decryptStoredPii(pat.firstName) if pat else None
+            last = decryptStoredPii(pat.lastName) if pat else None
+            patientName = f"{first or ''} {last or ''}".strip() or (
+                decryptStoredPii(spec.patientName) if spec else ""
+            ) or ""
 
-        return {
+        returnReason: str | None = None
+        if ar.status == ResultStatus.RETURNED_FOR_CORRECTION:
+            returnReason = (
+                await self.db.execute(
+                    select(ResultReturn.reason)
+                    .where(ResultReturn.resultId == resultId)
+                    .order_by(ResultReturn.returnedAt.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
+        detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "sampleUid": spec.sampleUid if spec else None,
             "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),
@@ -519,9 +666,22 @@ class ResultReviewService:
             "smartDiagnosis": smartDiagnosis,
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,
-            "annotationNotes": latestAnnotation,
-            "spatialAnnotations": latestSpatial,
+            "returnReason": returnReason,
+            "annotations": annotations,
         }
+        if viewerId is not None and self.auditLogger is not None:
+            # RA 10173: record who viewed which patient's result.
+            await self.auditLogger.record(
+                eventType="RESULT_DETAIL_VIEWED",
+                entityType="analysis_result",
+                entityId=ar.resultId,
+                userId=viewerId,
+                db=self.db,
+                detailJson={"specimen_id": str(ar.specimenId)},
+                request=request,
+            )
+            await self.db.commit()
+        return detail
 
     # ── Annotation ────────────────────────────────────────────────────────
 
@@ -529,20 +689,40 @@ class ResultReviewService:
         self,
         resultId: uuid.UUID,
         userId: uuid.UUID,
+        callerRole: str,
         annotationNotes: str,
         spatialAnnotations: list | None = None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
-        """Upsert a supervisor's annotation on a result.
+        """Upsert the caller's annotation on a result.
 
-        `spatial_annotations` is only written when the caller supplies a
-        value (matching the pre-port behavior) — omitting it on a later call
-        leaves a previously-saved value in place rather than clearing it.
+        Same access rules as a manual override: a MedTech may annotate only a
+        specimen assigned to them, while the result is `PENDING_CONFIRM` or
+        `RETURNED_FOR_CORRECTION`; a Supervisor only while it is
+        `PENDING_SUPERVISOR_APPROVAL`. The audit row commits with the change
+        and never carries the note text.
+
+        `spatialAnnotations` is only written when the caller supplies a
+        value — omitting it on a later call leaves a previously-saved value in
+        place rather than clearing it.
+
+        Raises:
+            NotFoundException: `RESULT_NOT_FOUND`, if the result doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech annotates
+                another MedTech's (or an unassigned) specimen.
+            UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
+                APPROVED or RELEASED.
+            ConflictException: `RESULT_NOT_EDITABLE`, for any other status the
+                caller's role may not change.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
-        if ar is None:
-            raise NotFoundException(
-                code="RESULT_NOT_FOUND", message="Analysis result not found."
-            )
+        ar = await self._getAnnotatableResult(resultId)
+        isSupervisor = not isMedtech(callerRole)
+        if not isSupervisor:
+            # Ownership before any state check, so a non-owner learns nothing;
+            # then re-read under the specimen lock (see getAssignedSpecimen).
+            await getAssignedSpecimen(self.db, ar.specimenId, userId)
+            ar = await self._getAnnotatableResult(resultId, fresh=True)
+        requireResultEditable(ar, isSupervisor)
 
         existing = (
             await self.db.execute(
@@ -567,6 +747,18 @@ class ResultReviewService:
                 )
             )
 
+        await self.auditLogger.record(
+            eventType="ANNOTATION_SAVED",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=userId,
+            db=self.db,
+            detailJson={
+                "resultStatus": ar.status.value,
+                "hasSpatialAnnotations": spatialAnnotations is not None,
+            },
+            request=request,
+        )
         await self.db.commit()
 
         return {
@@ -574,6 +766,16 @@ class ResultReviewService:
             "annotationNotes": annotationNotes,
             "spatialAnnotations": spatialAnnotations,
         }
+
+    async def _getAnnotatableResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
+        # `fresh` overwrites the already-loaded object with current DB state.
+        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        ar = (await self.db.execute(stmt)).scalar_one_or_none()
+        if ar is None:
+            raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
+        return ar
 
     # ── Approve ───────────────────────────────────────────────────────────
 
@@ -591,8 +793,10 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`,
-                or its specimen has been rejected (`SPECIMEN_REJECTED`).
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first;
+                `SPECIMEN_REJECTED`, if its specimen has been rejected.
         """
         ar = await self._requirePending(resultId)
 
@@ -607,7 +811,7 @@ class ResultReviewService:
 
         now = datetime.now(_PHT)
         self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
-        ar.status = ResultStatus.APPROVED
+        await self._transitionIfPending(resultId, ResultStatus.APPROVED)
 
         if specimen is not None:
             specimen.status = "COMPLETED"
@@ -633,13 +837,15 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
         """
-        ar = await self._requirePending(resultId)
+        await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
-        ar.status = ResultStatus.RETURNED_FOR_CORRECTION
+        await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
 
         # Notify the MedTech — best-effort (notify() never raises); same
         # transaction as the status change, committed together below.
@@ -683,7 +889,9 @@ class ResultReviewService:
         Raises:
             UnprocessableException: `escalation_path` isn't a valid path.
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
         """
         if escalationPath not in VALID_ESCALATION_PATHS:
             raise UnprocessableException(
@@ -691,7 +899,7 @@ class ResultReviewService:
                 message=f"Invalid escalation_path '{escalationPath}'.",
             )
 
-        ar = await self._requirePending(resultId)
+        await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(
@@ -703,7 +911,7 @@ class ResultReviewService:
                 escalatedAt=now,
             )
         )
-        ar.status = ResultStatus.CRITICAL_ESCALATED
+        await self._transitionIfPending(resultId, ResultStatus.CRITICAL_ESCALATED)
 
         await self.db.commit()
 

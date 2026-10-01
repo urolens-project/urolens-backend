@@ -19,13 +19,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.core.exceptions import NotFoundException
+from src.models.lab_request import LabRequest
 from src.models.patient import Patient
 from src.models.user import User
+from src.schemas.lab_request import LabRequestCreateRequest
+from src.schemas.physician import (
+    LabRequestCreateRequest as PhysicianLabRequestCreateRequest,
+)
 from src.services.lab_request_service import (
     _generateRequestUid,
     createLabRequest,
+    searchPendingLabRequests,
 )
 
 PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
@@ -217,3 +224,213 @@ async def test_generateRequestUidExhaustsRetriesRaises500():
     with pytest.raises(HTTPException) as excInfo:
         await _generateRequestUid(db)
     assert excInfo.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_searchPendingLabRequestsIncludesPatientUidAndName():
+    """The search item must carry enough to check "Label Matches Patient"
+    without a second, fuller patient lookup (RA 10173 data-minimization —
+    same concern as the physician-portal patient search).
+    """
+    labRequest = MagicMock(spec=LabRequest)
+    labRequest.labRequestId = LAB_REQUEST_ID
+    labRequest.requestUid = "REQ-20260826-12345"
+    labRequest.testType = "URINALYSIS"
+    labRequest.physicianName = "dr_santos"
+    labRequest.patientId = PATIENT_ID
+
+    patient = MagicMock(spec=Patient)
+    patient.patientId = PATIENT_ID
+    patient.patientUid = "PT-000040"
+    patient.firstName = "encrypted-first"
+    patient.lastName = "encrypted-last"
+
+    labRequestResult = MagicMock()
+    labRequestResult.scalars.return_value.all.return_value = [labRequest]
+    patientResult = MagicMock()
+    patientResult.scalars.return_value.all.return_value = [patient]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[labRequestResult, patientResult])
+
+    with patch(
+        "src.services.lab_request_service.decryptPii", side_effect=["Juan", "Dela Cruz"]
+    ):
+        items = await searchPendingLabRequests(db, "REQ-20260826")
+
+    assert len(items) == 1
+    assert items[0].patientId == PATIENT_ID
+    assert items[0].patientUid == "PT-000040"
+    assert items[0].patientName == "Juan Dela Cruz"
+
+
+@pytest.mark.asyncio
+async def test_searchPendingLabRequestsOmitsNameOnDecryptFailureButKeepsUid():
+    labRequest = MagicMock(spec=LabRequest)
+    labRequest.labRequestId = LAB_REQUEST_ID
+    labRequest.requestUid = "REQ-20260826-12345"
+    labRequest.testType = "URINALYSIS"
+    labRequest.physicianName = None
+    labRequest.patientId = PATIENT_ID
+
+    patient = MagicMock(spec=Patient)
+    patient.patientId = PATIENT_ID
+    patient.patientUid = "PT-000040"
+    patient.firstName = "bad-ciphertext"
+    patient.lastName = "bad-ciphertext"
+
+    labRequestResult = MagicMock()
+    labRequestResult.scalars.return_value.all.return_value = [labRequest]
+    patientResult = MagicMock()
+    patientResult.scalars.return_value.all.return_value = [patient]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[labRequestResult, patientResult])
+
+    with patch(
+        "src.services.lab_request_service.decryptPii", side_effect=Exception("bad token")
+    ):
+        items = await searchPendingLabRequests(db, "REQ-20260826")
+
+    assert items[0].patientUid == "PT-000040"
+    assert items[0].patientName is None
+
+
+# ── testType: stored verbatim, no case/space mangling (UROLENS-137) ────────────
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestStoresPredefinedTestTypeVerbatim():
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Urinalysis - Complete Suite",
+            clinicalNotes=None,
+            physicianId=None,
+            physicianName="Dr. Santos",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.testType == "Urinalysis - Complete Suite"
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestStoresCustomOtherTestTypeVerbatim():
+    """Custom "Other" free text is exactly as vulnerable to the old
+    mangling as a predefined type — same assertion, different input shape.
+    """
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Culture & Sensitivity, Pre-Op Panel",
+            clinicalNotes=None,
+            physicianId=None,
+            physicianName="Dr. Santos",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.testType == "Culture & Sensitivity, Pre-Op Panel"
+
+
+@pytest.mark.asyncio
+async def test_createLabRequestPersistsSpecialInstructionsSeparateFromClinicalNotes():
+    db = _makeDb()
+    with patch("src.services.lab_request_service.NotificationService"), patch(
+        "src.services.lab_request_service.AuditLogger"
+    ) as mockAuditCls:
+        mockAuditCls.return_value.record = AsyncMock()
+        await createLabRequest(
+            db,
+            encodedBy=ENCODER_ID,
+            patientId=PATIENT_ID,
+            testType="Urinalysis",
+            clinicalNotes="Patient reports mild discomfort.",
+            physicianId=None,
+            physicianName="Dr. Santos",
+            specialInstructions="Handle with care — patient has needle phobia.",
+            notifyReceptionists=False,
+        )
+
+    added = db.add.call_args[0][0]
+    assert added.clinicalNotes == "Patient reports mild discomfort."
+    assert added.specialInstructions == "Handle with care — patient has needle phobia."
+
+
+# ── Schema validation: blank testType, missing physician (UROLENS-137) ─────────
+
+
+def _validLabRequestPayload(**overrides) -> dict:
+    payload = {
+        "patientId": PATIENT_ID,
+        "physicianName": "Dr. Santos",
+        "testType": "Urinalysis",
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schemaCls", [LabRequestCreateRequest, PhysicianLabRequestCreateRequest])
+async def test_blankTestTypeRejected(schemaCls):
+    payload = {"patientId": PATIENT_ID, "testType": "   "}
+    if schemaCls is LabRequestCreateRequest:
+        payload["physicianName"] = "Dr. Santos"
+    with pytest.raises(ValidationError, match="testType"):
+        schemaCls(**payload)
+
+
+def test_testTypeIsTrimmed():
+    req = LabRequestCreateRequest(**_validLabRequestPayload(testType="  Urinalysis  "))
+    assert req.testType == "Urinalysis"
+
+
+def test_testTypeOverMaxLengthRejected():
+    with pytest.raises(ValidationError, match="testType"):
+        LabRequestCreateRequest(**_validLabRequestPayload(testType="x" * 256))
+
+
+def test_missingPhysicianIdentifierRejected():
+    with pytest.raises(ValidationError, match="physicianId or physicianName is required"):
+        LabRequestCreateRequest(
+            patientId=PATIENT_ID, testType="Urinalysis", physicianId=None, physicianName=None
+        )
+
+
+def test_whitespaceOnlyPhysicianNameDoesNotSatisfyRequirement():
+    """Trim-before-validate applies to physicianName too — " " must not
+    count as a provided identifier."""
+    with pytest.raises(ValidationError, match="physicianId or physicianName is required"):
+        LabRequestCreateRequest(
+            patientId=PATIENT_ID, testType="Urinalysis", physicianId=None, physicianName="   "
+        )
+
+
+def test_physicianIdAloneSatisfiesRequirement():
+    req = LabRequestCreateRequest(
+        patientId=PATIENT_ID,
+        testType="Urinalysis",
+        physicianId=PHYSICIAN_ID,
+        physicianName=None,
+    )
+    assert req.physicianId == PHYSICIAN_ID
+
+
+def test_physicianLabRequestSchemaHasNoPhysicianFields():
+    """The physician-portal variant never needs the id-or-name check — the
+    caller's own identity always supplies it server-side."""
+    req = PhysicianLabRequestCreateRequest(patientId=PATIENT_ID, testType="Urinalysis")
+    assert not hasattr(req, "physicianId")

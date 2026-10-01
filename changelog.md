@@ -3,6 +3,398 @@
 ## Unreleased
 
 ### Fixed
+- **Two concurrent supervisor actions on the same result could both succeed —
+  approve-vs-escalate included, not just two of the same action — and
+  `ReturnRequest.reason` had no non-blank validation (UROLENS-151).**
+  - **Race fix, same class as UROLENS-142/143.** `_requirePending` reads
+    `analysis_results.status` then each of approve/return/escalate wrote it
+    separately, with no conditional UPDATE and no unique constraint on
+    `result_approvals`/`result_returns`/`escalations` — two concurrent calls
+    could both pass the read-check and both commit. New
+    `ResultReviewService._transitionIfPending`: a single
+    `UPDATE analysis_results SET status = <new> WHERE result_id = :id AND
+    status = 'PENDING_SUPERVISOR_APPROVAL'`, checked by rowcount, called by
+    all three actions right before commit. The losing side rolls back and
+    gets the same 409 **`INVALID_RESULT_STATUS`** `_requirePending` already
+    raises in the non-race case — unchanged code, so the frontend's existing
+    message for it still applies. **Deliberately no new migration**, unlike
+    142/143: those each protect one action against itself via a child-table
+    unique constraint, but three *different* actions writing to three
+    *different* child tables need protection on the resource they actually
+    share — `analysis_results.status` — which the conditional UPDATE already
+    guards directly, for every combination. Proven with a real 3-way
+    concurrent-HTTP test (approve + return + escalate fired at once via
+    `asyncio.gather`, `asyncio.Barrier`-synchronized so it doesn't flake):
+    exactly one 200, the other two 409 `INVALID_RESULT_STATUS`, in the actual
+    response bodies.
+  - **`POST /results/{id}/return` validation (422 `VALIDATION_ERROR`):**
+    `reason` is now **required and can't be blank** (min 1 char after
+    trimming whitespace, max 2000) — previously any string, including `""`,
+    was accepted. Same convention as `OverrideRequest.rationale`
+    (UROLENS-146/150): required, stripped, blank/whitespace-only rejected.
+  - **Known issue on this branch, resolved by this merge:** this branch's base
+    had the duplicate-`0042`-revision Alembic collision (two heads: `0042`,
+    `0043`) from before the `0044` renumber landed on `development` —
+    pre-existing, unrelated to this fix. Fixed on this branch directly
+    (same renumber, independently of `development`'s own copy of it) before
+    merging `development` in.
+- **Sync would break as a MedTech's history grew, kept every finished sample on
+  the phone forever, and sent no approval or release dates (UROLENS-236).**
+  - **`GET /sync/pull` reads with SQLAlchemy.** The Supabase REST version
+    downloaded every specimen the MedTech ever had on every sync (filtering deltas
+    in Python) and put every specimen ID in the results request's URL (~37 bytes
+    each, over common URL limits at a few hundred specimens — breaking the Queue
+    too). Filtering is now in SQL; the REST path is deleted (rule 14). The
+    patient's name is still never read (`defer(..., raiseload=True)`).
+  - **30-day window** (`HISTORY_WINDOW_DAYS`, RA 10173 data minimization):
+    unfinished work always syncs; a finished sample (COMPLETED or REJECTED) syncs
+    until 30 days after it was released, approved or rejected.
+  - **Removal lists:** each table's new `deleted` holds the IDs the phone should
+    drop — samples that aged out of the window since the last sync, and samples
+    no longer assigned to the MedTech (there's no reassignment feature today; this
+    covers database changes and a future one), with their results, the MedTech's
+    assignments and the overrides on them. Delta syncs only. Existing apps ignore it.
+  - **New row fields:** specimens `completed_at`; results `approved_at` (latest
+    approval), `released_at`, `particle_classes` (the confirmed counts). Reports
+    sorted Approved/Released items by the MedTech's confirmation time.
+  - `queue_assignments` has no `updated_at` in any migration, yet sync selected and
+    filtered on it; assignments (created, never edited) now delta on `assigned_at`.
+  - `SYNC_PULLED` records `removed_specimen_ids`.
+
+- **A failed AI analysis passed for "no particles", a failed storage write left a
+  broken image, a retake kept the old image's Smart Diagnosis, and every
+  resubmitted result reported its diagnosis as failed (UROLENS-230).**
+  - **Nothing is saved unless the image is analyzed and stored.** `POST
+    /images/upload` used to log both failures and return 201: an AI failure left empty
+    findings the app showed as "No particles detected" (and the MedTech could
+    confirm), and a storage failure left an image row pointing at a file that was
+    never stored. Now 503 **`AI_ANALYSIS_FAILED`** or **`STORAGE_ERROR`**, and the
+    request rolls back; the image is analyzed before it's stored, so a failed
+    analysis leaves nothing in the bucket. The app keeps the image for a retry.
+  - **Model weights.** The engine's default weights path is relative to its own repo,
+    and the `urolens_ai` package doesn't ship its weights, so without
+    `MODEL_WEIGHTS_PATH` inference failed on every upload — silently, until now.
+    `config` now uses `urolens_ai/models/yolov8/weights.pt` inside the installed
+    package when that file exists (`settings.modelWeightsPath`).
+    **Deploy — blocker:** the server must have the weights file and
+    `MODEL_WEIGHTS_PATH` set (or the file at that package path) **before** this is
+    deployed, or every upload returns `AI_ANALYSIS_FAILED`.
+  - **Metadata is stripped on the server.** EXIF (location, device) and PNG text are
+    removed by re-encoding before the image is stored or analyzed — the app does this
+    too, but the server can't rely on it (RA 10173). JPEG quality is kept
+    (`quality="keep"`).
+  - **A retake resets everything from the old image:** findings, `smart_diagnosis`,
+    `smart_diagnosis_unavailable`, the `smart_diagnosis_outputs` row and
+    `model_version` (overrides already, UROLENS-227). A **returned result stays
+    `RETURNED_FOR_CORRECTION`** instead of becoming `PENDING_CONFIRM`, so the MedTech
+    keeps the supervisor's reason and confirming is a resubmission (`resubmitted:
+    true`).
+  - **Re-confirming no longer breaks Smart Diagnosis.** `smart_diagnosis_outputs` has
+    one row per result, but confirmation always inserted one: every resubmission hit
+    the unique constraint, was marked diagnosis-unavailable, logged a false
+    `ENGINE_FAILED` and notified the supervisor, while the old diagnosis kept showing.
+    It now updates the existing row and clears the unavailable flag; a real failure
+    flags an earlier row `FLAGGED_UNAVAILABLE`.
+  - **A discarded image's result can't be confirmed:** 422 `PENDING_RETAKE` (existing
+    code) until a new image is uploaded — discard keeps the old findings.
+  - **An upload starts a specimen that wasn't started** (ASSIGNED/IN_QUEUE →
+    PROCESSING), e.g. when "Begin Analysis" is still queued offline. "Begin Analysis"
+    and this now write a `SPECIMEN_ANALYSIS_STARTED` audit row (shared
+    `specimen_service.markProcessing`); `IMAGE_UPLOADED` records `started_analysis`.
+  - The upload response adds **`smartDiagnosisUnavailable`**, now `true` when Smart
+    Diagnosis fails at upload (it was left `false`, so the app couldn't show the "not
+    available" notice); confirmation retries it and clears the flag on success.
+  Not changed: routes, no migration, no new result statuses (the app doesn't know
+  IMAGE_RETAKE_REQUESTED/FAILED). **Mobile follow-ups (UROLENS-229):** read
+  `smartDiagnosisUnavailable` from the upload response instead of assuming `false`;
+  treat 503 `AI_ANALYSIS_FAILED`/`STORAGE_ERROR` as a failed upload (keep the
+  preview); a queued confirm answered with `PENDING_RETAKE` is a failure, not done.
+- **A retake kept the old image's overrides, so confirming applied corrections from
+  the previous image to the new analysis; overrides accepted no rationale, fractions,
+  Infinity and any size of count (UROLENS-227).**
+  - **New image clears overrides.** An upload reuses the specimen's result and resets
+    its findings, but left its `manual_overrides` in place. Confirmation merges every
+    override into `particle_classes`, so the new analysis was silently "corrected"
+    with counts from the old image, and the supervisor saw that image's history.
+    Uploading now deletes the result's overrides in the same transaction; the
+    `IMAGE_UPLOADED` audit row records `manual_overrides_cleared`, and the deleted
+    values stay in the audit log (`RESULT_OVERRIDDEN`). The app already warns the
+    MedTech before a retake and clears its own copy (UROLENS-228).
+  - **Latest override wins at confirmation.** `AnalysisResult.manualOverrides` had no
+    order, so a parameter corrected twice was confirmed with whichever row loaded last.
+    It's now ordered by `overridden_at`.
+  - `POST /results/{id}/override` validation (422 `VALIDATION_ERROR`):
+    - `rationale` is **required** and can't be blank (was defaulted to "No rationale
+      provided"). The mobile and web forms already require it.
+    - `correctedValue` is a **whole count from 0 to 300** (`MAX_OVERRIDE_COUNT`): the AI
+      reports at most 300 detections per image, and lab reporting tops out at ">100"
+      per field (CLSI GP16). Fractions, `Infinity`/`NaN` and larger values are refused.
+  - New 422 **`OVERRIDE_UNCHANGED`** when the corrected value equals the parameter's
+    current count (its latest override, else the AI's) — UROLENS-150. Changing back to
+    the AI's value after an override is allowed.
+  - **`GET /sync/pull` sends overrides to the phone** (new `changes.manualOverrides`).
+    The phone only knew the overrides made on that device, so a supervisor's correction
+    on a returned result, or corrections made before a reinstall, never showed. Every
+    override on the MedTech's results (any author) is sent on a full sync; a delta sends
+    those added since `lastSyncedAt` (overrides are never edited). Rows are snake_case
+    like the other sync rows: `id`, `result_id`, `parameter_name`, `original_ai_value`
+    and `corrected_value` (numbers), `rationale`, `medtech_id` (the author),
+    `overridden_at`. Read with SQLAlchemy; the `SYNC_PULLED` audit row lists
+    `override_ids`. Existing app versions ignore the new key.
+  Not changed: routes, stored value format ("7.0"). Sync has no deletion channel, so an
+  override cleared by a retake on another device stays on this phone until its next
+  full sync (the retaking phone clears its own copy). **Client follow-ups (mobile,
+  UROLENS-172):** map `manualOverrides` in `pullChanges.ts` (`parameter_name` →
+  `parameter`, `medtech_id` → `overridden_by`, `overridden_at` → `created_at`) and
+  store the `id` from the override response as `server_id`, or a phone's own
+  overrides arrive twice; the override form accepts decimals and has no upper limit,
+  so it should match.
+  - **The override also accepts `parameterName`** for `parameter`. The web supervisor
+    screen sends `parameter_name` (written for the May `web-10` endpoint; the August
+    results consolidation kept the version that names it `parameter`), and its
+    case-conversion bridge turns that into `parameterName`, so every web override got a
+    422. `parameter` still works, wins if both are sent, and is the only name in the API
+    docs and responses. Deliberate exception to the one-name-per-field contract, to
+    unblock the web without a web release. **Web:** needs the case-conversion bridge
+    (`fix/api-case-conversion-bridge`, not yet in web `v1.0.0`); once the web sends
+    `parameter`, this alias can be removed.
+- **Restored #56–#60 to `development` — they had merged into their stacked base
+  branches, never into `development`.** Only #55 (SEC-0/SEC-1) reached
+  `development`. SEC-2 (#56), UROLENS-222 (#57), SEC-4 (#58), UROLENS-225 (#59) and
+  UROLENS-226 (#60) each merged into the branch below them after that branch had
+  already merged, and those branches were deleted. This merges their unchanged commits
+  (still on `fix/UROLENS-226-review-and-confirm`) into `development`; the entries
+  below describe them.
+  - SEC-2's bucket size limit migration is renumbered **0042 → 0043** (chained after
+    `0042_result_releases_result_id_unique`, UROLENS-143) to keep a single Alembic
+    head. Content unchanged. **Deploy:** check the target DB's `alembic_version` first —
+    if SEC-2's migration was already applied there as `0042`, stamp instead of
+    upgrading.
+  - UROLENS-143's release audit row now commits in the release's transaction, like
+    every other audited action since UROLENS-222.
+- **Any MedTech could annotate any result in any status, with no audit trail; the
+  review screen showed MedTechs the patient's name but not why a result was returned
+  (UROLENS-226).**
+  - `PATCH /results/{id}/annotate` now follows the manual-override rules: a MedTech
+    may annotate only a specimen assigned to them (403 `SPECIMEN_NOT_ASSIGNED`,
+    checked under the specimen row lock, before any status check) while the result is
+    `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`; a Supervisor only while it is
+    `PENDING_SUPERVISOR_APPROVAL`. Otherwise 409 `RESULT_NOT_EDITABLE`, or 422
+    `RESULT_ALREADY_FINALISED` for everyone once `APPROVED`/`RELEASED`. Each save
+    writes an `ANNOTATION_SAVED` audit row in the same transaction (never the note
+    text). The status rule now lives once in `specimen_access.requireResultEditable`,
+    shared with manual override (rule 14); override's finalised message text changed
+    to a generic one, its codes did not.
+  - `GET /results/{id}` (the MedTech's online review source): new `returnReason` —
+    the supervisor's latest reason when `RETURNED_FOR_CORRECTION`, else `null`.
+    `patientName` is now `null` for MedTech callers and their name columns aren't
+    decrypted (same privacy decision as UROLENS-225; patient by `patientUid`).
+    Supervisors are unaffected. `result_review_service`'s private decrypt helper is
+    replaced by `core.encryption.decryptStoredPii` (rule 14).
+  - `POST /results/{id}/confirm`: the response adds `resubmitted` (true when
+    re-confirming a returned result) and `status` (`PENDING_SUPERVISOR_APPROVAL`).
+    A `FAILED` result now gets 409 `RESULT_NOT_CONFIRMABLE` instead of
+    `RESULT_ALREADY_CONFIRMED` — the app treats the latter as success, so a queued
+    offline confirm of a failed result would have been silently marked done.
+  Not changed: no route added or removed, no migration. Annotation display and
+  free-text confirmation notes are deferred until after MVP validation.
+- **Returned results reached the mobile queue without the supervisor's reason, and
+  the online queue list was unordered and missing the sample ID (UROLENS-225).**
+  The MedTech queue is built entirely from `GET /sync/pull`.
+  - `GET /sync/pull`: every synced result carries `return_reason` — the supervisor's
+    latest reason when `RETURNED_FOR_CORRECTION`, else `null`. Existing apps ignore
+    the new field until they're updated (UROLENS-170). The route is now MedTech-only
+    (403 for other roles; audit F-19).
+  - **Patient names no longer go to MedTech phones.** The app shows only the patient
+    code (a deliberate privacy decision in its UI), yet sync sent `patient_name` — as
+    Fernet ciphertext. Sync now doesn't read that column at all and sends
+    `patient_name: ""` (kept, because the app's local column requires a string).
+    RA 10173 data minimization. `patient_uid` is unchanged. Web and every other role
+    are unaffected: they don't use sync, and names stay stored (encrypted) as before.
+  - `GET /results/medtech/pending` (the online confirmation queue, MedTech-only):
+    rows now include `sampleUid`, `testType`, `priorityLevel` and `receivedAt`, and
+    no longer include `patientName` (same privacy decision — patient by `patientUid`).
+    Optional filters `status` (`PENDING_CONFIRM` | `RETURNED_FOR_CORRECTION`) and
+    `sort` (`oldest` | `newest`, by received time). Order is returned-first, then
+    received time, then result ID — it previously claimed "oldest first" but sorted
+    by a random UUID, so pages were in arbitrary order. The total is a real `COUNT`
+    instead of loading every row.
+  - New `core.encryption.decryptStoredPii` (decrypts ciphertext, passes legacy
+    plaintext through, never returns ciphertext) replaces
+    `result_confirmation_service`'s private decrypt helper (rule 14); used there for
+    the patient's age.
+  Not changed: no route added or removed. Only MedTechs can sync now; the app should
+  block non-MedTech logins rather than show 403s.
+
+### Added
+- **`GET /results/medtech/history`** (UROLENS-236): a MedTech's full sample history,
+  including samples older than the phone's sync window. `category` (required):
+  `PENDING_APPROVAL` | `APPROVED` | `RELEASED` | `REJECTED`; `page`, `pageSize`
+  (≤ 100). Only the caller's own samples, newest first by when each reached the
+  category (confirmed / approved / released / rejected), stable by specimen ID;
+  patient code only. Audited as `MEDTECH_HISTORY_VIEWED`. MedTech-only (403
+  otherwise). Route count 50 → 51.
+  **Mobile follow-ups (UROLENS-235):** process each table's `deleted` in
+  `pullChanges.ts` (and purge local finished samples older than 30 days once, for
+  data synced before this change); map `completed_at`, `approved_at`,
+  `released_at`, `particle_classes`, sorting Approved/Released by
+  approval/release time; use the history endpoint for samples beyond 30 days;
+  escalated results (CRITICAL_ESCALATED) appear in neither the Queue nor Reports.
+- **Load-test tool and proposed p95 targets for the mobile routes (UROLENS-220,
+  SEC-4).** `scripts/perf_baseline.py` measures sync pull (full/delta), the MedTech
+  and supervisor pending lists, result detail and image upload (incl. AI inference)
+  at several concurrency levels and reports p50/p95/p99 against targets — see
+  `docs/performance-baseline-UROLENS-220.md`. Staging only: it refuses to start
+  unless `--confirm-host` matches the target, logs in once per role, and records the
+  deployed ref. No application code changed.
+
+### Fixed
+- **MedTechs could read any patient's result, and login had no brute-force
+  protection (UROLENS-222; security audit F-22, F-06, F-07).**
+  - **F-22 — MedTech reads limited to their own specimens.** `GET /results/{id}`
+    and `GET /results/{id}/smart-diagnosis` return 403 `SPECIMEN_NOT_ASSIGNED` to a
+    MedTech whose specimen it isn't — checked before any patient data is decrypted
+    or the view is logged. Supervisors still read every result. Mobile doesn't call
+    either route (it reads through sync), so no app change. The smart-diagnosis
+    `result_id` is now validated as a UUID (malformed IDs get 422 instead of 404).
+    New `specimen_access.requireResultReadable` / `isMedtech`.
+  - **F-06 — login rate limiting**, new `src/core/rate_limit.py`, on
+    `POST /auth/login` and `POST /auth/patient-login`: 5 attempts per 5 minutes per
+    username / patient UID, 30 per minute per client IP. Over either →
+    429 `TOO_MANY_LOGIN_ATTEMPTS` with a `Retry-After` header (the global error
+    handler now passes exception headers through). A successful login resets the
+    account's count. In-process: per worker, and IP-based limiting needs
+    `uvicorn --proxy-headers` behind a proxy — otherwise all users share the proxy's
+    IP (hence the generous IP limit).
+  - **F-07 — no username enumeration, no permanent lockout.** An unknown username or
+    patient UID now runs one bcrypt check against a dummy hash, so it takes as long
+    as a wrong password. A lock now expires after 15 minutes
+    (`auth_service.LOCKOUT_MINUTES`) instead of needing an administrator. While
+    locked, every attempt gets `423 ACCOUNT_LOCKED` — right or wrong password — and
+    nothing is counted, so a wrong guess can't extend the lock and the response can't
+    confirm a correct guess. After expiry the failure count is still at the limit
+    (it resets only on success), so one wrong guess locks again: one guess per
+    15 minutes. The rate limiter caps how many keys it remembers (10,000 per limiter,
+    expired first) so spraying random usernames can't grow memory.
+  Not changed: the failed-attempt counter is still a read-then-write through
+  Supabase REST (not atomic); the per-account rate limit now caps a parallel burst.
+- **Audit rows could be silently lost, patient-data views weren't recorded, and
+  consent was forced and never checked (UROLENS-222, RA 10173).** Four changes:
+  - **Audit rows now commit with the action they record** (security audit F-11).
+    `AuditLogger.record(..., db=session)` adds the row to the caller's transaction
+    instead of a separate Supabase REST insert that swallowed failures; all 16
+    service call sites pass their session. An action and its audit row now succeed
+    or fail together — an audit write failure fails the request rather than being
+    lost. Only the auth-flow helpers (login/logout/access-denied, no session) keep
+    the best-effort path, now logged at ERROR as `AUDIT_WRITE_FAILED` for alerting.
+  - **Views of patient data on mobile routes are recorded**, in the same
+    transaction: `GET /results/{id}` → `RESULT_DETAIL_VIEWED`;
+    `GET /results/medtech/pending` → `PENDING_RESULTS_VIEWED` (result IDs shown);
+    `GET /sync/pull` → `SYNC_PULLED` (specimen and result IDs sent). Empty responses
+    aren't logged. Sync's returned `timestamp` (the client's next `lastSyncedAt`) is
+    now taken *before* the reads, so a row updated while a pull runs is no longer
+    skipped by later delta pulls. `ResultReviewService` takes an optional `auditLogger`; `sync_service.pull`
+    now takes the request's session.
+  - **Consent is checked before analysis** — new `services/consent_check.py`, called
+    by `POST /images/upload` and `POST /results/{id}/confirm`. If the patient's
+    latest consent refuses processing: 409 `CONSENT_REFUSED`. If there's no consent
+    record: allowed, audited as `CONSENT_NOT_ON_FILE` (13 of 38 live patients
+    predate consent capture; processing for diagnosis also has its own lawful basis
+    under RA 10173 s.13(f), while an explicit refusal is always honoured).
+  - **Research consent is optional at intake.** `ConsentData.consentResearch`
+    defaults to `false` and is no longer validated as required — consent forced as
+    a condition of care isn't freely given. Processing and storage consent stay
+    required. Web can stop marking the research checkbox required (no change needed
+    for it to keep working).
+  Not changed: MedTech read access to other MedTechs' result detail (new audit
+  finding F-22, needs a decision); data-subject requests and retention (policy
+  decision first). No migration.
+- **Any MedTech could change, reset or discard another MedTech's results — including
+  released ones (SEC-2, UROLENS-220).** Upload, discard, confirm and override never
+  checked that the specimen belonged to the caller, override blocked only `APPROVED`
+  (so a `RELEASED` result could still be edited), and an upload reset *any* result to
+  `PENDING_CONFIRM` and wiped its findings. From `docs/security-audit-UROLENS-220.md`
+  (F-03, F-04, F-05, F-08, F-09, F-18). Now:
+  - New `src/services/specimen_access.py` holds the one ownership check
+    (`getAssignedSpecimen`, 403 `SPECIMEN_NOT_ASSIGNED` via the new
+    `ForbiddenException`) and the editable-status sets; `rejectSpecimen` and
+    `startAnalysis` use it instead of their two inline copies (rule 14). Ownership is
+    checked before any state check, so a non-owner learns nothing about the result.
+    `getAssignedSpecimen` also locks the specimen row (`SELECT ... FOR UPDATE`), and
+    every flow reads the result/image state after taking it, so specimen-scoped
+    writes run one at a time: an upload can no longer reset a result that was
+    confirmed from another device while the upload was still running.
+  - `POST /images/upload`: 404 `SPECIMEN_NOT_FOUND` (was a 500 after the file was
+    already stored), 403 `SPECIMEN_NOT_ASSIGNED`, 409 `SPECIMEN_REJECTED`, 409
+    `RESULT_NOT_EDITABLE` once the result is submitted/approved/released. All checked
+    before the file is decoded or stored.
+  - `POST /images/{id}/discard`: 403 `SPECIMEN_NOT_ASSIGNED`; 409
+    `RESULT_NOT_EDITABLE` once the result is submitted.
+  - `POST /results/{id}/confirm`: 403 `SPECIMEN_NOT_ASSIGNED`.
+  - `POST /results/{id}/override`: 422 `RESULT_ALREADY_FINALISED` for `APPROVED`
+    **and `RELEASED`**, for everyone. A MedTech may override only their own specimen
+    while `PENDING_CONFIRM`/`RETURNED_FOR_CORRECTION`; a Supervisor only while
+    `PENDING_SUPERVISOR_APPROVAL` (matches the web review screen, which offers actions
+    only then). Otherwise 409 `RESULT_NOT_EDITABLE`. The route now passes the caller's
+    role to the service.
+  - **Uploads are capped at 10 MB** — 413 `IMAGE_TOO_LARGE`, never reading more than
+    one byte past the cap. Migration `0043` sets the same bucket `file_size_limit`.
+  - **Only genuine JPEG/PNG is decoded**: Pillow is limited to those two decoders
+    (`formats=`), so a file labelled `image/jpeg` can no longer reach Pillow's EPS,
+    GD, JPEG2000 or other parsers; content that doesn't match its declared type is a
+    422 `INVALID_IMAGE_FORMAT`. The error no longer echoes Pillow's exception text.
+  - Dependencies: Pillow 12.3.0, starlette 1.3.1, PyJWT 2.13.0, cryptography 48.0.1,
+    anyio 4.14.2, python-dotenv 1.2.2 — 27 of the audit's 30 advisories resolved. The
+    3 left (cryptography X.509/PKCS#7, not reachable here) need cryptography 50.0.0,
+    a separate major bump.
+  - Tests: `tests/integration/conftest.py` now refuses real database access — an
+    integration test that forgets to mock `getDb` fails instead of silently querying
+    the database in `.env` (one did during this change: a single read-only lookup).
+  Not changed: login rate limiting and lockout (F-06/F-07) — pending a decision on
+  whether they belong to UROLENS-81. The AI engine is still pinned to `@develop`
+  (F-12). Mobile clients: a MedTech acting on a specimen reassigned to someone else
+  now gets 403 instead of success; queued offline actions for such specimens fail
+  with that code.
+- **Every database table was readable and writable with the Supabase anon key
+  (SEC-0).** All 27 `public` tables had Row Level Security disabled (confirmed on the
+  live database), and Supabase grants `anon`/`authenticated` full table privileges
+  by default — so anyone with the project's anon key, which is public by design,
+  could read, change or delete patients, users (password hashes), sessions and
+  audit_logs through PostgREST without touching this backend. No client ships the
+  key today (web, mobile and all four repos' full git history checked), so this was
+  exposure-by-design, not a known leak. Migration `0040` enables RLS on every table
+  with no policies and without `FORCE`; the backend is unaffected because it
+  connects as the table owner (SQLAlchemy/Alembic) or with the service-role key
+  (Supabase REST), both of which bypass RLS. Added:
+  - `scripts/check_rls.py` — run against a real database after migrating; fails on
+    any unlocked table or any policy open to `anon`/`authenticated`/`public`. Not in
+    CI (CI has no database).
+  - `tests/test_rls_migration.py` — fails if a model table never gets RLS enabled or
+    a later migration disables it.
+  - `docs/backend-standards.md` rule 13 now requires new tables to enable RLS.
+  Not changed: `anon`/`authenticated` table grants (rule 13 bans `GRANT` in
+  migrations, which a symmetric downgrade would need) — revoking them is optional
+  dashboard-side hardening.
+- **Every microscopy image was publicly readable by link (SEC-0b).** The `microscopy`
+  Storage bucket was public (confirmed live), and the supervisor-review and
+  physician-result details returned permanent `/storage/v1/object/public/...` links —
+  anyone holding one could view that patient's image with no login, no expiry and no
+  way to revoke it. Now:
+  - Both details return a 1-hour signed URL from the new `src.core.storage.
+    signedImageUrl`, which replaces the two identical `_imagePublicUrl` copies in
+    `result_review_service` and `physician_result_service` (rule 14). If signing fails
+    (e.g. the object is missing because its upload failed) `imageUrl` is `null`
+    instead of the request failing.
+  - Migration `0041` makes the image bucket (`SUPABASE_IMAGE_BUCKET`, default
+    `microscopy`) private and limits it to `image/jpeg` / `image/png`, matching the
+    upload endpoint. The bucket name is a bound parameter, so `0041` needs a live
+    connection (no `alembic --sql`). No bucket size limit until the backend
+    has an upload cap (SEC-2).
+  - `scripts/check_rls.py` also fails on any public bucket.
+  Response shape unchanged (`imageUrl` is still a string or `null`), so web needs no
+  change — but the signed URL expires, so a view left open past an hour needs a
+  refresh to reload its image. **Deploy the code together with `0041`**: a build still
+  emitting public links shows broken images once the bucket is private.
 - **A rejected specimen could still reach the supervisor for approval.** Nothing
   connected specimen rejection to the result workflow, so a MedTech could reject a
   specimen after confirming its result (or confirm a result after rejecting the

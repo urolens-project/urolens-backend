@@ -17,19 +17,20 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Select
 
 from src.core.audit_logger import AuditLogger
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.engine_error_log import EngineErrorLog
 from src.models.image import Image  # noqa: F401
 from src.models.manual_override import ManualOverride  # noqa: F401
-from src.models.result_confirmation import ResultConfirmation  # noqa: F401
+from src.models.result_confirmation import ResultConfirmation
 from src.models.result_view import ResultView  # noqa: F401
 from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 
 # Import every model that shares the SQLAlchemy registry so all forward-reference
 # strings (e.g. "Specimen") are resolvable before mapper configuration is triggered.
-from src.models.specimen import Specimen  # noqa: F401
+from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import (
@@ -85,9 +86,22 @@ def _makeAllLowOutput() -> MagicMock:
 def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     """Returns a mock AsyncSession that yields the given AnalysisResult on SELECT."""
     db = AsyncMock()
-    executeResult = MagicMock()
-    executeResult.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=executeResult)
+
+    def _execute(stmt: Select) -> MagicMock:
+        # A result query returns the result; the "existing confirmation?"
+        # lookup finds none, as on a first confirmation.
+        entity = stmt.column_descriptions[0].get("entity")
+        executeResult = MagicMock()
+        executeResult.scalar_one_or_none.return_value = None if entity is ResultConfirmation else result
+        return executeResult
+
+    db.execute = AsyncMock(side_effect=_execute)
+    # confirmResult's ownership check (SEC-2) loads the specimen: make it the
+    # confirming MedTech's own.
+    specimen = MagicMock(spec=Specimen)
+    specimen.medtechId = MEDTECH_ID
+    specimen.status = "PROCESSING"
+    db.get = AsyncMock(return_value=specimen)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
@@ -115,6 +129,7 @@ def _makeResult(
     result.status = status
     result.aiFindings = aiFindings or {"uric_acid_crystals": 15, "rbc_casts": 3}
     result.smartDiagnosisUnavailable = False
+    result.smartDiagnosisOutput = None  # first confirmation: no output row yet
     result.image = None
     result.confirmedBy = None
     result.confirmedAt = None
