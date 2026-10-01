@@ -484,8 +484,8 @@ class ResultReviewService:
         viewerRole: str | None = None,
     ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
-        patient/medtech context, AI findings, manual overrides, the latest
-        annotation, and Smart Diagnosis (if attached).
+        patient/medtech context, AI findings, manual overrides, every
+        reviewer's annotation, and Smart Diagnosis (if attached).
 
         Args:
             resultId: the result to assemble.
@@ -500,6 +500,9 @@ class ResultReviewService:
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
             always `None` — see the module docstring's schema-drift note.
+            `annotations` lists every reviewer's row (oldest first) — a
+            MedTech's and a Supervisor's annotations on the same result are
+            independent, not collapsed to whichever was saved most recently.
 
         Raises:
             NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't exist.
@@ -567,16 +570,32 @@ class ResultReviewService:
             for o in overridesRows
         ]
 
-        review = (
+        reviewRows = (
             await self.db.execute(
                 select(ResultReview)
                 .where(ResultReview.resultId == resultId)
-                .order_by(ResultReview.updatedAt.desc())
-                .limit(1)
+                .order_by(ResultReview.updatedAt)
             )
-        ).scalar_one_or_none()
-        latestAnnotation = review.annotationNotes if review else None
-        latestSpatial = review.spatialAnnotations if review else None
+        ).scalars().all()
+
+        reviewedByIds = list({r.reviewedBy for r in reviewRows})
+        reviewerRoleMap: dict[uuid.UUID, str] = {}
+        if reviewedByIds:
+            reviewerRows = (
+                await self.db.execute(select(User).where(User.userId.in_(reviewedByIds)))
+            ).scalars().all()
+            reviewerRoleMap = {u.userId: u.role for u in reviewerRows}
+
+        annotations = [
+            {
+                "reviewedBy": r.reviewedBy,
+                "reviewerRole": reviewerRoleMap.get(r.reviewedBy, ""),
+                "annotationNotes": r.annotationNotes,
+                "spatialAnnotations": r.spatialAnnotations,
+                "updatedAt": r.updatedAt,
+            }
+            for r in reviewRows
+        ]
 
         sdo = (
             await self.db.execute(
@@ -638,8 +657,7 @@ class ResultReviewService:
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,
             "returnReason": returnReason,
-            "annotationNotes": latestAnnotation,
-            "spatialAnnotations": latestSpatial,
+            "annotations": annotations,
         }
         if viewerId is not None and self.auditLogger is not None:
             # RA 10173: record who viewed which patient's result.
