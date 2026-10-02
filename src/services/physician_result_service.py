@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
 from src.core.encryption import decryptPii
+from src.core.enums import UserRole
 from src.core.exceptions import NotFoundException
 from src.core.storage import signedImageUrl
 from src.models.analysis_result import AnalysisResult
@@ -193,7 +194,9 @@ class PhysicianResultService:
 
         Returns:
             A `PhysicianResultDetail` with patient info, findings, smart
-            diagnosis (if attached), and image URL.
+            diagnosis (if attached), image URL, and the Supervisor's own
+            annotation note (`annotationNotes`) specifically — not just
+            whichever `result_reviews` row came back first.
 
         Raises:
             HTTPException: 404, if `result_id` doesn't exist. 403
@@ -240,10 +243,28 @@ class PhysicianResultService:
             )
         ).scalars().all()
 
+        # "Supervisor Notes" must actually be the Supervisor's own entry
+        # (UROLENS-154) — a result that went through a correction cycle
+        # (MedTech annotates -> Supervisor returns -> MedTech re-annotates ->
+        # Supervisor approves) has multiple result_reviews rows, and the
+        # frontend unconditionally labels whatever this returns "Supervisor
+        # Notes". Previously unordered + limit(1), so it could return a
+        # MedTech's note mislabeled as the Supervisor's. Filtered here on the
+        # reviewer's role (resolved via the same reviewed_by -> users.role
+        # join ResultReviewService.getFullResult uses for its own per-reviewer
+        # annotations) and, if a result somehow has more than one
+        # Supervisor-authored entry, the most recent by updated_at wins — not
+        # an arbitrary one even among same-role entries. No Supervisor entry
+        # yet -> None, never falls back to someone else's.
         annotationNotes = (
             await self.db.execute(
                 select(ResultReview.annotationNotes)
-                .where(ResultReview.resultId == resultId)
+                .join(User, User.userId == ResultReview.reviewedBy)
+                .where(
+                    ResultReview.resultId == resultId,
+                    User.role == UserRole.SUPERVISOR,
+                )
+                .order_by(ResultReview.updatedAt.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
