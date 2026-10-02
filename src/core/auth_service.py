@@ -1,6 +1,7 @@
 """Staff authentication primitives: password hashing/verification, session
-rows in the `sessions` table, and JWT issuing/decoding. Used by the auth
-router and by `core.rbac`'s request-authentication dependency.
+rows in the `sessions` table (including inactivity-based expiration,
+UROLENS-167), and JWT issuing/decoding. Used by the auth router and by
+`core.rbac`'s request-authentication dependency.
 """
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,20 @@ LOCKOUT_MINUTES = 15
 it expires, the next attempt is allowed; a further failure locks it again
 (the failure count isn't reset until a successful login), so a locked
 account gets one guess per window (UROLENS-222, audit F-07)."""
+
+# Per-role inactivity timeout (UROLENS-167): how long a session may go
+# without an authenticated request before it's treated as expired,
+# independent of the JWT's own fixed exp. MedTech gets a longer window
+# (matches the UAC's own per-role warning timers); every other role
+# (including PATIENT) gets the shorter default.
+_MEDTECH_IDLE_TIMEOUT_MINUTES = 60
+_DEFAULT_IDLE_TIMEOUT_MINUTES = 30
+
+
+def _idleTimeoutMinutesForRole(role: str | None) -> int:
+    if (role or "").upper() == "MEDTECH":
+        return _MEDTECH_IDLE_TIMEOUT_MINUTES
+    return _DEFAULT_IDLE_TIMEOUT_MINUTES
 
 # bcrypt hash (cost 12, same as stored passwords) of a random value nobody
 # knows — checked against when a login names no account, so an unknown
@@ -137,10 +152,12 @@ async def createSession(
         The inserted session row (including its generated `session_id`), or
         `None` if the insert returned no data.
     """
+    now = datetime.now(UTC).isoformat()
     sessionData = {
         "user_id": str(userId),
         "user_role": role,
-        "login_at": datetime.now(UTC).isoformat(),
+        "login_at": now,
+        "last_activity_at": now,  # UROLENS-167: idle clock starts at login
         "is_active": True,
     }
     if ipAddress:
@@ -196,18 +213,56 @@ def decodeJwt(token: str) -> dict:
 
 
 async def isSessionActive(sessionId) -> bool:
-    """Check whether a session is still active (i.e. not logged out/revoked).
+    """Check whether a session is still active: not logged out/revoked, AND
+    not idle past its role's inactivity timeout (UROLENS-167).
+
+    The JWT's own `exp` is fixed at issuance and has nothing to do with
+    activity — without this check, a modified/non-UI client holding a
+    still-valid token could keep an idle session alive for that token's
+    entire absolute lifetime, regardless of how long it's actually been
+    idle. This is the backend half of "activity resets the inactivity
+    timer"; the frontend's job is tracking client-side activity and
+    showing the warning/countdown/redirect.
+
+    A session found past its timeout is revoked here (same effect as an
+    explicit logout) rather than merely reported expired, so a second check
+    against the same stale session answers the same way. A session that's
+    still within its timeout has this call's own request recorded as its
+    new last activity.
 
     Returns:
-        `True` only if the session row exists and its `is_active` flag is
-        set; `False` for a missing session or an inactive one.
+        `True` only if the session row exists, is active, and its last
+        activity (or, for a session that predates this column, its login)
+        is within `_idle_timeout_minutes_for_role`'s window for its role;
+        `False` otherwise.
     """
-    result = await supabase.table("sessions").select("is_active").eq(
-        "session_id", str(sessionId)
-    ).maybe_single().execute()
+    result = await supabase.table("sessions").select(
+        "is_active, last_activity_at, login_at, user_role"
+    ).eq("session_id", str(sessionId)).maybe_single().execute()
     if result is None or not result.data:
         return False
-    return result.data.get("is_active", False)
+    row = result.data
+    if not row.get("is_active", False):
+        return False
+
+    lastActivity = row.get("last_activity_at") or row.get("login_at")
+    if lastActivity is None:
+        # No timestamp at all to judge staleness against (shouldn't happen
+        # for any session created after this fix) -- fail closed, not open.
+        return False
+    if isinstance(lastActivity, str):
+        lastActivity = datetime.fromisoformat(lastActivity)
+
+    now = datetime.now(UTC)
+    idleTimeout = timedelta(minutes=_idleTimeoutMinutesForRole(row.get("user_role")))
+    if now - lastActivity > idleTimeout:
+        await closeSession(sessionId)
+        return False
+
+    await supabase.table("sessions").update(
+        {"last_activity_at": now.isoformat()}
+    ).eq("session_id", str(sessionId)).execute()
+    return True
 
 
 async def _getUserById(userId) -> dict | None:
