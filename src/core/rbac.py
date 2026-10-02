@@ -5,6 +5,7 @@ inline.
 """
 import logging
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -14,11 +15,13 @@ from .auth_service import decodeJwt, isSessionActive
 securityScheme = HTTPBearer()
 logger = logging.getLogger(__name__)
 
-def _unauthorized() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required.",
-    )
+def _unauthorized(code: str | None = None, message: str = "Authentication required.") -> HTTPException:
+    # Without a code the envelope says UNAUTHORIZED. The specific codes let the
+    # client tell "log in again" cases apart (UROLENS-244).
+    exc = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message)
+    if code:
+        exc.errorCode = code  # type: ignore[attr-defined]
+    return exc
 
 def _forbidden() -> HTTPException:
     return HTTPException(
@@ -44,15 +47,19 @@ async def getCurrentUser(
         `session_id`, ...).
 
     Raises:
-        HTTPException: 401, if the token fails to decode/verify, or if its
-            session is missing/inactive (revoked, logged out, or expired
-            from inactivity).
+        HTTPException: 401 `SESSION_EXPIRED`, if the token has expired;
+            `SESSION_ENDED`, if its session is missing/inactive (logged out,
+            revoked, or expired from inactivity — UROLENS-167);
+            `UNAUTHORIZED`, if it fails to decode or verify.
     """
     token = credentials.credentials
     ipAddress = request.client.host if request.client else "unknown"
 
     try:
         claims = decodeJwt(token)
+    except jwt.ExpiredSignatureError as err:
+        await audit_logger.logAccessDenied(ipAddress)
+        raise _unauthorized("SESSION_EXPIRED", "Your session has expired. Please log in again.") from err
     except Exception as err:
         logger.warning("JWT decode failed from %s", ipAddress, exc_info=True)
         await audit_logger.logAccessDenied(ipAddress)
@@ -61,7 +68,7 @@ async def getCurrentUser(
     sessionId = claims.get("session_id")
     if not sessionId or not await isSessionActive(sessionId):
         await audit_logger.logAccessDenied(ipAddress, userId=claims.get("user_id"))
-        raise _unauthorized()
+        raise _unauthorized("SESSION_ENDED", "Your session has ended. Please log in again.")
 
     return claims
 

@@ -62,7 +62,11 @@ class Settings(BaseModel):
     jwtSigningKey: str
     jwtAlgorithm: str = "HS256"
     jwtExpiryHours: int = 8
+    """Longest a staff session can last — one shift (UROLENS-244). A "keep me
+    signed in" token lasts this long from login; refreshing never goes past it."""
     accessTokenExpireMinutes: int = 60
+    """Lifetime of a normal access token. `POST /auth/refresh` renews it while the
+    user is active, up to `jwtExpiryHours` after login."""
     maxFailedAttempts: int = 5
 
     # ── PHI encryption ────────────────────────────────────────────────────
