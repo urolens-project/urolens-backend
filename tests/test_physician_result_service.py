@@ -107,12 +107,13 @@ def _fakeRequest() -> MagicMock:
     return req
 
 
-def _makeDetailDb(getMap: dict) -> AsyncMock:
+def _makeDetailDb(getMap: dict, supervisorNote: str | None = None) -> AsyncMock:
     """`db.get(Model, id)` backed by `getMap`. `db.execute()` is called twice
     in `get_result_detail`'s happy path (SmartDiagnosisOutput lookup,
-    ResultReview.annotation_notes lookup) — the access-gate tests below never
-    get past the ownership/status check, so neither needs a real return value
-    for them.
+    Supervisor's own annotation-note lookup) — the access-gate tests below
+    never get past the ownership/status check, so neither needs a real
+    return value for them. `supervisor_note` is whatever the (now
+    role-filtered) annotation query should return.
     """
     db = AsyncMock()
 
@@ -125,7 +126,7 @@ def _makeDetailDb(getMap: dict) -> AsyncMock:
     sdoResult.scalars.return_value.all.return_value = []
 
     reviewResult = MagicMock()
-    reviewResult.scalar_one_or_none.return_value = None
+    reviewResult.scalar_one_or_none.return_value = supervisorNote
 
     db.execute = AsyncMock(side_effect=[sdoResult, reviewResult])
     db.add = MagicMock()
@@ -201,6 +202,78 @@ async def test_getResultDetailGivesTheImageAsAShortLivedSignedUrlNotAPublicOne()
     assert result.imageUrl == signedUrl
     assert "/object/public/" not in result.imageUrl
     assert bucket.create_signed_url.await_args.args[0] == storageKey
+
+
+# ── getResultDetail — Supervisor-note attribution fix (UROLENS-154) ─────────
+
+@pytest.mark.asyncio
+async def test_getResultDetailReturnsTheSupervisorsOwnAnnotationNote():
+    """The mock's `scalar_one_or_none` return value stands in for whatever
+    the (now role-filtered) query actually resolves to — proves the field
+    is wired through to the response, not that the SQL filters correctly
+    (the next test proves that structurally).
+    """
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=PHYSICIAN_ID),
+        (Patient, PATIENT_ID): _makePatient(),
+    }
+    db = _makeDetailDb(getMap, supervisorNote="Consistent with gout; recommend follow-up.")
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
+
+    assert result.annotationNotes == "Consistent with gout; recommend follow-up."
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailAnnotationQueryFiltersOnSupervisorRoleAndMostRecent():
+    """UROLENS-154: the bug was an unordered, un-filtered `limit(1)` that
+    could return a MedTech's note mislabeled as the Supervisor's. Checked
+    structurally — the compiled SQL must join on `users.role` filtered to
+    `SUPERVISOR` and order by `result_reviews.updated_at` descending, not
+    pick an arbitrary row.
+    """
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=PHYSICIAN_ID),
+        (Patient, PATIENT_ID): _makePatient(),
+    }
+    db = _makeDetailDb(getMap)
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
+
+    annotationStmt = db.execute.await_args_list[1].args[0]
+    compiled = str(annotationStmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "users.role" in compiled
+    assert "SUPERVISOR" in compiled
+    assert "ORDER BY result_reviews.updated_at DESC" in compiled
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailAnnotationNotesIsNoneWhenNoSupervisorEntryExists():
+    """A result with only MedTech-authored `result_reviews` rows (not yet
+    returned to or approved by a Supervisor) must show no Supervisor note at
+    all — never fall back to someone else's entry.
+    """
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=PHYSICIAN_ID),
+        (Patient, PATIENT_ID): _makePatient(),
+    }
+    db = _makeDetailDb(getMap, supervisorNote=None)
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
+
+    assert result.annotationNotes is None
 
 
 # ── getResultDetail — status-gate fix (security-relevant) ────────────────────

@@ -3,6 +3,35 @@
 ## Unreleased
 
 ### Fixed
+- **Physician result detail could mislabel a MedTech's annotation note as the
+  Supervisor's (UROLENS-154).** `PhysicianResultService.getResultDetail`'s
+  `annotationNotes` query had no `ORDER BY` at all — `select(ResultReview.
+  annotationNotes).where(resultId == ...).limit(1)` picked whichever row the
+  DB returned first. A result that went through a correction cycle (MedTech
+  annotates → Supervisor returns → MedTech re-annotates → Supervisor
+  approves) has multiple `result_reviews` rows, and the frontend
+  unconditionally labels whatever comes back "Supervisor Notes"
+  (`PhysicianResultDetailView.tsx:141`) — so a physician could see an
+  internal MedTech note mislabeled as the Supervisor's own.
+  - **Real fix applied, not the interim stopgap** — this ticket depended on
+    the same reviewer-attribution mechanism as UROLENS-150/PR #28, and that
+    work already landed on `development` (PR #74, "Return every reviewer's
+    annotation separately in result detail view" —
+    `ResultReviewService.getFullResult`'s `reviewedBy` → `users.role`
+    resolution). `getResultDetail`'s query now joins `result_reviews` to
+    `users` and filters on `users.role == 'SUPERVISOR'`, ordered by
+    `result_reviews.updated_at` descending — the Supervisor's own most
+    recent entry, never an arbitrary row, and `None` (not someone else's
+    note) if no Supervisor entry exists yet for this result. Single query,
+    no added round trip.
+  - Audited the rest of the UAC's field list for this endpoint while here:
+    patient info, specimen ID, who processed it (`medtechName`), confirmed-at,
+    model version, image URL (signed, explicit `null` if absent), AI
+    findings/flagged anomalies/particle classes, and a Smart Diagnosis panel
+    (explicit `null` if unavailable) were all already present and unchanged.
+    Access boundary (a physician can't retrieve another physician's lab
+    request's result) was already covered by UROLENS-153's scoping fix above.
+    The AI disclaimer is frontend-static text, not a response field.
 - **Physician results list showed when the AI engine produced a result, not
   when the physician actually requested it — and both the list and the
   single-result detail view scoped access by patient, not by the physician's
