@@ -514,7 +514,8 @@ async def test_login16_medtechGetsTheLongerSixtyMinuteIdleTimeout(client):
 @pytest.mark.asyncio
 async def test_login17_activityTouchesTheSessionSoARealRequestExtendsIt(client):
     """A request well within the timeout updates last_activity_at -- the
-    backend side of "activity resets the inactivity timer".
+    backend side of "activity resets the inactivity timer". Writes happen at
+    most once a minute (UROLENS-245), so the last activity here is 5 minutes old.
     """
     c, fakeSb = client
     seedUser(fakeSb, role="SUPERVISOR")
@@ -525,6 +526,7 @@ async def test_login17_activityTouchesTheSessionSoARealRequestExtendsIt(client):
     )
     token = loginResp.json()["accessToken"]
     session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     originalActivity = session["last_activity_at"]
 
     with patch("src.core.rbac.isSessionActive", _realIsSessionActive):

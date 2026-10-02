@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import audit_logger
-from .auth_service import decodeJwt, isSessionActive
+from .auth_service import decodeJwt, isSessionActive, sessionEndReason
 
 securityScheme = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -48,9 +48,9 @@ async def getCurrentUser(
 
     Raises:
         HTTPException: 401 `SESSION_EXPIRED`, if the token has expired;
-            `SESSION_ENDED`, if its session is missing/inactive (logged out,
-            revoked, or expired from inactivity — UROLENS-167);
-            `UNAUTHORIZED`, if it fails to decode or verify.
+            `SESSION_IDLE`, if its session was ended for inactivity
+            (UROLENS-167/245); `SESSION_ENDED`, if it's missing or was logged
+            out or revoked; `UNAUTHORIZED`, if it fails to decode or verify.
     """
     token = credentials.credentials
     ipAddress = request.client.host if request.client else "unknown"
@@ -66,8 +66,11 @@ async def getCurrentUser(
         raise _unauthorized() from err
 
     sessionId = claims.get("session_id")
-    if not sessionId or not await isSessionActive(sessionId):
+    if not sessionId or not await isSessionActive(sessionId, ipAddress=ipAddress):
         await audit_logger.logAccessDenied(ipAddress, userId=claims.get("user_id"))
+        # Only a rejection pays for this second read (UROLENS-245).
+        if sessionId and await sessionEndReason(sessionId) == "IDLE":
+            raise _unauthorized("SESSION_IDLE", "You were signed out due to inactivity. Please log in again.")
         raise _unauthorized("SESSION_ENDED", "Your session has ended. Please log in again.")
 
     return claims
