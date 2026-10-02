@@ -110,4 +110,4 @@ class PhysicianResultDetail(BaseModel):
     smartDiagnosis: SmartDiagnosisDetail | None
     imageUrl: str | None
     status: str
-    annotationNotes: str | None
+    annotationNotes: str | None  # the Supervisor's own entry specifically — see get_result_detail
