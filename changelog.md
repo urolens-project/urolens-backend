@@ -3,6 +3,38 @@
 ## Unreleased
 
 ### Fixed
+- **Staff login: blank credentials bypassed server-side validation, and a
+  wrong password against an inactive account leaked no account-state signal
+  at all — both audited and fixed as security findings (UROLENS-165).**
+  - **Missing server-side blank-field rejection.** `LoginRequest.username`/
+    `.password` were plain `str` — Pydantic accepts `""`, so a blank
+    submission skipped the UAC's required field-specific 422 entirely and
+    fell through into the real login flow (rate limit → DB lookup → generic
+    401). Fixed: `Field(min_length=1)` plus a validator rejecting a
+    whitespace-only value too — deliberately **not** stripping either field
+    (a password's exact characters must reach `verify_password` unchanged).
+  - **Inactive-account message ordering bug — not a timing side-channel, but
+    the same "silently falls through to generic invalid-credentials" bug
+    class.** The already-correct lockout check (added in UROLENS-222) answers
+    `423 ACCOUNT_LOCKED` regardless of whether the password was also wrong;
+    the inactive check never got the same treatment — it ran *after* the
+    wrong-password branch had already raised a generic `401
+    INVALID_CREDENTIALS`, so a wrong guess against an inactive account never
+    saw `403 ACCOUNT_INACTIVE`. Reordered to match the lockout check's
+    pattern exactly. A wrong password against an inactive account still
+    increments the `failed_attempts` counter (unchanged, explicit decision —
+    an inactive account can end up locked on top of being inactive).
+  - **Everything else in this audit was already correct, confirmed not
+    changed:** the classic username-enumeration timing gap (a dummy bcrypt
+    comparison already runs for an unknown username, so an unknown username
+    costs the same as a wrong password); per-account/per-IP login rate
+    limiting; `LOGIN_FAILED`/`LOGIN_SUCCESS`/`LOGOUT` audit logging;
+    constant-time password comparison (`bcrypt.checkpw`); JWT role claim;
+    backend `RequireRole` enforcement (not frontend-only). One non-blocking,
+    out-of-scope observation: a request with no `Authorization` header at all
+    gets FastAPI's default `403` rather than `401` — an app-wide
+    `HTTPBearer` default, not specific to login, left unfixed pending a
+    separate decision.
 - **Patient result detail: "Laboratory notes" never populated, and "Analyzed
   by" was always blank (UROLENS-156).**
   - **Dead `interpretation` column, now writable.** `PatientResultService.
