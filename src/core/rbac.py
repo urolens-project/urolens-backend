@@ -34,7 +34,10 @@ async def getCurrentUser(
     credentials: HTTPAuthorizationCredentials = Depends(securityScheme),
 ) -> dict:
     """FastAPI dependency resolving the caller's identity from their Bearer
-    JWT, rejecting it if the token is invalid or its session has been revoked.
+    JWT, rejecting it if the token is invalid or its session has been
+    revoked — including a session `is_session_active` finds idle past its
+    role's inactivity timeout (UROLENS-167), which it revokes as part of
+    that check.
 
     Every rejection is recorded via `audit_logger.log_access_denied` before
     raising.
@@ -45,8 +48,9 @@ async def getCurrentUser(
 
     Raises:
         HTTPException: 401 `SESSION_EXPIRED`, if the token has expired;
-            `SESSION_ENDED`, if its session is missing/inactive (logged out or
-            revoked); `UNAUTHORIZED`, if it fails to decode or verify.
+            `SESSION_ENDED`, if its session is missing/inactive (logged out,
+            revoked, or expired from inactivity — UROLENS-167);
+            `UNAUTHORIZED`, if it fails to decode or verify.
     """
     token = credentials.credentials
     ipAddress = request.client.host if request.client else "unknown"

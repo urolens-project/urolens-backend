@@ -360,6 +360,44 @@ async def test_confirmResponseSaysWhetherItWasAResubmitAndTheNewStatus(
     assert response.id is not None
 
 
+# ── interpretationNotes write path (UROLENS-156) ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_confirmResultWritesInterpretationNotesToAnalysisResult() -> None:
+    """Nothing in the confirm/approve/release flow previously wrote
+    `AnalysisResult.interpretation` at all — the column existed but had no
+    writer, so the patient portal's "Laboratory notes" and the result PDF
+    always fell back to "Pending review". This is the fix: confirm_result
+    writes it straight to that column.
+    """
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    service = _makeService(_makeDbMock(getResultReturn=result))
+
+    await service.confirmResult(
+        resultId=RESULT_ID,
+        medtechId=MEDTECH_ID,
+        request=_requestMock(),
+        interpretationNotes="No significant abnormalities detected.",
+    )
+
+    assert result.interpretation == "No significant abnormalities detected."
+
+
+@pytest.mark.asyncio
+async def test_confirmResultWithoutInterpretationNotesLeavesInterpretationNone() -> None:
+    """The param is optional — a MedTech choosing not to add notes must not
+    break confirmation, and must leave `interpretation` unset (the PDF's
+    "Pending review" fallback handles the display side of that).
+    """
+    result = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    service = _makeService(_makeDbMock(getResultReturn=result))
+
+    await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=_requestMock())
+
+    assert result.interpretation is None
+    assert result.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL
+
+
 @pytest.mark.asyncio
 async def test_confirmAFailedResultIsNotConfirmableRatherThanAlreadyConfirmed() -> None:
     """The app treats RESULT_ALREADY_CONFIRMED as success, so a FAILED result

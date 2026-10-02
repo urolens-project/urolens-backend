@@ -49,6 +49,23 @@ MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES = MEDTECH_EDITABLE_RESULT_STATUSES | f
 })
 
 
+def requireSpecimenNotRejected(specimen: Specimen) -> None:
+    """Refuse any further work on a rejected specimen (UROLENS-238).
+
+    A rejected specimen is closed: its result must never be changed, confirmed
+    or sent on, and its image isn't retaken. Confirmation and upload have their
+    own `SPECIMEN_REJECTED` guards with action-specific messages.
+
+    Raises:
+        ConflictException: `SPECIMEN_REJECTED`, if the specimen was rejected.
+    """
+    if specimen.status == "REJECTED":
+        raise ConflictException(
+            code="SPECIMEN_REJECTED",
+            message="This specimen was rejected, so nothing more can be done with it.",
+        )
+
+
 def requireSpecimenAssigned(specimen: Specimen, medtechId: uuid.UUID) -> None:
     """Reject the caller unless the specimen is assigned to them.
 

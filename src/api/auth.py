@@ -48,11 +48,14 @@ async def login(body: LoginRequest, request: Request, backgroundTasks: Backgroun
     """Authenticate a staff login and issue an access token.
 
     Checks run in a fixed order — user exists, password correct, account not
-    locked, account active, role allowed in the calling app — with the
-    password check deliberately performed before the lock/active/role checks
-    (so a lock only triggers on a correct username, and to avoid revealing
-    account state via timing). The `LOGIN_SUCCESS` audit write is deferred to
-    a background task so it doesn't block the response.
+    locked, account active, (then, only if none of those applied) password
+    wrong, then role allowed in the calling app. The password check is
+    deliberately performed before the lock/active checks (to avoid revealing
+    account state via timing), and locked/inactive both answer with their own
+    specific message regardless of whether the password was also wrong
+    (UROLENS-165). The role check runs only once the password is proven, so
+    it reveals nothing to a guesser. The `LOGIN_SUCCESS` audit write is
+    deferred to a background task so it doesn't block the response.
 
     With `keepSignedIn`, the token lasts the whole shift
     (`settings.jwtExpiryHours`); otherwise one access-token lifetime, renewed
@@ -97,16 +100,27 @@ async def login(body: LoginRequest, request: Request, backgroundTasks: Backgroun
             f"Your account is temporarily locked. Try again in {LOCKOUT_MINUTES} minutes or contact an administrator.",
         )
 
+    # 4. Account must be active — checked regardless of passwordOk, same as
+    # the lockout check above (UROLENS-165): previously this ran only after
+    # the wrong-password branch below had already raised a generic 401, so a
+    # wrong guess against an inactive account never saw the specific
+    # message. A wrong password here still counts against the failed-
+    # attempts counter, same as any other wrong guess — an inactive account
+    # can still end up locked on top of being inactive.
+    if not user.get("is_active", True):
+        if not passwordOk:
+            await asyncio.gather(
+                incrementFailedAttempts(user["user_id"]),
+                audit_logger.logLoginFailed(ipAddress, userId=user["user_id"]),
+            )
+        raise _apiError(status.HTTP_403_FORBIDDEN, "ACCOUNT_INACTIVE", "Your account is inactive. Contact an administrator.")
+
     if not passwordOk:
         await asyncio.gather(
             incrementFailedAttempts(user["user_id"]),
             audit_logger.logLoginFailed(ipAddress, userId=user["user_id"]),
         )
         raise _apiError(status.HTTP_401_UNAUTHORIZED, "INVALID_CREDENTIALS", "Username or password is incorrect.")
-
-    # 4. Account must be active
-    if not user.get("is_active", True):
-        raise _apiError(status.HTTP_403_FORBIDDEN, "ACCOUNT_INACTIVE", "Your account is inactive. Contact an administrator.")
 
     # 5. The mobile app is for MedTechs only (UROLENS-244). Checked only after
     # the credentials are proven, so it reveals nothing to a guesser.

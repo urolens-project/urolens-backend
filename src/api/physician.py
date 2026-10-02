@@ -37,11 +37,12 @@ async def getPhysicianResultService(
 
 @router.get("/patients/search", response_model=list[PhysicianPatientItem])
 async def searchPatients(
-    q: str = Query(default="", min_length=1),
+    q: str = Query(default="", min_length=3),
     claims: dict = Depends(_physician),
+    db: AsyncSession = Depends(getDb),
 ):
-    """Search patients by name; see `physician_service.search_patients`."""
-    return await physician_service.searchPatients(q)
+    """Search patients by Patient ID; see `physician_service.search_patients`."""
+    return await physician_service.searchPatients(db, q)
 
 
 @router.post("/lab-requests", response_model=LabRequestCreateResponse, status_code=201)

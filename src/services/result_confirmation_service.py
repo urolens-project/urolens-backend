@@ -96,11 +96,21 @@ class ResultConfirmationService:
         resultId: uuid.UUID,
         medtechId: uuid.UUID,
         request: Request,
+        interpretationNotes: str | None = None,
     ) -> ConfirmResultResponse:
         """Confirms an analysis result and triggers Smart Diagnosis.
 
         Args:
             medtechId: the authenticated user recorded as `confirmed_by`.
+            interpretation_notes: optional lab notes, written straight to
+                `AnalysisResult.interpretation` (UROLENS-156) — previously
+                nothing in this flow ever wrote that column, so the patient
+                portal's "Laboratory notes" and the result PDF's
+                Interpretation section always fell back to "Pending review".
+                Write-once, MedTech-only: overwritten on every confirm call
+                (including a re-confirm after a Supervisor return), same as
+                `confirmed_by`/`confirmed_at` below — there is deliberately
+                no Supervisor-side edit path for this field.
 
         Returns:
             The confirmation, with `resubmitted` telling a re-confirmation of
@@ -223,6 +233,7 @@ class ResultConfirmationService:
         result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
         result.confirmedBy = medtechId
         result.confirmedAt = now
+        result.interpretation = interpretationNotes
 
         # Cache before SmartDiagnosis: savepoint rollbacks expire ORM object
         # attributes, and async SQLAlchemy cannot lazy-reload them outside a
@@ -332,7 +343,12 @@ class ResultConfirmationService:
         """
         offset = (page - 1) * pageSize
         statuses = (status,) if status else _MEDTECH_QUEUE_STATUSES
-        inQueue = (Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
+        # A rejected specimen's result can never be confirmed (UROLENS-238).
+        inQueue = (
+            Specimen.medtechId == medtechId,
+            AnalysisResult.status.in_(statuses),
+            Specimen.status != "REJECTED",
+        )
 
         total = (
             await self.db.execute(

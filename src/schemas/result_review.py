@@ -19,6 +19,32 @@ from .patient_portal import PARTICLE_LABELS
 MAX_OVERRIDE_COUNT = 300
 
 
+class ConfirmResultRequest(BaseModel):
+    """Request body for confirming an analysis result. Entirely optional —
+    posting with no body is equivalent to omitting `interpretationNotes`
+    (UROLENS-156).
+    """
+
+    interpretationNotes: str | None = Field(default=None, max_length=2000)
+    """The MedTech's lab notes, written to `AnalysisResult.interpretation` at
+    confirm time — the single source for what the patient portal shows as
+    "Laboratory notes" and what the result PDF prints as its Interpretation
+    section. Write-once, MedTech-only: there is deliberately no
+    Supervisor-side edit path for this field."""
+
+    @field_validator("interpretationNotes")
+    @classmethod
+    def blankBecomesNone(cls, v: str | None) -> str | None:
+        """Whitespace-only input is treated the same as omitting the field
+        entirely, so it can't silently defeat the PDF's "Pending review"
+        fallback.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
+
 class ConfirmResultResponse(BaseModel):
     """Response shape for a successful result confirmation."""
 
@@ -243,16 +269,23 @@ class ManualOverrideItem(BaseModel):
 
 
 class SpatialAnnotationItem(BaseModel):
-    """One point-plus-particle-type spatial annotation on a result's image.
+    """One bounding-box particle-type annotation on a result's image.
 
-    (UROLENS-149). `id` is client-supplied and stable across saves, so the
-    frontend can remove or adjust a single annotation by resending the full
-    list without it — `saveAnnotation` always replaces the whole list.
+    (UROLENS-149, boxes added as a bug fix after launch). `id` is
+    client-supplied and stable across saves, so the frontend can remove or
+    adjust a single annotation by resending the full list without it —
+    `saveAnnotation` always replaces the whole list. `x`/`y`/`w`/`h` are
+    percentages of the image's displayed dimensions (0-100), matching the
+    frontend canvas's coordinate system, not pixels — a pixel conversion is
+    always derivable later via the result's `Image.widthPx`/`.heightPx`
+    (UROLENS-224).
     """
 
     id: str = Field(..., min_length=1, max_length=64)
     x: float = Field(..., ge=0)
     y: float = Field(..., ge=0)
+    w: float = Field(..., ge=0)
+    h: float = Field(..., ge=0)
     particleType: str
 
     @field_validator("particleType")
@@ -262,6 +295,24 @@ class SpatialAnnotationItem(BaseModel):
         if v not in PARTICLE_LABELS:
             raise ValueError(f"particleType must be one of {PARTICLE_LABELS}")
         return v
+
+
+class AnnotationItem(BaseModel):
+    """One reviewer's annotation on a result, as shown in a result's full detail view.
+
+    A MedTech's and a Supervisor's annotations on the same result are
+    independent (`ResultReview` rows are keyed by `resultId` + `reviewedBy`)
+    — this list surfaces every reviewer's annotation, attributed, instead of
+    collapsing to whichever one was saved most recently.
+    """
+
+    reviewedBy: UUID
+    reviewerRole: str
+    """Resolved from `reviewedBy` via a batched `User` lookup; `""` if the
+    user record can't be found (mirrors `overriddenByName`'s fallback)."""
+    annotationNotes: str | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
+    updatedAt: datetime
 
 
 class FullResultDetail(BaseModel):
@@ -298,10 +349,10 @@ class FullResultDetail(BaseModel):
     returnReason: str | None = None
     """The supervisor's latest reason, only while the result is
     RETURNED_FOR_CORRECTION (UROLENS-226)."""
-    annotationNotes: str | None = None
-    spatialAnnotations: list[SpatialAnnotationItem] | None = None
-    """Persisted as of migration 0034 (JSONB); validated at this response
-    boundary as of UROLENS-149 (previously an untyped list[dict])."""
+    annotations: list[AnnotationItem]
+    """Every reviewer's annotation, attributed. Previously flattened to a
+    single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer
+    had saved most recently, with no way to tell whose notes were showing."""
 
 
 class AnnotationRequest(BaseModel):
@@ -336,7 +387,17 @@ class ApproveResponse(BaseModel):
 class ReturnRequest(BaseModel):
     """Request body for returning a pending result for correction."""
 
-    reason: str
+    reason: str = Field(..., min_length=1, max_length=2000)
+    """Required: every return must say why. Blank or whitespace-only is
+    rejected; surrounding whitespace is stripped (UROLENS-151)."""
+
+    @field_validator("reason")
+    @classmethod
+    def reasonNoWhitespaceOnly(cls, v: str) -> str:
+        """Reject a blank or whitespace-only `reason`; strips surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("reason must not be blank")
+        return v.strip()
 
 
 class ReturnResponse(BaseModel):

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SpecimenReceiveRequest(BaseModel):
@@ -63,7 +63,8 @@ class SpecimenRejectRequest(BaseModel):
     """Request body for a MedTech's post-assignment specimen rejection."""
 
     reasonCode: str
-    freeTextNote: str | None = None
+    freeTextNote: str | None = Field(None, max_length=500)
+    """Optional detail for the rejection; the app allows up to 500 characters."""
 
 
 class SpecimenRejectResponse(BaseModel):
