@@ -3,6 +3,46 @@
 ## Unreleased
 
 ### Fixed
+- **Session expiration was enforced by token lifetime only, with no backend
+  concept of inactivity at all — a security/architecture gap, not a bug, so
+  it was audited before anything was built (UROLENS-167).**
+  - **The finding.** Staff/patient JWTs carry a flat, fixed `exp` set at
+    issuance (60 min staff, 30 min patient) — unrelated to activity. No
+    refresh/keep-alive endpoint exists, and the backend never tracked "last
+    activity" at all; session validity was judged purely by that fixed
+    expiry plus a boolean `is_active` revocation flag. So a modified or
+    non-UI client holding a still-valid token could keep an "idle" session
+    alive for that token's entire absolute lifetime, with nothing
+    server-side to stop it — the frontend's inactivity warning/countdown
+    was real UX, but backed by no server-side enforcement.
+  - **Fix: genuine server-side inactivity tracking**, not just a shorter
+    absolute expiry. New `sessions.last_activity_at` column (migration
+    0045, `ADD COLUMN IF NOT EXISTS`, matching this repo's established
+    pattern for altering a table never created by a migration in the first
+    place — see 0032's docstring). `is_session_active` (the one check
+    every authenticated request already goes through via
+    `RequireRole`/`get_current_user`) now also rejects a session whose last
+    activity is older than its role's idle timeout — **MedTech gets 60
+    minutes, every other role (including PATIENT) gets 30**, matching the
+    UAC's per-role warning timers — and revokes it the same way an explicit
+    logout would, so a second check against the same stale session answers
+    the same way. A session still within its timeout has this same check
+    record the touch (`last_activity_at = now()`) — the backend half of
+    "activity resets the inactivity timer." A session that predates this
+    column (no `last_activity_at` yet) is judged by its original `login_at`
+    until its first touch, not force-logged-out on deploy.
+  - **Deliberately kept the exact same function name/signature**
+    (`is_session_active(session_id) -> bool`) specifically because ~40
+    existing integration tests patch it directly
+    (`patch("src.core.rbac.isSessionActive", ...)`) to bypass needing a real
+    `sessions` row for tests that aren't about session mechanics at all —
+    folding the new logic into the existing function, rather than adding a
+    parallel one, meant zero changes needed to any of those call sites.
+  - Logout's existing server-side revocation (`sessions.is_active`, checked
+    on every request) was already real, not cosmetic — confirmed, not
+    changed. An inactivity-triggered rejection reuses the exact same
+    `ACCESS_DENIED` audit path as every other rejected `get_current_user`
+    call — no new audit code needed.
 - **Staff login: blank credentials bypassed server-side validation, and a
   wrong password against an inactive account leaked no account-state signal
   at all — both audited and fixed as security findings (UROLENS-165).**
