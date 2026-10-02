@@ -13,6 +13,8 @@ from src.core.audit_logger import AuditLogger
 from src.models.analysis_result import AnalysisResult
 from src.models.patient import Patient
 from src.models.result_view import ResultView
+from src.models.specimen import Specimen
+from src.models.user import User
 from src.schemas.patient_portal import (
     PARTICLE_LABELS,
     ParticleCount,
@@ -168,11 +170,21 @@ class PatientResultService:
         else:
             particleClasses = []
 
+        # `AnalysisResult.medtechName` is dead — nothing writes it outside
+        # test fixtures (UROLENS-156). The real source, same as
+        # physician_result_service.getResultDetail and
+        # ResultReviewService.getFullResult: Specimen.medtechId -> User.username.
+        analyzedBy: str | None = None
+        spec = await self.db.get(Specimen, row.specimenId) if row.specimenId else None
+        if spec is not None and spec.medtechId:
+            medtech = await self.db.get(User, spec.medtechId)
+            analyzedBy = medtech.username if medtech else None
+
         return PatientResultDetailResponse(
             status=row.status,
             confirmedAt=row.confirmedAt,
             confirmationNotes=row.interpretation,
-            analyzedBy=row.medtechName,
+            analyzedBy=analyzedBy,
             particleCounts=particleCounts,
             particleClasses=particleClasses,
             smartDiagnosisUnavailable=bool(row.smartDiagnosisUnavailable),
