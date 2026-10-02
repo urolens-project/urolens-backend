@@ -179,21 +179,60 @@ async def closeSession(sessionId) -> None:
     ).eq("session_id", str(sessionId)).execute()
 
 
-def issueJwt(userId, username: str, role: str, sessionId) -> str:
+def sessionEndsAt(sessionStart: datetime) -> datetime:
+    """When a staff session started at `sessionStart` ends for good (one shift)."""
+    return sessionStart + timedelta(hours=settings.jwtExpiryHours)
+
+
+def tokenExpiresAt(sessionStart: datetime, keepSignedIn: bool, now: datetime) -> datetime:
+    """When an access token issued at `now` expires.
+
+    A "keep me signed in" token lasts until the session ends; otherwise one
+    access-token lifetime, never past the session's end (UROLENS-244).
+    """
+    end = sessionEndsAt(sessionStart)
+    if keepSignedIn:
+        return end
+    return min(now + timedelta(minutes=settings.accessTokenExpireMinutes), end)
+
+
+def issueJwt(
+    userId,
+    username: str,
+    role: str,
+    sessionId,
+    sessionStart: datetime | None = None,
+    keepSignedIn: bool = False,
+    now: datetime | None = None,
+) -> str:
     """Encode and sign an access token carrying identity/role/session claims.
 
+    Args:
+        userId: the user's ID (`user_id` claim).
+        username: the user's login name (`username` claim).
+        role: the user's role (`role` claim).
+        sessionId: the session row this token belongs to (`session_id` claim).
+        sessionStart: when the session began (login); defaults to `now`. Carried
+            as the `session_start` claim so a refresh can't extend the session
+            past one shift.
+        keepSignedIn: carried as the `keep` claim; see `tokenExpiresAt`.
+        now: the issue time; defaults to the current time.
+
     Returns:
-        A JWT string signed with `settings.jwt_signing_key`, expiring after
-        `settings.access_token_expire_minutes`.
+        A JWT string signed with `settings.jwtSigningKey`, expiring at
+        `tokenExpiresAt(sessionStart, keepSignedIn, now)`.
     """
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
+    sessionStart = sessionStart or now
     payload = {
         "user_id": str(userId),
         "username": username,
         "role": role,
         "session_id": str(sessionId),
+        "session_start": int(sessionStart.timestamp()),
+        "keep": keepSignedIn,
         "iat": now,
-        "exp": now + timedelta(minutes=settings.accessTokenExpireMinutes),
+        "exp": tokenExpiresAt(sessionStart, keepSignedIn, now),
     }
     return jwt.encode(payload, settings.jwtSigningKey, algorithm=settings.jwtAlgorithm)
 
