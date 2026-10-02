@@ -55,6 +55,7 @@ from .specimen_access import (
     isMedtech,
     requireResultEditable,
     requireSpecimenAssigned,
+    requireSpecimenNotRejected,
 )
 
 _PHT = timezone(timedelta(hours=8))
@@ -702,15 +703,17 @@ class ResultReviewService:
                 another MedTech's (or an unassigned) specimen.
             UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
                 APPROVED or RELEASED.
-            ConflictException: `RESULT_NOT_EDITABLE`, for any other status the
-                caller's role may not change.
+            ConflictException: `SPECIMEN_REJECTED`, if a MedTech annotates a
+                rejected specimen; `RESULT_NOT_EDITABLE`, for any other status
+                the caller's role may not change.
         """
         ar = await self._getAnnotatableResult(resultId)
         isSupervisor = not isMedtech(callerRole)
         if not isSupervisor:
             # Ownership before any state check, so a non-owner learns nothing;
             # then re-read under the specimen lock (see getAssignedSpecimen).
-            await getAssignedSpecimen(self.db, ar.specimenId, userId)
+            specimen = await getAssignedSpecimen(self.db, ar.specimenId, userId)
+            requireSpecimenNotRejected(specimen)
             ar = await self._getAnnotatableResult(resultId, fresh=True)
         requireResultEditable(ar, isSupervisor)
 

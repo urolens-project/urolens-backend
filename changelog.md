@@ -3,6 +3,32 @@
 ## Unreleased
 
 ### Fixed
+- **A MedTech couldn't reject a returned result's specimen, rejected specimens
+  stayed in the online queue forever, rejections weren't audited and nobody was
+  told a new specimen was needed (UROLENS-238).**
+  - **Returned results can be rejected.** `POST /specimens/{id}/reject` refused
+    `RETURNED_FOR_CORRECTION` as "already submitted", while its own error message
+    told the MedTech to ask the supervisor to return the result. A returned result
+    is back with the MedTech; rejection is now allowed then. Still refused
+    (`RESULT_ALREADY_SUBMITTED`) while pending approval, escalated, approved or
+    released.
+  - **Receptionists are notified** (`SPECIMEN_REJECTED` notification, sample ID and
+    reason only) that a new specimen must be collected — the web only showed desk
+    rejections. Sent after the rejection commits (best effort: a failure is logged
+    and never undoes the rejection, and the specimen lock isn't held during pushes).
+  - **Audited:** `SPECIMEN_REJECTED` (reason, whether a note was given, previous
+    specimen and result status) commits with the rejection.
+  - **Rejected specimens are closed:** manual override, annotation and image discard
+    now return 409 `SPECIMEN_REJECTED` (confirm and upload already did), via the
+    shared `specimen_access.requireSpecimenNotRejected`.
+  - **`GET /results/medtech/pending`** leaves rejected specimens out; their results
+    (which can never be confirmed) stayed in the list and its total.
+  - The note is capped at 500 characters (as in the app) and trimmed, a blank note
+    is stored as none, and `rejected_at` is stored in UTC (was PHT; same instant).
+  Not changed: routes, reason codes, no migration. **Mobile follow-ups
+  (UROLENS-237):** allow rejecting a `RETURNED_FOR_CORRECTION` result (the app
+  mirrors the old rule in `getRejectBlockedReason`); handle `SPECIMEN_REJECTED` from
+  override, annotate and discard.
 - **Session expiration was enforced by token lifetime only, with no backend
   concept of inactivity at all — a security/architecture gap, not a bug, so
   it was audited before anything was built (UROLENS-167).**
