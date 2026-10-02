@@ -29,6 +29,232 @@
   (UROLENS-237):** allow rejecting a `RETURNED_FOR_CORRECTION` result (the app
   mirrors the old rule in `getRejectBlockedReason`); handle `SPECIMEN_REJECTED` from
   override, annotate and discard.
+- **Session expiration was enforced by token lifetime only, with no backend
+  concept of inactivity at all — a security/architecture gap, not a bug, so
+  it was audited before anything was built (UROLENS-167).**
+  - **The finding.** Staff/patient JWTs carry a flat, fixed `exp` set at
+    issuance (60 min staff, 30 min patient) — unrelated to activity. No
+    refresh/keep-alive endpoint exists, and the backend never tracked "last
+    activity" at all; session validity was judged purely by that fixed
+    expiry plus a boolean `is_active` revocation flag. So a modified or
+    non-UI client holding a still-valid token could keep an "idle" session
+    alive for that token's entire absolute lifetime, with nothing
+    server-side to stop it — the frontend's inactivity warning/countdown
+    was real UX, but backed by no server-side enforcement.
+  - **Fix: genuine server-side inactivity tracking**, not just a shorter
+    absolute expiry. New `sessions.last_activity_at` column (migration
+    0045, `ADD COLUMN IF NOT EXISTS`, matching this repo's established
+    pattern for altering a table never created by a migration in the first
+    place — see 0032's docstring). `is_session_active` (the one check
+    every authenticated request already goes through via
+    `RequireRole`/`get_current_user`) now also rejects a session whose last
+    activity is older than its role's idle timeout — **MedTech gets 60
+    minutes, every other role (including PATIENT) gets 30**, matching the
+    UAC's per-role warning timers — and revokes it the same way an explicit
+    logout would, so a second check against the same stale session answers
+    the same way. A session still within its timeout has this same check
+    record the touch (`last_activity_at = now()`) — the backend half of
+    "activity resets the inactivity timer." A session that predates this
+    column (no `last_activity_at` yet) is judged by its original `login_at`
+    until its first touch, not force-logged-out on deploy.
+  - **Deliberately kept the exact same function name/signature**
+    (`is_session_active(session_id) -> bool`) specifically because ~40
+    existing integration tests patch it directly
+    (`patch("src.core.rbac.isSessionActive", ...)`) to bypass needing a real
+    `sessions` row for tests that aren't about session mechanics at all —
+    folding the new logic into the existing function, rather than adding a
+    parallel one, meant zero changes needed to any of those call sites.
+  - Logout's existing server-side revocation (`sessions.is_active`, checked
+    on every request) was already real, not cosmetic — confirmed, not
+    changed. An inactivity-triggered rejection reuses the exact same
+    `ACCESS_DENIED` audit path as every other rejected `get_current_user`
+    call — no new audit code needed.
+- **Staff login: blank credentials bypassed server-side validation, and a
+  wrong password against an inactive account leaked no account-state signal
+  at all — both audited and fixed as security findings (UROLENS-165).**
+  - **Missing server-side blank-field rejection.** `LoginRequest.username`/
+    `.password` were plain `str` — Pydantic accepts `""`, so a blank
+    submission skipped the UAC's required field-specific 422 entirely and
+    fell through into the real login flow (rate limit → DB lookup → generic
+    401). Fixed: `Field(min_length=1)` plus a validator rejecting a
+    whitespace-only value too — deliberately **not** stripping either field
+    (a password's exact characters must reach `verify_password` unchanged).
+  - **Inactive-account message ordering bug — not a timing side-channel, but
+    the same "silently falls through to generic invalid-credentials" bug
+    class.** The already-correct lockout check (added in UROLENS-222) answers
+    `423 ACCOUNT_LOCKED` regardless of whether the password was also wrong;
+    the inactive check never got the same treatment — it ran *after* the
+    wrong-password branch had already raised a generic `401
+    INVALID_CREDENTIALS`, so a wrong guess against an inactive account never
+    saw `403 ACCOUNT_INACTIVE`. Reordered to match the lockout check's
+    pattern exactly. A wrong password against an inactive account still
+    increments the `failed_attempts` counter (unchanged, explicit decision —
+    an inactive account can end up locked on top of being inactive).
+  - **Everything else in this audit was already correct, confirmed not
+    changed:** the classic username-enumeration timing gap (a dummy bcrypt
+    comparison already runs for an unknown username, so an unknown username
+    costs the same as a wrong password); per-account/per-IP login rate
+    limiting; `LOGIN_FAILED`/`LOGIN_SUCCESS`/`LOGOUT` audit logging;
+    constant-time password comparison (`bcrypt.checkpw`); JWT role claim;
+    backend `RequireRole` enforcement (not frontend-only). One non-blocking,
+    out-of-scope observation: a request with no `Authorization` header at all
+    gets FastAPI's default `403` rather than `401` — an app-wide
+    `HTTPBearer` default, not specific to login, left unfixed pending a
+    separate decision.
+- **Patient result detail: "Laboratory notes" never populated, and "Analyzed
+  by" was always blank (UROLENS-156).**
+  - **Dead `interpretation` column, now writable.** `PatientResultService.
+    getResultDetail` reads `AnalysisResult.interpretation`, but nothing in the
+    confirm/approve/release flow ever wrote to it — every result PDF printed
+    "Pending review" (`pdf_service.py`'s existing fallback), regardless of
+    whether a MedTech actually had notes. `ResultConfirmationService.
+    confirmResult` now takes an optional `interpretationNotes` param, written
+    straight to `AnalysisResult.interpretation` at confirm time (same point
+    the MedTech already finalizes the result). Wired through a new, entirely
+    optional `ConfirmResultRequest` body on `POST /{id}/confirm`. The existing
+    read path in `getResultDetail` needed no change — it starts working
+    correctly on its own once the column has a writer. The PDF's "Pending
+    review" fallback is unchanged, now genuinely only for a result a MedTech
+    chose not to annotate.
+    - **Deliberately out of scope:** no Supervisor-side edit path for this
+      field. Single-source, MedTech-only, write-once at confirm — a separate,
+      future decision, not an oversight left over from this fix.
+  - **`analyzedBy` read from the dead `AnalysisResult.medtechName` column —
+    nothing writes it outside test fixtures.** Replaced with the same
+    `Specimen.medtechId` → `User.username` lookup `physician_result_service.
+    getResultDetail` and `ResultReviewService.getFullResult` already use for
+    their own result-detail endpoints — not a third, independently-drifting
+    implementation of the same lookup.
+  - Audited the rest of this endpoint's UAC while here: particle counts
+    already return raw per-type counts (not just a zero/non-zero flag) the
+    frontend can branch on; `PatientResultDetailResponse` was already
+    structurally confirmed to carry no raw Smart Diagnosis probability scores
+    (only the `smartDiagnosisUnavailable` boolean) regardless of what the
+    frontend chooses to display; the PDF's static disclaimer footer and the
+    access-boundary checks (ownership, not-yet-released) were already correct
+    and unchanged.
+- **Physician result detail could mislabel a MedTech's annotation note as the
+  Supervisor's (UROLENS-154).** `PhysicianResultService.getResultDetail`'s
+  `annotationNotes` query had no `ORDER BY` at all — `select(ResultReview.
+  annotationNotes).where(resultId == ...).limit(1)` picked whichever row the
+  DB returned first. A result that went through a correction cycle (MedTech
+  annotates → Supervisor returns → MedTech re-annotates → Supervisor
+  approves) has multiple `result_reviews` rows, and the frontend
+  unconditionally labels whatever comes back "Supervisor Notes"
+  (`PhysicianResultDetailView.tsx:141`) — so a physician could see an
+  internal MedTech note mislabeled as the Supervisor's own.
+  - **Real fix applied, not the interim stopgap** — this ticket depended on
+    the same reviewer-attribution mechanism as UROLENS-150/PR #28, and that
+    work already landed on `development` (PR #74, "Return every reviewer's
+    annotation separately in result detail view" —
+    `ResultReviewService.getFullResult`'s `reviewedBy` → `users.role`
+    resolution). `getResultDetail`'s query now joins `result_reviews` to
+    `users` and filters on `users.role == 'SUPERVISOR'`, ordered by
+    `result_reviews.updated_at` descending — the Supervisor's own most
+    recent entry, never an arbitrary row, and `None` (not someone else's
+    note) if no Supervisor entry exists yet for this result. Single query,
+    no added round trip.
+  - Audited the rest of the UAC's field list for this endpoint while here:
+    patient info, specimen ID, who processed it (`medtechName`), confirmed-at,
+    model version, image URL (signed, explicit `null` if absent), AI
+    findings/flagged anomalies/particle classes, and a Smart Diagnosis panel
+    (explicit `null` if unavailable) were all already present and unchanged.
+    Access boundary (a physician can't retrieve another physician's lab
+    request's result) was already covered by UROLENS-153's scoping fix above.
+    The AI disclaimer is frontend-static text, not a response field.
+- **Physician results list showed when the AI engine produced a result, not
+  when the physician actually requested it — and both the list and the
+  single-result detail view scoped access by patient, not by the physician's
+  own lab request (UROLENS-153).**
+  - **"Requested On" source fix.** `PhysicianResultSummary.createdAt` was
+    `AnalysisResult.createdAt` — timestamped well downstream of when the
+    specimen was received, labeled, queued, and imaged. Now sourced from
+    `LabRequest.createdAt` via a single joined query (`AnalysisResult` →
+    `Specimen` → `LabRequest`), not a second per-row lookup. `confirmedAt`
+    (`AnalysisResult.confirmedAt`) is unchanged — it was already a separate,
+    correctly-sourced field.
+  - **Access-scoping fix, found while fixing the above, not originally
+    reported.** Both `listResults` and `getResultDetail` scoped access via
+    "does this physician have *any* lab request for this result's patient" —
+    a patient-level check. A patient with lab requests from two different
+    physicians is a normal case, not an edge case, and the prior check let a
+    physician see/retrieve a result tied to a *different* physician's lab
+    request as long as they shared at least one patient. Both methods now
+    scope by the result's own lab request (`LabRequest.physicianId`)
+    directly — the same join path as the "Requested On" fix for
+    `listResults`, and a `Specimen.labRequestId` → `LabRequest` lookup for
+    `getResultDetail`. A result with no specimen/lab request to trace is
+    denied, not silently allowed through.
+  - Status-collapsing (`RELEASED` vs. the `PENDING` placeholder for
+    everything earlier) and pagination/total-count were already correct —
+    confirmed, not changed.
+- **Physician-portal patient search never matched on Patient ID at all — only
+  on name, via a 100-row Supabase-REST scan that decrypted every candidate
+  (UROLENS-152).** `physician_service.searchPatients` was still the original
+  pure-Supabase-REST implementation: fetched up to 100 patient rows, decrypted
+  every one's name fields, substring-matched against first/last name only.
+  `patient_uid` was never part of the match condition, so a physician
+  searching by Patient ID — the UAC's explicit requirement, and what the
+  frontend's placeholder text already promises — always got zero results.
+  - **Not the same fix as UROLENS-137.** That ticket minimized
+    `PatientService.searchPatients`'s *response shape* (full `PatientResponse`
+    → slim `PatientSearchItem`, patientId/patientUid only) and added a 3-char
+    minimum query length — it never touched that path's match field, which is
+    still name-based today (a separate, pre-existing gap in the
+    receptionist-facing search; out of scope here, not silently fixed).
+  - **Fix:** `AsyncSession` (not Supabase REST), SQL-filtered on `patient_uid`
+    only via `ilike` — name matching is fully removed, not deprioritized.
+    Matches 137's 3-char minimum convention (route `Query(min_length=3)`,
+    enforced again inside the function itself since it's callable directly).
+  - **Response shape deviates from 137's `PatientSearchItem` on purpose:**
+    returns `patientId`, `patientUid`, `dateOfBirth`, `sex` — two more fields
+    than 137's bare minimum. The UAC explicitly names these two as a
+    clinical-safety requirement (visually confirming the right person before
+    selecting), not scope creep. Still excludes firstName/lastName/contactNo/
+    address/clinicalHistory per RA 10173. `dateOfBirth` is Fernet-encrypted at
+    rest (`Patient.dateOfBirth`); decrypting it here is bounded to the
+    already patient_uid-filtered, small result set — not the
+    find-everyone-then-decrypt-all pattern this bug and 137 both eliminated.
+  - Lab-request creation for the physician portal (`POST
+    /physician/lab-requests`) was already correct and unaffected — it already
+    calls the shared `lab_request_service.createLabRequest` directly (see this
+    changelog's earlier "Duplicate lab-request creation implementations"
+    entry); this fix is scoped to search only.
+- **Two concurrent supervisor actions on the same result could both succeed —
+  approve-vs-escalate included, not just two of the same action — and
+  `ReturnRequest.reason` had no non-blank validation (UROLENS-151).**
+  - **Race fix, same class as UROLENS-142/143.** `_requirePending` reads
+    `analysis_results.status` then each of approve/return/escalate wrote it
+    separately, with no conditional UPDATE and no unique constraint on
+    `result_approvals`/`result_returns`/`escalations` — two concurrent calls
+    could both pass the read-check and both commit. New
+    `ResultReviewService._transitionIfPending`: a single
+    `UPDATE analysis_results SET status = <new> WHERE result_id = :id AND
+    status = 'PENDING_SUPERVISOR_APPROVAL'`, checked by rowcount, called by
+    all three actions right before commit. The losing side rolls back and
+    gets the same 409 **`INVALID_RESULT_STATUS`** `_requirePending` already
+    raises in the non-race case — unchanged code, so the frontend's existing
+    message for it still applies. **Deliberately no new migration**, unlike
+    142/143: those each protect one action against itself via a child-table
+    unique constraint, but three *different* actions writing to three
+    *different* child tables need protection on the resource they actually
+    share — `analysis_results.status` — which the conditional UPDATE already
+    guards directly, for every combination. Proven with a real 3-way
+    concurrent-HTTP test (approve + return + escalate fired at once via
+    `asyncio.gather`, `asyncio.Barrier`-synchronized so it doesn't flake):
+    exactly one 200, the other two 409 `INVALID_RESULT_STATUS`, in the actual
+    response bodies.
+  - **`POST /results/{id}/return` validation (422 `VALIDATION_ERROR`):**
+    `reason` is now **required and can't be blank** (min 1 char after
+    trimming whitespace, max 2000) — previously any string, including `""`,
+    was accepted. Same convention as `OverrideRequest.rationale`
+    (UROLENS-146/150): required, stripped, blank/whitespace-only rejected.
+  - **Known issue on this branch, resolved by this merge:** this branch's base
+    had the duplicate-`0042`-revision Alembic collision (two heads: `0042`,
+    `0043`) from before the `0044` renumber landed on `development` —
+    pre-existing, unrelated to this fix. Fixed on this branch directly
+    (same renumber, independently of `development`'s own copy of it) before
+    merging `development` in.
 - **Sync would break as a MedTech's history grew, kept every finished sample on
   the phone forever, and sent no approval or release dates (UROLENS-236).**
   - **`GET /sync/pull` reads with SQLAlchemy.** The Supabase REST version

@@ -77,6 +77,7 @@ from .result_review import (  # noqa: F401
     ApprovedTodayListResponse,
     ApproveRequest,
     ApproveResponse,
+    ConfirmResultRequest,
     ConfirmResultResponse,
     EscalatedListResponse,
     EscalatedResultItem,

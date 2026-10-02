@@ -1,8 +1,9 @@
-"""HTTP-level tests — spatial annotation particle type (UROLENS-149).
+"""HTTP-level tests — spatial annotation bounding boxes (UROLENS-149).
 
 Through the real `PATCH /results/{id}/annotate` route (DB mocked): a
-`spatialAnnotations` item with an unknown `particleType` is rejected with the
-422 envelope before the service is ever reached; a known one round-trips
+`spatialAnnotations` item with an unknown `particleType`, or missing its
+`w`/`h` box dimensions, is rejected with the 422 envelope before the service
+is ever reached; a full box with a known `particleType` round-trips
 correctly.
 """
 from __future__ import annotations
@@ -82,7 +83,28 @@ async def test_unknownParticleTypeIsRejectedBeforeReachingTheService(
 ) -> None:
     body = {
         "annotationNotes": "Possible cast cluster",
-        "spatialAnnotations": [{"id": "a1", "x": 10, "y": 20, "particleType": "not_a_real_particle"}],
+        "spatialAnnotations": [
+            {"id": "a1", "x": 10, "y": 20, "w": 5, "h": 5, "particleType": "not_a_real_particle"}
+        ],
+    }
+    response = await _patch(asyncClient, body)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    useDb.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missingBoxDimensionsRejectedBeforeReachingTheService(
+    asyncClient: AsyncClient, useDb: AsyncMock
+) -> None:
+    """UROLENS-149 bug fix: the frontend's AnnotationCanvas sends a bounding
+    box (id/x/y/w/h/particleType) — w/h are required, not optional, since
+    every annotation this UI has ever produced is a box.
+    """
+    body = {
+        "annotationNotes": "Possible cast cluster",
+        "spatialAnnotations": [{"id": "a1", "x": 10, "y": 20, "particleType": "urinary_casts"}],
     }
     response = await _patch(asyncClient, body)
 
@@ -95,11 +117,15 @@ async def test_unknownParticleTypeIsRejectedBeforeReachingTheService(
 async def test_knownParticleTypeRoundTripsCorrectly(asyncClient: AsyncClient, useDb: AsyncMock) -> None:
     body = {
         "annotationNotes": "Possible cast cluster",
-        "spatialAnnotations": [{"id": "a1", "x": 10, "y": 20, "particleType": "urinary_casts"}],
+        "spatialAnnotations": [
+            {"id": "a1", "x": 10, "y": 20, "w": 5, "h": 8, "particleType": "urinary_casts"}
+        ],
     }
     response = await _patch(asyncClient, body)
 
     assert response.status_code == 200, response.text
     [item] = response.json()["spatialAnnotations"]
-    assert (item["id"], item["x"], item["y"], item["particleType"]) == ("a1", 10, 20, "urinary_casts")
+    assert (item["id"], item["x"], item["y"], item["w"], item["h"], item["particleType"]) == (
+        "a1", 10, 20, 5, 8, "urinary_casts"
+    )
     useDb.commit.assert_awaited_once()
