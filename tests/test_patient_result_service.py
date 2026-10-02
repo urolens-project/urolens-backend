@@ -19,12 +19,17 @@ import pytest
 from fastapi import HTTPException
 
 from src.models.analysis_result import AnalysisResult
+from src.models.specimen import Specimen
+from src.models.user import User
+from src.schemas.patient_portal import PatientResultDetailResponse
 from src.services.patient_result_service import PatientResultService
 
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000050")
 PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000051")
 OTHER_PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000052")
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000053")
+SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000054")
+MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000055")
 
 
 # ── Row / fixture builders ────────────────────────────────────────────────────
@@ -37,14 +42,32 @@ def _makeResultRow(resultId=None, resultStatus="RELEASED", patientId=_UNSET, **o
     row.resultId = resultId or RESULT_ID
     row.status = resultStatus
     row.patientId = PATIENT_ID if patientId is _UNSET else patientId
+    row.specimenId = overrides.get("specimenId", SPECIMEN_ID)
     row.releasedAt = overrides.get("releasedAt")
     row.confirmedAt = overrides.get("confirmedAt")
     row.interpretation = overrides.get("interpretation")
-    row.medtechName = overrides.get("medtechName")
+    # medtechName is the dead AnalysisResult column (UROLENS-156) — deliberately
+    # NOT read by getResultDetail anymore. Defaults to a value that would prove
+    # a regression if it were ever read again.
+    row.medtechName = overrides.get("medtechName", "WRONG-dead-column-value")
     row.aiFindings = overrides.get("aiFindings", {})
     row.particleClasses = overrides.get("particleClasses", {})
     row.smartDiagnosisUnavailable = overrides.get("smartDiagnosisUnavailable", False)
     return row
+
+
+def _makeSpecimen(specimenId=None, medtechId=_UNSET) -> MagicMock:
+    spec = MagicMock(spec=Specimen)
+    spec.specimenId = specimenId or SPECIMEN_ID
+    spec.medtechId = MEDTECH_ID if medtechId is _UNSET else medtechId
+    return spec
+
+
+def _makeUser(userId=None, username="jdoe") -> MagicMock:
+    user = MagicMock(spec=User)
+    user.userId = userId or MEDTECH_ID
+    user.username = username
+    return user
 
 
 def _makeAuditLogger() -> MagicMock:
@@ -61,12 +84,22 @@ def _makeResolveOnlyDb(patientId) -> AsyncMock:
     return db
 
 
-def _makeDetailDb(patientId, row) -> AsyncMock:
+def _makeDetailDb(patientId, row, getMap: dict | None = None) -> AsyncMock:
+    """`db.get(AnalysisResult, _)` returns `row`; any other model/id pair is
+    looked up in `getMap` (used for the Specimen/User chain `analyzedBy` now
+    resolves through — UROLENS-156).
+    """
     resolveResult = MagicMock()
     resolveResult.scalar_one_or_none.return_value = patientId
     db = AsyncMock()
     db.execute = AsyncMock(return_value=resolveResult)
-    db.get = AsyncMock(return_value=row)
+
+    async def _get(model, id_):
+        if model is AnalysisResult:
+            return row
+        return (getMap or {}).get((model, id_))
+
+    db.get = AsyncMock(side_effect=_get)
     db.add = MagicMock()
     db.commit = AsyncMock()
     return db
@@ -188,10 +221,13 @@ async def test_getResultDetailReturnsFullDetailWhenReleased():
         patientId=PATIENT_ID,
         aiFindings={"bacteria": 5},
         interpretation="Normal",
-        medtechName="jdoe",
         releasedAt=datetime.now(UTC),
     )
-    db = _makeDetailDb(PATIENT_ID, row)
+    getMap = {
+        (Specimen, SPECIMEN_ID): _makeSpecimen(medtechId=MEDTECH_ID),
+        (User, MEDTECH_ID): _makeUser(username="jdoe"),
+    }
+    db = _makeDetailDb(PATIENT_ID, row, getMap)
     auditLogger = _makeAuditLogger()
     service = PatientResultService(db=db, auditLogger=auditLogger)
 
@@ -207,3 +243,89 @@ async def test_getResultDetailReturnsFullDetailWhenReleased():
     assert auditLogger.record.call_args.kwargs["eventType"] == "RESULT_VIEWED"
     db.add.assert_called_once()
     db.commit.assert_awaited_once()
+
+
+# ── getResultDetail — analyzedBy / interpretation fixes (UROLENS-156) ────────
+
+@pytest.mark.asyncio
+async def test_getResultDetailAnalyzedByComesFromSpecimenMedtechIdNotTheDeadColumn():
+    """The real source, matching physician_result_service.getResultDetail and
+    ResultReviewService.getFullResult: Specimen.medtechId -> User.username.
+    `AnalysisResult.medtechName` (the dead column) is deliberately seeded with
+    a wrong value by `_makeResultRow`'s default — if this test passes with
+    the *correct* name, the dead column definitely isn't being read.
+    """
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (Specimen, SPECIMEN_ID): _makeSpecimen(medtechId=MEDTECH_ID),
+        (User, MEDTECH_ID): _makeUser(username="mcruz.medtech"),
+    }
+    db = _makeDetailDb(PATIENT_ID, row, getMap)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.analyzedBy == "mcruz.medtech"
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailAnalyzedByIsNoneWhenSpecimenHasNoMedtech():
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {(Specimen, SPECIMEN_ID): _makeSpecimen(medtechId=None)}
+    db = _makeDetailDb(PATIENT_ID, row, getMap)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.analyzedBy is None
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailConfirmationNotesReflectsWrittenInterpretation():
+    """Once ResultConfirmationService actually writes
+    `AnalysisResult.interpretation`, this existing read path (`row.
+    interpretation`) picks it up correctly on its own — no second read path.
+    """
+    row = _makeResultRow(
+        resultStatus="RELEASED",
+        patientId=PATIENT_ID,
+        interpretation="No significant abnormalities detected.",
+    )
+    db = _makeDetailDb(PATIENT_ID, row)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.confirmationNotes == "No significant abnormalities detected."
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailConfirmationNotesIsNoneWhenMedtechAddedNone():
+    """A MedTech choosing not to add notes must still come through as `None`
+    (the field is optional) — PdfService's "Pending review" fallback handles
+    the display side of this, not a backend default string.
+    """
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID, interpretation=None)
+    db = _makeDetailDb(PATIENT_ID, row)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.confirmationNotes is None
+
+
+@pytest.mark.asyncio
+async def test_patientResultDetailResponseNeverCarriesRawSmartDiagnosisScores():
+    """Raw AI probability scores (gout_score/gn_score/nephro_score/etc., as
+    `SmartDiagnosisDetail` exposes to the physician/supervisor views) must
+    never reach this patient-facing schema at all — not just be hidden by
+    the frontend. Structural: checked against the model's own field set,
+    not a single serialized instance.
+    """
+    fieldNames = set(PatientResultDetailResponse.model_fields)
+    leakedScoreFields = {
+        "goutScore", "gnScore", "nephroScore", "utiScore", "trichoScore",
+        "evidenceMap", "smartDiagnosis", "engineVersion",
+    }
+    assert fieldNames.isdisjoint(leakedScoreFields)
+    assert "smartDiagnosisUnavailable" in fieldNames
