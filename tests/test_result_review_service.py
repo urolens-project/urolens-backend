@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import Select
 
+from src.api.results import getResultReviewService
 from src.core.exceptions import (
     ConflictException,
     NotFoundException,
@@ -52,6 +53,8 @@ from src.services.result_review_service import ResultReviewService, getSmartDiag
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")
 SUPERVISOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000032")
+MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000033")
+CONFIRMING_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000034")
 
 
 def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
@@ -130,14 +133,24 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
 
 @pytest.mark.asyncio
 async def test_returnResultTransitionsStatusAndRecordsReason():
-    """Happy path: returning a pending result records the return reason and
-    moves the result to RETURNED_FOR_CORRECTION.
+    """Happy path: returning a pending result records the return reason,
+    moves the result to RETURNED_FOR_CORRECTION, and tells the specimen's
+    MedTech by sample ID — without the reason, which would reach the lock
+    screen (UROLENS-248).
     """
     result = _makeResult()
-    db = _makeDbMock(getSideEffect=[result])
+    specimen = _makeSpecimen()
+    specimen.medtechId = MEDTECH_ID
+    specimen.sampleUid = "SMP-20261002-00042"
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, _notifService=notifService)
     response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
+
+    notifService.notifyMedtechResultReturned.assert_awaited_once_with(
+        medtechId=MEDTECH_ID, resultId=RESULT_ID, sampleUid="SMP-20261002-00042"
+    )
 
     updateSql = _compiledTransitionStatement(db)
     assert "SET status='RETURNED_FOR_CORRECTION'" in updateSql
@@ -152,6 +165,67 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     assert added.returnedBy == SUPERVISOR_ID
     assert added.reason == "Blurry image"
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_theRouteGivesTheReviewServiceTheRequestsNotifier():
+    notifService = MagicMock()
+
+    service = await getResultReviewService(db=AsyncMock(), auditLogger=MagicMock(), _notifService=notifService)
+
+    assert service._notifService is notifService
+
+
+@pytest.mark.asyncio
+async def test_returnResultNotifiesWhoConfirmedItWhenTheSpecimenHasNoMedtech():
+    result = _makeResult()
+    result.confirmedBy = CONFIRMING_MEDTECH_ID
+    specimen = _makeSpecimen()
+    specimen.medtechId = None
+    specimen.sampleUid = None
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    await ResultReviewService(db=db, _notifService=notifService).returnResult(
+        RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+    )
+
+    notifService.notifyMedtechResultReturned.assert_awaited_once_with(
+        medtechId=CONFIRMING_MEDTECH_ID, resultId=RESULT_ID, sampleUid=str(SPECIMEN_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_returnResultWithNoMedtechToTellStillReturnsIt():
+    result = _makeResult()
+    result.confirmedBy = None
+    specimen = _makeSpecimen()
+    specimen.medtechId = None
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    response = await ResultReviewService(db=db, _notifService=notifService).returnResult(
+        RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+    )
+
+    notifService.notifyMedtechResultReturned.assert_not_awaited()
+    assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aRaceLostReturnNotifiesNobody():
+    result = _makeResult()
+    db = _makeDbMock(getSideEffect=[result])
+    db.execute.return_value.rowcount = 0
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    with pytest.raises(ConflictException):
+        await ResultReviewService(db=db, _notifService=notifService).returnResult(
+            RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+        )
+
+    notifService.notifyMedtechResultReturned.assert_not_awaited()
 
 
 @pytest.mark.asyncio

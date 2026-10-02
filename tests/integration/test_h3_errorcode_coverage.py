@@ -224,7 +224,7 @@ async def test_markNotificationReadNotFoundReturnsFlatEnvelope(asyncClient):
 
     assert response.status_code == 404
     body = response.json()
-    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["code"] == "NOTIFICATION_NOT_FOUND"
     assert isinstance(body["error"]["message"], str)
 
 
