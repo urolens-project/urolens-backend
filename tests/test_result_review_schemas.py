@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from src.schemas.patient_portal import PARTICLE_LABELS
 from src.schemas.result_review import (
     VALID_ESCALATION_PATHS,
+    ConfirmResultRequest,
     EscalateRequest,
     ReturnRequest,
     SpatialAnnotationItem,
@@ -75,3 +76,28 @@ def test_missingBoxDimensionRejectedAtSchemaLevel(missingField: str) -> None:
     del fields[missingField]
     with pytest.raises(ValidationError):
         SpatialAnnotationItem(**fields)
+
+
+# ── ConfirmResultRequest (UROLENS-156) ───────────────────────────────────────
+
+def test_confirmResultRequestWithNoBodyDefaultsNotesToNone() -> None:
+    request = ConfirmResultRequest()
+    assert request.interpretationNotes is None
+
+
+def test_confirmResultRequestAcceptsNotes() -> None:
+    request = ConfirmResultRequest(interpretationNotes="Normal findings.")
+    assert request.interpretationNotes == "Normal findings."
+
+
+def test_confirmResultRequestWhitespaceOnlyNotesBecomeNone() -> None:
+    """Prevents a whitespace-only note from silently defeating the PDF's
+    "Pending review" fallback (a non-empty-but-blank string is truthy).
+    """
+    request = ConfirmResultRequest(interpretationNotes="   ")
+    assert request.interpretationNotes is None
+
+
+def test_confirmResultRequestStripsSurroundingWhitespace() -> None:
+    request = ConfirmResultRequest(interpretationNotes="  Normal findings.  ")
+    assert request.interpretationNotes == "Normal findings."
