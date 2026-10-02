@@ -36,6 +36,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from main import app
+from src.api.results import getNotifService
 from src.core.config import settings
 from src.core.database import getDb
 from src.models.analysis_result import AnalysisResult, ResultStatus
@@ -164,6 +165,8 @@ async def test_approveReturnEscalateRacingOnSameResultExactlyOneWins():
         yield _RacingFakeSession(shared, label, analysisResult, specimen)
 
     app.dependency_overrides[getDb] = _dbOverride
+    # The return, if it wins, notifies the MedTech; not what this test is about.
+    app.dependency_overrides[getNotifService] = lambda: MagicMock(notifyMedtechResultReturned=AsyncMock())
     try:
         with patch("src.core.rbac.isSessionActive", AsyncMock(return_value=True)):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -190,6 +193,7 @@ async def test_approveReturnEscalateRacingOnSameResultExactlyOneWins():
                 )
     finally:
         app.dependency_overrides.pop(getDb, None)
+        app.dependency_overrides.pop(getNotifService, None)
 
     responses = {
         "approve": approveResponse,

@@ -317,6 +317,7 @@ class TestNotificationService:
     @pytest.mark.asyncio
     async def test_notifyNeverRaises(self):
         db = AsyncMock()
+        db.begin_nested = MagicMock()  # an async context manager (the savepoint)
         db.execute = AsyncMock(side_effect=Exception("DB error"))
 
         _service = NotificationService(db)
@@ -329,14 +330,12 @@ class TestNotificationService:
     @pytest.mark.asyncio
     async def test_notifyInsertsCorrectly(self):
         db = AsyncMock()
-        # notify()'s insert doesn't touch the result; _push()'s push-token
-        # lookup does -- returning None here short-circuits _push() before
-        # it would otherwise attempt a real network call to Expo. AsyncMock's
-        # attribute chaining makes nested auto-created attributes AsyncMock
-        # too, so the result object must be pinned to a plain MagicMock
-        # explicitly or `.scalar_one_or_none()` returns an unawaited coroutine.
+        db.begin_nested = MagicMock()  # an async context manager (the savepoint)
+        # AsyncMock's attribute chaining makes nested auto-created attributes
+        # AsyncMock too, so the result object must be pinned to a plain
+        # MagicMock explicitly or `.scalar_one()` returns an unawaited
+        # coroutine. A mock session has no commit hooks, so no push is queued.
         db.execute = AsyncMock(return_value=MagicMock())
-        db.execute.return_value.scalar_one_or_none.return_value = None
 
         _service = NotificationService(db)
         userId = uuid.uuid4()

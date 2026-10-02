@@ -3,6 +3,44 @@
 ## Unreleased
 
 ### Fixed
+- **The apps couldn't show an unread badge, page past 50 notifications or filter
+  unread; a returned result never notified the MedTech; and a shared phone kept
+  getting the previous user's pushes (UROLENS-248, story UROLENS-168).**
+  - **`GET /notifications/unread-count`** → `{"unreadCount": n}`, all unread for the
+    bell badge. Before, the apps could only count the 50 they had loaded.
+  - **`GET /notifications`** takes optional `limit` (1–100, for the bell's preview),
+    `before` (a notification ID: returns the ones older than it, for the full page)
+    and `unreadOnly`. With none, it returns the same 50-newest plain list as before,
+    so existing clients are unaffected. Paging from someone else's notification is
+    404 `NOTIFICATION_NOT_FOUND`.
+  - **Mark one read** now answers 404 **`NOTIFICATION_NOT_FOUND`** (was the generic
+    `NOT_FOUND`) for a notification that isn't the caller's. Mark all read is
+    unchanged. Every route is still scoped to the caller's own user ID, for every
+    role, and all of them now have HTTP tests.
+  - **Returned results notify the MedTech** (`RESULT_RETURNED`, which the app already
+    handles): *"Result for sample SMP-… was returned for correction."* It goes to the
+    specimen's assigned MedTech (or whoever confirmed it). The supervisor's reason is
+    left out because pushes show on the lock screen; the app gets it through sync.
+    `AnalysisResult.medtechId` is never written, so it isn't used.
+  - **Pushes go out after the commit**, in one request, in the background. Before,
+    each push was sent before the transaction committed, one at a time with a 5 s
+    timeout, so a request could wait on Expo, and a rolled-back action could still be
+    announced. A rollback now drops its pushes. A failed notification insert runs in
+    a savepoint, so it no longer breaks the caller's transaction. The push data adds
+    `notification_id`, so tapping a push can mark it read.
+  - **One device, one user's pushes.** Registering a push token removes it from
+    anyone else who had it, and a **manual logout** clears the user's token (best
+    effort: logout still succeeds if this fails). An inactivity sign-out doesn't
+    clear it. `POST /users/push-token` now accepts only an Expo token (≤ 255
+    characters); anything else is 422.
+  - Route count 52 → 53. No migration. No new notification events beyond
+    `RESULT_RETURNED`. Deleting a notification is out of scope (UROLENS-168).
+  **Mobile (UROLENS-173):** use `unread-count` for the badge, `limit`/`before`/
+  `unreadOnly` for the preview and full page, mark read on a push tap with
+  `data.notification_id`, and add "mark all read". **Web (UROLENS-249/250):** the same
+  endpoints serve every role. **Merge note:** UROLENS-245 (#83) also changes
+  `POST /auth/logout`. Whichever merges second keeps the push token clearing on a plain
+  logout only, not on `reason: "INACTIVITY"`.
 - **"Keep me logged in for this shift" couldn't work, an active MedTech was signed
   out at exactly 60 minutes, and any staff role could log into the MedTech app
   (UROLENS-244).**

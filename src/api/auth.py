@@ -1,5 +1,6 @@
 """Staff login/logout/refresh routes."""
 import asyncio
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import (
@@ -11,6 +12,7 @@ from fastapi import (
     Response,
     status,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core import audit_logger
 from src.core.auth_service import (
@@ -27,11 +29,12 @@ from src.core.auth_service import (
     tokenExpiresAt,
     verifyPassword,
 )
+from src.core.database import getDb
 from src.core.enums import UserRole
 from src.core.rate_limit import clearLoginRateLimit, enforceLoginRateLimit
 from src.core.rbac import getCurrentUser
 from src.schemas.auth import LoginRequest, LoginResponse, TokenRefreshResponse
-from src.services import session_service
+from src.services import session_service, user_notifications_service
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -166,9 +169,18 @@ async def refresh(claims: dict = Depends(getCurrentUser)) -> TokenRefreshRespons
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: Request, claims: dict = Depends(getCurrentUser)):
-    """Close the authenticated staff session and record a `LOGOUT` audit entry."""
+async def logout(
+    request: Request,
+    claims: dict = Depends(getCurrentUser),
+    db: AsyncSession = Depends(getDb),
+) -> Response:
+    """Close the staff session, audit `LOGOUT`, and stop pushes to the user's device.
+
+    The device is forgotten on a manual logout only (UROLENS-248); see
+    `user_notifications_service.forgetPushToken`.
+    """
     ipAddress = request.client.host if request.client else "unknown"
     await closeSession(claims["session_id"])
     await audit_logger.logLogout(claims["user_id"], claims["session_id"], ipAddress)
+    await user_notifications_service.forgetPushToken(db, uuid.UUID(claims["user_id"]))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
