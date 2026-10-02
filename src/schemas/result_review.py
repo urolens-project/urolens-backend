@@ -19,6 +19,32 @@ from .patient_portal import PARTICLE_LABELS
 MAX_OVERRIDE_COUNT = 300
 
 
+class ConfirmResultRequest(BaseModel):
+    """Request body for confirming an analysis result. Entirely optional —
+    posting with no body is equivalent to omitting `interpretationNotes`
+    (UROLENS-156).
+    """
+
+    interpretationNotes: str | None = Field(default=None, max_length=2000)
+    """The MedTech's lab notes, written to `AnalysisResult.interpretation` at
+    confirm time — the single source for what the patient portal shows as
+    "Laboratory notes" and what the result PDF prints as its Interpretation
+    section. Write-once, MedTech-only: there is deliberately no
+    Supervisor-side edit path for this field."""
+
+    @field_validator("interpretationNotes")
+    @classmethod
+    def blankBecomesNone(cls, v: str | None) -> str | None:
+        """Whitespace-only input is treated the same as omitting the field
+        entirely, so it can't silently defeat the PDF's "Pending review"
+        fallback.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
+
 class ConfirmResultResponse(BaseModel):
     """Response shape for a successful result confirmation."""
 

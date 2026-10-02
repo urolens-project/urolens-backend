@@ -3,6 +3,38 @@
 ## Unreleased
 
 ### Fixed
+- **Patient result detail: "Laboratory notes" never populated, and "Analyzed
+  by" was always blank (UROLENS-156).**
+  - **Dead `interpretation` column, now writable.** `PatientResultService.
+    getResultDetail` reads `AnalysisResult.interpretation`, but nothing in the
+    confirm/approve/release flow ever wrote to it — every result PDF printed
+    "Pending review" (`pdf_service.py`'s existing fallback), regardless of
+    whether a MedTech actually had notes. `ResultConfirmationService.
+    confirmResult` now takes an optional `interpretationNotes` param, written
+    straight to `AnalysisResult.interpretation` at confirm time (same point
+    the MedTech already finalizes the result). Wired through a new, entirely
+    optional `ConfirmResultRequest` body on `POST /{id}/confirm`. The existing
+    read path in `getResultDetail` needed no change — it starts working
+    correctly on its own once the column has a writer. The PDF's "Pending
+    review" fallback is unchanged, now genuinely only for a result a MedTech
+    chose not to annotate.
+    - **Deliberately out of scope:** no Supervisor-side edit path for this
+      field. Single-source, MedTech-only, write-once at confirm — a separate,
+      future decision, not an oversight left over from this fix.
+  - **`analyzedBy` read from the dead `AnalysisResult.medtechName` column —
+    nothing writes it outside test fixtures.** Replaced with the same
+    `Specimen.medtechId` → `User.username` lookup `physician_result_service.
+    getResultDetail` and `ResultReviewService.getFullResult` already use for
+    their own result-detail endpoints — not a third, independently-drifting
+    implementation of the same lookup.
+  - Audited the rest of this endpoint's UAC while here: particle counts
+    already return raw per-type counts (not just a zero/non-zero flag) the
+    frontend can branch on; `PatientResultDetailResponse` was already
+    structurally confirmed to carry no raw Smart Diagnosis probability scores
+    (only the `smartDiagnosisUnavailable` boolean) regardless of what the
+    frontend chooses to display; the PDF's static disclaimer footer and the
+    access-boundary checks (ownership, not-yet-released) were already correct
+    and unchanged.
 - **Physician result detail could mislabel a MedTech's annotation note as the
   Supervisor's (UROLENS-154).** `PhysicianResultService.getResultDetail`'s
   `annotationNotes` query had no `ORDER BY` at all — `select(ResultReview.
