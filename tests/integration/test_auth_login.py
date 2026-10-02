@@ -27,6 +27,7 @@ from httpx import ASGITransport, AsyncClient
 
 from main import app
 from src.core.auth_service import decodeJwt, hashPassword
+from src.core.auth_service import isSessionActive as _realIsSessionActive
 
 # ── Fake Supabase (in-memory, stateful) ──────────────────────────────────────
 
@@ -389,3 +390,145 @@ async def test_login11_unknownUsernameCostsOneBcryptCheckLikeAWrongPassword(clie
 
     assert resp.status_code == 401
     spend.assert_awaited_once_with("guess")
+
+
+# ── UROLENS-165: blank-field validation + inactive-account message ordering ──
+
+@pytest.mark.asyncio
+async def test_login12_blankUsernameRejectedAtSchemaLevel(client):
+    """Previously an empty username passed straight through to the real
+    login flow (a DB lookup, then the generic 401) instead of being
+    rejected as a validation error naming the field.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "", "password": "irrelevant"})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "username" in resp.json()["error"]["details"]
+
+
+@pytest.mark.asyncio
+async def test_login13_whitespaceOnlyPasswordRejectedAtSchemaLevel(client):
+    """`min_length=1` alone lets a string of spaces through — the
+    not-blank validator is what actually catches this case.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "   "})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "password" in resp.json()["error"]["details"]
+
+
+@pytest.mark.asyncio
+async def test_login14_inactiveAccountWithWrongPasswordStillGetsInactiveMessage(client):
+    """The bug: the inactive check used to run only after a wrong-password
+    guess had already raised the generic 401, so an inactive account's
+    specific message never surfaced unless the password happened to be
+    right. Now it's checked the same way as the lockout check — regardless
+    of whether the password was also wrong.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, is_active=False)
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "definitely-wrong"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "ACCOUNT_INACTIVE"
+    # A wrong guess against an inactive account still counts against the
+    # failed-attempts counter, same as any other wrong guess (explicit
+    # product decision — not a silent behavior change).
+    updated = fakeSb.store["users"][0]
+    assert updated["failed_attempts"] == 1
+
+
+# ── UROLENS-167: server-side inactivity-based session expiration ────────────
+#
+# tests/integration/conftest.py's `mockSessionActive` fixture (autouse, for
+# every test under tests/integration/) patches `src.core.rbac.isSessionActive`
+# to always return True, so the rest of this file's tests don't need a real
+# `sessions` row for routes that merely require *some* authenticated caller.
+# These three tests are specifically about is_session_active's own inactivity
+# logic, so they restore the real implementation around the request that
+# needs to exercise it.
+
+@pytest.mark.asyncio
+async def test_login15_idleSessionPastItsRoleTimeoutIsRejectedOnNextRequest(client):
+    """The backend half of inactivity enforcement: a session idle past its
+    role's timeout is rejected on the next authenticated request even
+    though its JWT itself hasn't expired yet -- not just a frontend timer a
+    modified/non-UI client could ignore.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="SUPERVISOR")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+
+    # Simulate 31 minutes of inactivity -- SUPERVISOR's timeout is 30.
+    session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        resp = await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert session["is_active"] is False  # revoked by the same check, not left dangling
+
+
+@pytest.mark.asyncio
+async def test_login16_medtechGetsTheLongerSixtyMinuteIdleTimeout(client):
+    """31 minutes idle would already expire SUPERVISOR (above) but must
+    still be well inside MedTech's own, longer window.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="MEDTECH")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+
+    session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        resp = await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 204
+    assert session["is_active"] is False  # the logout itself closed it, not the idle check
+
+
+@pytest.mark.asyncio
+async def test_login17_activityTouchesTheSessionSoARealRequestExtendsIt(client):
+    """A request well within the timeout updates last_activity_at -- the
+    backend side of "activity resets the inactivity timer".
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="SUPERVISOR")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+    session = fakeSb.store["sessions"][0]
+    originalActivity = session["last_activity_at"]
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert session["last_activity_at"] != originalActivity
+    assert session["last_activity_at"] is not None
