@@ -71,12 +71,31 @@ def _makeSpecimen() -> Specimen:
 
 
 def _makeDbMock(getSideEffect: list) -> AsyncMock:
-    """db.get(Model, id) returns the next item in get_side_effect, in call order."""
+    """db.get(Model, id) returns the next item in get_side_effect, in call
+    order. db.execute defaults to a winning conditional UPDATE (rowcount=1),
+    matching the non-race happy path — a test simulating a lost race
+    overrides db.execute itself.
+    """
     db = AsyncMock()
     db.get = AsyncMock(side_effect=getSideEffect)
     db.add = MagicMock()
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    executeResult = MagicMock()
+    executeResult.rowcount = 1
+    db.execute = AsyncMock(return_value=executeResult)
     return db
+
+
+def _compiledTransitionStatement(db: AsyncMock) -> str:
+    """The compiled SQL of the conditional-UPDATE transition statement
+    approve/return/escalate issue via `_transitionIfPending` — the literal
+    replacement for asserting on a mutated ORM attribute, since the new
+    race-safe implementation no longer sets `.status` directly on the
+    in-memory object.
+    """
+    stmt = db.execute.call_args[0][0]
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
 
 @pytest.mark.asyncio
@@ -92,7 +111,9 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
     _service = ResultReviewService(db=db)
     response = await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
 
-    assert result.status == ResultStatus.APPROVED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='APPROVED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert specimen.status == "COMPLETED"
     assert specimen.completedAt is not None
     assert response["resultId"] == RESULT_ID
@@ -118,7 +139,9 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     _service = ResultReviewService(db=db)
     response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
 
-    assert result.status == ResultStatus.RETURNED_FOR_CORRECTION
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='RETURNED_FOR_CORRECTION'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
 
@@ -144,7 +167,9 @@ async def test_escalateResultTransitionsStatusAndRecordsPath():
         RESULT_ID, SUPERVISOR_ID, escalationPath="MARK_CRITICAL", escalationNote="Urgent"
     )
 
-    assert result.status == ResultStatus.CRITICAL_ESCALATED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='CRITICAL_ESCALATED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.CRITICAL_ESCALATED.value
     assert response["escalationPath"] == "MARK_CRITICAL"
@@ -309,7 +334,8 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     readDb.execute = AsyncMock(
         side_effect=[
             _makeScalarsResult([]),  # manual_overrides
-            _makeScalarOneResult(savedReview),  # latest ResultReview
+            _makeScalarsResult([savedReview]),  # reviews (one, by the supervisor)
+            _makeScalarsResult([]),  # reviewer role lookup (unresolved -> "")
             _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
@@ -317,8 +343,10 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     _readService = ResultReviewService(db=readDb)
     detail = await _readService.getFullResult(RESULT_ID)
 
-    assert detail["spatialAnnotations"] == payload
-    assert detail["annotationNotes"] == "Possible cast cluster, upper-left quadrant"
+    [annotation] = detail["annotations"]
+    assert annotation["spatialAnnotations"] == payload
+    assert annotation["annotationNotes"] == "Possible cast cluster, upper-left quadrant"
+    assert annotation["reviewedBy"] == SUPERVISOR_ID
 
 
 @pytest.mark.asyncio
@@ -402,9 +430,9 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
     db.get = AsyncMock(side_effect=[ar, specimen])  # AnalysisResult, then Specimen
     db.execute = AsyncMock(
         side_effect=[
-            _makeScalarsResult([]),       # manual_overrides
-            _makeScalarOneResult(None),   # latest ResultReview
-            _makeScalarOneResult(None),   # smart_diagnosis_output
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
 
@@ -413,6 +441,7 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
 
     assert detail["resultId"] == RESULT_ID
     assert detail["manualOverrides"] == []
+    assert detail["annotations"] == []
     assert detail["medtechName"] == ""
     assert detail["imageUrl"] is None
     assert detail["smartDiagnosisUnavailable"] is True  # no attached output
@@ -448,9 +477,9 @@ async def test_getFullResultGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
     db.get = AsyncMock(side_effect=[ar, specimen, image])  # AnalysisResult, Specimen, Image
     db.execute = AsyncMock(
         side_effect=[
-            _makeScalarsResult([]),       # manual_overrides
-            _makeScalarOneResult(None),   # latest ResultReview
-            _makeScalarOneResult(None),   # smart_diagnosis_output
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
     bucket = MagicMock()
@@ -600,7 +629,7 @@ async def test_getFullResultReturnsPatientSex() -> None:
         side_effect=[
             _makeScalarOneResult(patient),  # Patient lookup
             _makeScalarsResult([]),  # manual_overrides
-            _makeScalarOneResult(None),  # latest ResultReview
+            _makeScalarsResult([]),  # reviews (none)
             _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
@@ -631,7 +660,7 @@ async def test_getFullResultIncludesSampleUidFromSpecimen() -> None:
     db.execute = AsyncMock(
         side_effect=[
             _makeScalarsResult([]),  # manual_overrides
-            _makeScalarOneResult(None),  # latest ResultReview
+            _makeScalarsResult([]),  # reviews (none)
             _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
@@ -641,6 +670,109 @@ async def test_getFullResultIncludesSampleUidFromSpecimen() -> None:
 
     assert detail["sampleUid"] == "SMP-20260928-12345"
     assert detail["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getFullResultSurfacesEachReviewersAnnotationSeparately() -> None:
+    """A MedTech's and a Supervisor's annotations on the same result are
+    independent `ResultReview` rows (keyed by resultId + reviewedBy) — both
+    must be surfaced, attributed by role, not collapsed to whichever was
+    saved most recently.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    medtechId = uuid.uuid4()
+    medtechReview = MagicMock(spec=ResultReview)
+    medtechReview.reviewedBy = medtechId
+    medtechReview.annotationNotes = "Looks like a cast cluster"
+    medtechReview.spatialAnnotations = None
+    medtechReview.updatedAt = datetime(2026, 1, 1, tzinfo=UTC)
+
+    supervisorReview = MagicMock(spec=ResultReview)
+    supervisorReview.reviewedBy = SUPERVISOR_ID
+    supervisorReview.annotationNotes = "Confirmed, escalating"
+    supervisorReview.spatialAnnotations = [{"id": "a1", "x": 1, "y": 2, "particleType": "urinary_casts"}]
+    supervisorReview.updatedAt = datetime(2026, 1, 2, tzinfo=UTC)
+
+    medtechUser = MagicMock(spec=User)
+    medtechUser.userId = medtechId
+    medtechUser.role = "MEDTECH"
+    supervisorUser = MagicMock(spec=User)
+    supervisorUser.userId = SUPERVISOR_ID
+    supervisorUser.role = "SUPERVISOR"
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([medtechReview, supervisorReview]),  # reviews, oldest first
+            _makeScalarsResult([medtechUser, supervisorUser]),  # reviewer role lookup
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    annotationsByReviewer = {a["reviewedBy"]: a for a in detail["annotations"]}
+    assert len(annotationsByReviewer) == 2
+
+    medtechAnnotation = annotationsByReviewer[medtechId]
+    assert medtechAnnotation["reviewerRole"] == "MEDTECH"
+    assert medtechAnnotation["annotationNotes"] == "Looks like a cast cluster"
+    assert medtechAnnotation["spatialAnnotations"] is None
+
+    supervisorAnnotation = annotationsByReviewer[SUPERVISOR_ID]
+    assert supervisorAnnotation["reviewerRole"] == "SUPERVISOR"
+    assert supervisorAnnotation["annotationNotes"] == "Confirmed, escalating"
+    assert supervisorAnnotation["spatialAnnotations"] == [
+        {"id": "a1", "x": 1, "y": 2, "particleType": "urinary_casts"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_getFullResultUnknownReviewerFallsBackToEmptyRole() -> None:
+    """A `reviewedBy` id with no matching `User` row falls back to `""`,
+    mirroring `overriddenByName`'s fallback for the same situation.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.imageId = None
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+
+    unknownReviewerId = uuid.uuid4()
+    review = MagicMock(spec=ResultReview)
+    review.reviewedBy = unknownReviewerId
+    review.annotationNotes = "Notes from a deleted account"
+    review.spatialAnnotations = None
+    review.updatedAt = datetime(2026, 1, 1, tzinfo=UTC)
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([review]),
+            _makeScalarsResult([]),  # reviewer role lookup finds nothing
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    [annotation] = detail["annotations"]
+    assert annotation["reviewerRole"] == ""
 
 
 # ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──

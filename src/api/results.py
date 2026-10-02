@@ -34,6 +34,7 @@ from ..schemas.result_review import (
     ApprovedTodayListResponse,
     ApproveRequest,
     ApproveResponse,
+    ConfirmResultRequest,
     ConfirmResultResponse,
     EscalatedListResponse,
     EscalateRequest,
@@ -116,14 +117,19 @@ async def getResultReviewService(
 async def confirmResult(
     id: uuid.UUID,
     request: Request,
+    body: ConfirmResultRequest | None = None,
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
-    """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
+    """Confirm an analysis result. Triggers Smart Diagnosis automatically.
+    Requires MEDTECH role. `interpretationNotes` in the (optional) body is
+    the MedTech's lab notes — see `ResultConfirmationService.confirm_result`.
+    """
     return await _service.confirmResult(
         resultId=id,
         medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
+        interpretationNotes=body.interpretationNotes if body else None,
     )
 
 

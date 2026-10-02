@@ -15,7 +15,12 @@ from ..core.exceptions import (
 )
 from ..models.analysis_result import AnalysisResult
 from ..models.manual_override import ManualOverride
-from .specimen_access import getAssignedSpecimen, isMedtech, requireResultEditable
+from .specimen_access import (
+    getAssignedSpecimen,
+    isMedtech,
+    requireResultEditable,
+    requireSpecimenNotRejected,
+)
 
 
 class ManualOverrideService:
@@ -76,7 +81,8 @@ class ManualOverrideService:
                 a result whose specimen no longer exists.
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech calls on
                 another MedTech's specimen.
-            ConflictException: `RESULT_NOT_EDITABLE`, if the result isn't in
+            ConflictException: `SPECIMEN_REJECTED`, if a MedTech calls on a
+                rejected specimen; `RESULT_NOT_EDITABLE`, if the result isn't in
                 a status the caller's role may override.
         """
         result = await self._getResult(resultId)
@@ -84,7 +90,8 @@ class ManualOverrideService:
         if not isSupervisor:
             # Ownership before any state check, so a non-owner learns nothing;
             # then re-read under the specimen lock (see getAssignedSpecimen).
-            await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+            specimen = await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+            requireSpecimenNotRejected(specimen)
             result = await self._getResult(resultId, fresh=True)
         requireResultEditable(result, isSupervisor)
 

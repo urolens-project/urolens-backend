@@ -64,7 +64,11 @@ def _token(sessionId: str, sessionStart: datetime, exp: datetime, role: str = "M
 
 def _activeSession(fakeSb: FakeSupabase) -> str:
     sessionId = str(uuid.uuid4())
-    fakeSb.store.setdefault("sessions", []).append({"session_id": sessionId, "is_active": True})
+    now = datetime.now(UTC).isoformat()
+    # Since UROLENS-167 a session needs an activity time, or it counts as idle.
+    fakeSb.store.setdefault("sessions", []).append(
+        {"session_id": sessionId, "is_active": True, "login_at": now, "last_activity_at": now, "user_role": "MEDTECH"}
+    )
     return sessionId
 
 

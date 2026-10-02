@@ -71,18 +71,14 @@ async def receiveSpecimenEndpoint(
 async def rejectSpecimenEndpoint(
     specimen_id: UUID,
     body: SpecimenRejectRequest,
+    request: Request,
     currentUser: dict = Depends(_medtech),
     db: AsyncSession = Depends(getDb),
-):
-    """Ported from app/api/specimens.py + app/services/specimen_service.py
-    (consolidation plan row 9 / Track A2 reconciliation). Originally had no
-    route-level role gate — ownership was checked inside the service only,
-    which the standards skill's rule 2 forbids. Now gated at the route (rule
-    2) in addition to the ownership check the service still performs.
-    """
+) -> SpecimenRejectResponse:
+    """Reject a specimen assigned to the calling MedTech; see `specimen_service.rejectSpecimen`."""
     userId = uuid.UUID(currentUser["user_id"])
     return await specimen_service.rejectSpecimen(
-        db, specimen_id, userId, body.reasonCode, body.freeTextNote
+        db, specimen_id, userId, body.reasonCode, body.freeTextNote, request
     )
 
 

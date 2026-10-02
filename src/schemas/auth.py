@@ -14,8 +14,9 @@ class LoginRequest(BaseModel):
     """Request body for staff login."""
 
     username: str = Field(..., min_length=1, max_length=150)
-    """Trimmed; blank is refused (UROLENS-244)."""
+    """Trimmed; blank is refused (UROLENS-165, UROLENS-244)."""
     password: str = Field(..., min_length=1, max_length=256)
+    """Never altered — a password's exact characters must reach `verifyPassword`."""
     keepSignedIn: bool = False
     """"Keep me signed in for this shift": the session lasts a whole shift
     (`settings.jwtExpiryHours`) instead of one access-token lifetime."""
@@ -26,10 +27,22 @@ class LoginRequest(BaseModel):
     @field_validator("username")
     @classmethod
     def usernameNotBlank(cls, v: str) -> str:
-        """Strip surrounding whitespace; reject a username that is only whitespace."""
+        """Strip surrounding whitespace; reject a whitespace-only username (UROLENS-165)."""
         if not v.strip():
-            raise ValueError("username must not be blank")
+            raise ValueError("must not be blank")
         return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def passwordNotBlank(cls, v: str) -> str:
+        """Reject a whitespace-only password (UROLENS-165) — `min_length=1`
+        alone lets a string of spaces through. Doesn't strip or otherwise
+        alter the value: a password's exact characters must reach
+        `verifyPassword` unchanged.
+        """
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
 
 
 class LoginResponse(BaseModel):
