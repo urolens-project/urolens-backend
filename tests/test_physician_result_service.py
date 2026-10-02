@@ -1,25 +1,28 @@
 """Unit tests — PhysicianResultService (SQLAlchemy AsyncSession implementation)
 
-No tests previously existed for this service (confirmed via full-repo grep
-as part of the Supabase-REST → SQLAlchemy migration plan). Covers normal
-list/detail behavior plus two distinct, separately-tested bundled fixes in
-`get_result_detail`:
+Covers normal list/detail behavior plus the bundled fixes in
+`get_result_detail`/`list_results`:
 
 1. Status-gate fix — same shape as PatientResultService's: a result that
    hasn't reached RELEASED must not expose full clinical detail, even to a
    physician who otherwise has access to it.
-2. Ownership-check gap fix — the prior `if patient_id:` guard skipped the
-   *entire* ownership check when a result's patient_id was falsy, letting
-   any physician retrieve any patient-less result with no check at all.
-   This is a different condition than the status gate (it's about *whose*
-   result it is, not *what state* it's in) even though both live in the
-   same method, so it gets its own test rather than being folded into the
-   status-gate test.
+2. Ownership-scoping fix (UROLENS-153) — both methods used to scope access by
+   "does this physician have *any* lab request for this result's patient",
+   which let a physician see/retrieve a result tied to a *different*
+   physician's lab request as long as they shared a patient. Now scoped by
+   this specific result's own lab request (`Specimen.labRequestId ->
+   LabRequest.physicianId`) instead — a patient with lab requests from two
+   different physicians is a normal case, not an edge case.
+3. "Requested On" source fix (UROLENS-153) — `PhysicianResultSummary.
+   createdAt` must come from `LabRequest.createdAt` (when the physician
+   submitted the request), not `AnalysisResult.createdAt` (when the AI engine
+   produced the result, well downstream of it) — proven with a seeded gap
+   between the two timestamps.
 """
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,16 +31,19 @@ from fastapi import HTTPException
 
 from src.models.analysis_result import AnalysisResult
 from src.models.image import Image
+from src.models.lab_request import LabRequest
 from src.models.patient import Patient
 from src.models.specimen import Specimen
 from src.services.physician_result_service import PhysicianResultService
 
 PHYSICIAN_ID = uuid.UUID("00000000-0000-0000-0000-000000000070")
+OTHER_PHYSICIAN_ID = uuid.UUID("00000000-0000-0000-0000-000000000076")
 PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000071")
 OTHER_PATIENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000072")
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000073")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000074")
 MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000075")
+LAB_REQUEST_ID = uuid.UUID("00000000-0000-0000-0000-000000000077")
 
 
 # ── Row builders ─────────────────────────────────────────────────────────────
@@ -59,13 +65,22 @@ def _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID, specimenI
     return ar
 
 
-def _makeSpecimen():
+def _makeSpecimen(labRequestId=LAB_REQUEST_ID):
     spec = MagicMock(spec=Specimen)
     spec.specimenId = SPECIMEN_ID
     spec.patientUid = "PAT-000071"
     spec.patientName = ""
     spec.medtechId = None
+    spec.labRequestId = labRequestId
     return spec
+
+
+def _makeLabRequest(physicianId=PHYSICIAN_ID, labRequestId=LAB_REQUEST_ID, createdAt=None):
+    lr = MagicMock(spec=LabRequest)
+    lr.labRequestId = labRequestId
+    lr.physicianId = physicianId
+    lr.createdAt = createdAt or datetime.now(UTC)
+    return lr
 
 
 def _makePatient():
@@ -92,12 +107,12 @@ def _fakeRequest() -> MagicMock:
     return req
 
 
-def _makeDetailDb(getMap: dict, physicianPatientIds: set) -> AsyncMock:
-    """`db.get(Model, id)` backed by `getMap`. `db.execute()` is called three
-    times in `get_result_detail`'s happy path (physician-patient-id scoping,
-    SmartDiagnosisOutput lookup, ResultReview.annotation_notes lookup) — the
-    two DB-access-gate tests below never get past the first, so only that one
-    needs a real return value for them.
+def _makeDetailDb(getMap: dict) -> AsyncMock:
+    """`db.get(Model, id)` backed by `getMap`. `db.execute()` is called twice
+    in `get_result_detail`'s happy path (SmartDiagnosisOutput lookup,
+    ResultReview.annotation_notes lookup) — the access-gate tests below never
+    get past the ownership/status check, so neither needs a real return value
+    for them.
     """
     db = AsyncMock()
 
@@ -106,16 +121,13 @@ def _makeDetailDb(getMap: dict, physicianPatientIds: set) -> AsyncMock:
 
     db.get = AsyncMock(side_effect=_get)
 
-    physicianIdsResult = MagicMock()
-    physicianIdsResult.scalars.return_value.all.return_value = list(physicianPatientIds)
-
     sdoResult = MagicMock()
     sdoResult.scalars.return_value.all.return_value = []
 
     reviewResult = MagicMock()
     reviewResult.scalar_one_or_none.return_value = None
 
-    db.execute = AsyncMock(side_effect=[physicianIdsResult, sdoResult, reviewResult])
+    db.execute = AsyncMock(side_effect=[sdoResult, reviewResult])
     db.add = MagicMock()
     db.commit = AsyncMock()
     return db
@@ -140,12 +152,14 @@ async def test_getResultDetailReturnsFullDetailForOwnedReleasedResult():
     ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
     spec = _makeSpecimen()
     pat = _makePatient()
+    lr = _makeLabRequest(physicianId=PHYSICIAN_ID)
     getMap = {
         (AnalysisResult, RESULT_ID): ar,
         (Specimen, SPECIMEN_ID): spec,
+        (LabRequest, LAB_REQUEST_ID): lr,
         (Patient, PATIENT_ID): pat,
     }
-    db = _makeDetailDb(getMap, physicianPatientIds={PATIENT_ID})
+    db = _makeDetailDb(getMap)
     auditLogger = _makeAuditLogger()
     service = PhysicianResultService(db=db, auditLogger=auditLogger)
 
@@ -170,10 +184,11 @@ async def test_getResultDetailGivesTheImageAsAShortLivedSignedUrlNotAPublicOne()
     getMap = {
         (AnalysisResult, RESULT_ID): ar,
         (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=PHYSICIAN_ID),
         (Patient, PATIENT_ID): _makePatient(),
         (Image, ar.imageId): SimpleNamespace(storageKey=storageKey),
     }
-    db = _makeDetailDb(getMap, physicianPatientIds={PATIENT_ID})
+    db = _makeDetailDb(getMap)
     bucket = MagicMock()
     bucket.create_signed_url = AsyncMock(return_value={"signedURL": signedUrl, "signedUrl": signedUrl})
     fakeSb = MagicMock()
@@ -205,7 +220,12 @@ async def test_getResultDetailRaises403ForOwnedButNotYetReleasedResult(badStatus
     legitimate access to (their own patient) before it's RELEASED.
     """
     ar = _makeAnalysisResult(resultStatus=badStatus, patientId=PATIENT_ID)
-    db = _makeDetailDb({(AnalysisResult, RESULT_ID): ar}, physicianPatientIds={PATIENT_ID})
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=PHYSICIAN_ID),
+    }
+    db = _makeDetailDb(getMap)
     auditLogger = _makeAuditLogger()
     service = PhysicianResultService(db=db, auditLogger=auditLogger)
 
@@ -218,16 +238,44 @@ async def test_getResultDetailRaises403ForOwnedButNotYetReleasedResult(badStatus
     db.commit.assert_not_awaited()
 
 
-# ── getResultDetail — ownership-check gap fix (security-relevant, distinct) ──
+# ── getResultDetail — lab-request-level ownership scoping (UROLENS-153) ─────
+
+@pytest.mark.asyncio
+async def test_getResultDetailRaises403WhenResultBelongsToADifferentPhysiciansLabRequest():
+    """The core UROLENS-153 bug: a patient can have lab requests from more
+    than one physician. A result for this patient, tied to a lab request
+    *another* physician submitted, must be denied to this physician even
+    though they do share a patient — the prior patient-level scoping let this
+    through.
+    """
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=OTHER_PHYSICIAN_ID),
+    }
+    db = _makeDetailDb(getMap)
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    with pytest.raises(HTTPException) as excInfo:
+        await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
+
+    assert excInfo.value.status_code == 403
+    assert excInfo.value.errorCode == "ACCESS_DENIED"
+
 
 @pytest.mark.asyncio
 async def test_getResultDetailRaises403WhenPatientNotInPhysicianScope():
     """Baseline ownership check — a result for a patient outside this
-    physician's own lab-request-linked patients must still be denied
-    (unchanged behavior, kept as a control for the falsy-patient_id test below).
+    physician's own lab-request-linked patients must still be denied.
     """
     ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=OTHER_PATIENT_ID)
-    db = _makeDetailDb({(AnalysisResult, RESULT_ID): ar}, physicianPatientIds={PATIENT_ID})
+    getMap = {
+        (AnalysisResult, RESULT_ID): ar,
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianId=OTHER_PHYSICIAN_ID),
+    }
+    db = _makeDetailDb(getMap)
     service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
 
     with pytest.raises(HTTPException) as excInfo:
@@ -237,31 +285,33 @@ async def test_getResultDetailRaises403WhenPatientNotInPhysicianScope():
 
 
 @pytest.mark.asyncio
-async def test_getResultDetailRaises403WhenPatientIdIsFalsy():
-    """The bug: `if patient_id:` used to guard the *entire* ownership check,
-    so a result with no patient_id at all skipped the check completely and
-    was returned to any physician. Now the check always runs, and a falsy
-    patient_id is treated as "not this physician's patient" — denied, not
+async def test_getResultDetailRaises403WhenResultHasNoSpecimen():
+    """A result with no specimen (and therefore no traceable lab request)
+    can't belong to any physician's own lab requests either — denied, not
     silently allowed through.
     """
-    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=None)
-    db = _makeDetailDb({(AnalysisResult, RESULT_ID): ar}, physicianPatientIds={PATIENT_ID})
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID, specimenId=None)
+    db = _makeDetailDb({(AnalysisResult, RESULT_ID): ar})
     service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
 
     with pytest.raises(HTTPException) as excInfo:
         await service.getResultDetail(RESULT_ID, PHYSICIAN_ID, _fakeRequest())
 
     assert excInfo.value.status_code == 403
+    assert excInfo.value.errorCode == "ACCESS_DENIED"
 
 
 # ── listResults — normal behavior + placeholder status ───────────────────────
 
 @pytest.mark.asyncio
-async def test_listResultsReturnsEmptyWhenPhysicianHasNoPatients():
+async def test_listResultsReturnsEmptyWhenNoMatchingResults():
+    countResult = MagicMock()
+    countResult.scalar_one.return_value = 0
+    pageResult = MagicMock()
+    pageResult.all.return_value = []
+
     db = AsyncMock()
-    noPatientIds = MagicMock()
-    noPatientIds.scalars.return_value.all.return_value = []
-    db.execute = AsyncMock(return_value=noPatientIds)
+    db.execute = AsyncMock(side_effect=[countResult, pageResult])
     service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
 
     result = await service.listResults(PHYSICIAN_ID, page=1, pageSize=20)
@@ -270,13 +320,11 @@ async def test_listResultsReturnsEmptyWhenPhysicianHasNoPatients():
     assert result.total == 0
     assert result.page == 1
     assert result.pageSize == 20
+    assert db.execute.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_listResultsShowsPlaceholderForUnreleasedRows():
-    physicianIdsResult = MagicMock()
-    physicianIdsResult.scalars.return_value.all.return_value = [PATIENT_ID]
-
     countResult = MagicMock()
     countResult.scalar_one.return_value = 2
 
@@ -284,7 +332,10 @@ async def test_listResultsShowsPlaceholderForUnreleasedRows():
     releasedRow = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
     releasedRow.resultId = uuid.uuid4()
     pageResult = MagicMock()
-    pageResult.scalars.return_value.all.return_value = [pendingRow, releasedRow]
+    pageResult.all.return_value = [
+        (pendingRow, datetime.now(UTC)),
+        (releasedRow, datetime.now(UTC)),
+    ]
 
     specResult = MagicMock()
     specResult.scalars.return_value.all.return_value = [_makeSpecimen()]
@@ -293,9 +344,7 @@ async def test_listResultsShowsPlaceholderForUnreleasedRows():
     patResult.scalars.return_value.all.return_value = [_makePatient()]
 
     db = AsyncMock()
-    db.execute = AsyncMock(
-        side_effect=[physicianIdsResult, countResult, pageResult, specResult, patResult]
-    )
+    db.execute = AsyncMock(side_effect=[countResult, pageResult, specResult, patResult])
     service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
 
     result = await service.listResults(PHYSICIAN_ID, page=1, pageSize=20)
@@ -304,3 +353,60 @@ async def test_listResultsShowsPlaceholderForUnreleasedRows():
     assert byId[str(pendingRow.resultId)].status == "PENDING"
     assert byId[str(releasedRow.resultId)].status == "RELEASED"
     assert result.total == 2
+
+
+@pytest.mark.asyncio
+async def test_listResultsRequestedOnReflectsLabRequestNotAnalysisResult():
+    """UROLENS-153: `createdAt` on each item is "Requested On" — must come
+    from `LabRequest.createdAt`, not `AnalysisResult.createdAt`. Seeded with a
+    real gap between the two (the lab request predates the AI-produced
+    result by 3 days) so a bug sourcing the wrong column fails loudly instead
+    of coincidentally matching.
+    """
+    ar = _makeAnalysisResult(resultStatus="RELEASED", patientId=PATIENT_ID)
+    labRequestCreatedAt = ar.createdAt - timedelta(days=3)
+
+    countResult = MagicMock()
+    countResult.scalar_one.return_value = 1
+    pageResult = MagicMock()
+    pageResult.all.return_value = [(ar, labRequestCreatedAt)]
+    specResult = MagicMock()
+    specResult.scalars.return_value.all.return_value = [_makeSpecimen()]
+    patResult = MagicMock()
+    patResult.scalars.return_value.all.return_value = [_makePatient()]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[countResult, pageResult, specResult, patResult])
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.listResults(PHYSICIAN_ID, page=1, pageSize=20)
+
+    assert result.items[0].createdAt == labRequestCreatedAt.isoformat()
+    assert result.items[0].createdAt != ar.createdAt.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_listResultsCountAndPageQueriesScopeOnLabRequestPhysicianId():
+    """UROLENS-153: scoping must be `LabRequest.physician_id == physician_id`
+    on the result's own lab request — not a separate "which patients does
+    this physician have any lab request for" pre-query. Checked structurally
+    on the compiled SQL (both the count and page statements), and confirms
+    only two round trips happen for an empty result page — no N+1 fan-out
+    before the scoping filter is even applied.
+    """
+    countResult = MagicMock()
+    countResult.scalar_one.return_value = 0
+    pageResult = MagicMock()
+    pageResult.all.return_value = []
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[countResult, pageResult])
+    service = PhysicianResultService(db=db, auditLogger=_makeAuditLogger())
+
+    await service.listResults(PHYSICIAN_ID, page=1, pageSize=20)
+
+    assert db.execute.await_count == 2
+    for stmt in (db.execute.await_args_list[0].args[0], db.execute.await_args_list[1].args[0]):
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "lab_requests.physician_id" in compiled
+        assert PHYSICIAN_ID.hex in compiled.replace("-", "")
