@@ -3,6 +3,32 @@
 ## Unreleased
 
 ### Fixed
+- **Physician results list showed when the AI engine produced a result, not
+  when the physician actually requested it — and both the list and the
+  single-result detail view scoped access by patient, not by the physician's
+  own lab request (UROLENS-153).**
+  - **"Requested On" source fix.** `PhysicianResultSummary.createdAt` was
+    `AnalysisResult.createdAt` — timestamped well downstream of when the
+    specimen was received, labeled, queued, and imaged. Now sourced from
+    `LabRequest.createdAt` via a single joined query (`AnalysisResult` →
+    `Specimen` → `LabRequest`), not a second per-row lookup. `confirmedAt`
+    (`AnalysisResult.confirmedAt`) is unchanged — it was already a separate,
+    correctly-sourced field.
+  - **Access-scoping fix, found while fixing the above, not originally
+    reported.** Both `listResults` and `getResultDetail` scoped access via
+    "does this physician have *any* lab request for this result's patient" —
+    a patient-level check. A patient with lab requests from two different
+    physicians is a normal case, not an edge case, and the prior check let a
+    physician see/retrieve a result tied to a *different* physician's lab
+    request as long as they shared at least one patient. Both methods now
+    scope by the result's own lab request (`LabRequest.physicianId`)
+    directly — the same join path as the "Requested On" fix for
+    `listResults`, and a `Specimen.labRequestId` → `LabRequest` lookup for
+    `getResultDetail`. A result with no specimen/lab request to trace is
+    denied, not silently allowed through.
+  - Status-collapsing (`RELEASED` vs. the `PENDING` placeholder for
+    everything earlier) and pagination/total-count were already correct —
+    confirmed, not changed.
 - **Physician-portal patient search never matched on Patient ID at all — only
   on name, via a 100-row Supabase-REST scan that decrypted every candidate
   (UROLENS-152).** `physician_service.searchPatients` was still the original

@@ -1,6 +1,6 @@
 """Physician-portal result listing/detail — SQLAlchemy `AsyncSession`
-implementation, scoped to results for patients the requesting physician has
-an associated lab request for.
+implementation, scoped to results whose own lab request was submitted by the
+requesting physician.
 """
 from __future__ import annotations
 
@@ -57,60 +57,82 @@ def _computeAge(dobStr: str | None) -> int | None:
 
 class PhysicianResultService:
     """Read-side operations for the physician portal's result list/detail
-    views, scoped to patients the requesting physician has a lab request for.
+    views, scoped to results whose own lab request was submitted by the
+    requesting physician.
     """
 
     def __init__(self, db: AsyncSession, auditLogger: AuditLogger) -> None:
         self.db = db
         self.auditLogger = auditLogger
 
-    async def _getPhysicianPatientIds(self, physicianId: uuid.UUID) -> set[uuid.UUID]:
-        # Distinct patient IDs from lab requests attributed to this physician —
-        # the access-scoping set used by list_results/get_result_detail.
-        stmt = select(LabRequest.patientId).where(LabRequest.physicianId == physicianId)
-        rows = (await self.db.execute(stmt)).scalars().all()
-        return {patientId for patientId in rows if patientId}
+    @staticmethod
+    def _ownResultsJoin():
+        # AnalysisResult -> Specimen -> LabRequest, the single join path both
+        # scoping (LabRequest.physicianId) and "Requested On" (LabRequest.
+        # createdAt) are read from — shared by the count and page queries so
+        # they can never disagree about which rows belong to this physician
+        # (UROLENS-153).
+        return (
+            select(AnalysisResult, LabRequest.createdAt)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .join(LabRequest, LabRequest.labRequestId == Specimen.labRequestId)
+        )
 
     async def listResults(
         self, physicianId: uuid.UUID, page: int, pageSize: int
     ) -> PhysicianResultListResponse:
-        """List analysis results for patients associated with this physician's
-        lab requests, newest-created first.
+        """List analysis results whose lab request was submitted by this
+        physician, newest-created first.
 
         A result that hasn't reached `RELEASED` yet is shown with the
         `"PENDING"` placeholder status rather than its raw internal workflow
         state — matching `get_result_detail`'s `RESULT_NOT_RELEASED` gate.
 
+        Scoped by `LabRequest.physicianId` directly (UROLENS-153) — not by
+        "does this physician have *any* lab request for this patient", which
+        a prior version used and which let a physician see a patient's
+        results from a *different* physician's lab request, as long as they
+        shared at least one patient. A patient with lab requests from two
+        different physicians is a normal, expected case, not an edge case.
+
         Args:
             physician_id: the authenticated physician; results are scoped to
-                patients from this physician's own lab requests.
+                this physician's own lab requests specifically.
             page: 1-indexed page number.
             page_size: rows per page.
 
         Returns:
             `items` (list of `PhysicianResultSummary`), `total` (matching row
-            count), `page`, and `page_size`.
+            count), `page`, and `page_size`. `createdAt` on each item is
+            `LabRequest.createdAt` ("Requested On" per the UAC) — when the
+            specimen was received, labeled, queued, and imaged all happen
+              after that, so `AnalysisResult.createdAt` (when the AI engine
+            produced the result) is well downstream of it. `confirmedAt`
+            stays `AnalysisResult.confirmedAt`, a distinct field.
         """
-        patientIds = await self._getPhysicianPatientIds(physicianId)
-        if not patientIds:
-            return PhysicianResultListResponse(items=[], total=0, page=page, pageSize=pageSize)
-
         offset = (page - 1) * pageSize
+        ownResults = self._ownResultsJoin().where(LabRequest.physicianId == physicianId)
 
-        countStmt = select(func.count()).select_from(AnalysisResult).where(
-            AnalysisResult.patientId.in_(patientIds)
+        countStmt = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .join(LabRequest, LabRequest.labRequestId == Specimen.labRequestId)
+            .where(LabRequest.physicianId == physicianId)
         )
         pageStmt = (
-            select(AnalysisResult)
-            .where(AnalysisResult.patientId.in_(patientIds))
+            ownResults
             .order_by(AnalysisResult.createdAt.desc())
             .offset(offset)
             .limit(pageSize)
         )
         total = (await self.db.execute(countStmt)).scalar_one()
-        arRows = (await self.db.execute(pageStmt)).scalars().all()
-        if not arRows:
+        rows = (await self.db.execute(pageStmt)).all()
+        if not rows:
             return PhysicianResultListResponse(items=[], total=total, page=page, pageSize=pageSize)
+
+        arRows = [row[0] for row in rows]
+        requestedAtByResult = {row[0].resultId: row[1] for row in rows}
 
         specimenIds = {r.specimenId for r in arRows if r.specimenId}
         dbPatientIds = {r.patientId for r in arRows if r.patientId}
@@ -138,6 +160,7 @@ class PhysicianResultService:
                 dob = None
             patientName = f"{first} {last}".strip() or (spec.patientName if spec else "") or ""
 
+            requestedAt = requestedAtByResult.get(ar.resultId)
             items.append(PhysicianResultSummary(
                 resultId=str(ar.resultId),
                 specimenId=str(ar.specimenId) if ar.specimenId else "",
@@ -149,7 +172,7 @@ class PhysicianResultService:
                 patientSex=pat.sex if pat else None,
                 status=ar.status if ar.status == "RELEASED" else _PENDING_PLACEHOLDER_STATUS,
                 confirmedAt=ar.confirmedAt.isoformat() if ar.confirmedAt else None,
-                createdAt=ar.createdAt.isoformat() if ar.createdAt else "",
+                createdAt=requestedAt.isoformat() if requestedAt else "",
             ))
 
         return PhysicianResultListResponse(items=items, total=total, page=page, pageSize=pageSize)
@@ -173,11 +196,10 @@ class PhysicianResultService:
             diagnosis (if attached), and image URL.
 
         Raises:
-            HTTPException: 404, if `result_id` doesn't exist. 403, if the
-                result's patient isn't among this physician's own patients
-                (including when the result has no `patient_id` at all — a
-                result unlinked to any patient can't belong to any
-                physician's own patient set either). 403
+            HTTPException: 404, if `result_id` doesn't exist. 403
+                (`ACCESS_DENIED`), if the result's own lab request wasn't
+                submitted by this physician — including when the result has
+                no specimen/lab request to trace at all. 403
                 (`RESULT_NOT_RELEASED`), if the result exists and is
                 accessible but hasn't reached `RELEASED` status yet.
         """
@@ -185,14 +207,21 @@ class PhysicianResultService:
         if ar is None:
             raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
 
-        # Ownership check: previously skipped entirely when patient_id was
-        # falsy (`if patient_id:` guarded the whole block), which let any
-        # physician retrieve any patient-less result with no check at all.
-        # Now always evaluated — a missing patient_id denies access instead
-        # of bypassing the check.
-        patientId = ar.patientId
-        physicianPatientIds = await self._getPhysicianPatientIds(physicianId)
-        if not patientId or patientId not in physicianPatientIds:
+        spec = await self.db.get(Specimen, ar.specimenId) if ar.specimenId else None
+
+        # Ownership check (UROLENS-153): previously scoped by "does this
+        # physician have *any* lab request for this result's patient", which
+        # let a physician retrieve a result tied to a *different* physician's
+        # lab request as long as they shared a patient. Scoped here by this
+        # specific result's own lab request instead — the same join path
+        # list_results uses — so a missing specimen/lab request or a
+        # mismatched physician_id both deny access.
+        labRequest = (
+            await self.db.get(LabRequest, spec.labRequestId)
+            if spec is not None and spec.labRequestId
+            else None
+        )
+        if labRequest is None or labRequest.physicianId != physicianId:
             exc = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
             exc.errorCode = "ACCESS_DENIED"
             raise exc
@@ -204,8 +233,6 @@ class PhysicianResultService:
             )
             exc.errorCode = "RESULT_NOT_RELEASED"
             raise exc
-
-        spec = await self.db.get(Specimen, ar.specimenId) if ar.specimenId else None
 
         sdoRows = (
             await self.db.execute(
@@ -221,7 +248,7 @@ class PhysicianResultService:
             )
         ).scalar_one_or_none()
 
-        pat = await self.db.get(Patient, patientId)
+        pat = await self.db.get(Patient, ar.patientId) if ar.patientId else None
 
         medtechName: str | None = None
         if spec is not None and spec.medtechId:
