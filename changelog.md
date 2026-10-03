@@ -3,6 +3,35 @@
 ## Unreleased
 
 ### Fixed
+- **Apps couldn't tell an inactivity sign-out from any other, didn't know the
+  server's idle limit, and every request rewrote the session row (UROLENS-245).**
+  Builds on UROLENS-167's server-side inactivity check (MedTech 60 min, others 30).
+  - **401 `SESSION_IDLE`** ("You were signed out due to inactivity. Please log in
+    again.") when the server ended the session for inactivity — on every later
+    request too, not just the first; a logout or revocation stays `SESSION_ENDED`.
+    Worked out from the session's existing `last_activity_at`/`logout_at` (closed
+    more than the idle limit after its last activity), so **no new migration**.
+  - **Audited:** the server writes `SESSION_TIMED_OUT` (`ended_by: "server"`) once,
+    when it ends an idle session (it was logged as nothing before).
+  - **The apps are told the limits:** login and refresh replies add
+    `idleTimeoutMinutes` (MedTech 60, others 30) and `idleWarningSeconds` (120), so
+    the apps stop hardcoding them (mobile and web both defaulted to 30).
+  - **The app can report its own inactivity sign-out:** `POST /auth/logout` takes an
+    optional `{"reason": "INACTIVITY"}`, recorded as `SESSION_TIMED_OUT`
+    (`ended_by: "client"`) instead of `LOGOUT`. No body = a normal logout.
+  - **Activity is written at most once a minute** per session instead of on every
+    request (the idle clock is accurate to within a minute).
+  - "Keep me signed in" sessions are signed out for inactivity too (decision for
+    UROLENS-245): keeping signed in means surviving an app restart, up to the shift.
+  **Deploy:** UROLENS-167's migration `0045` (`sessions.last_activity_at`) must be
+  applied for any of this to work — and per the live database's migration history,
+  run `alembic stamp` there first (see the UROLENS-220 deploy note) before any
+  `alembic upgrade`. **Mobile (UROLENS-175):** use `idleTimeoutMinutes` (MedTech is
+  now 60, the app defaults to 30) and `idleWarningSeconds`; persist the background
+  time (not in memory); send `reason: "INACTIVITY"` when signing out for
+  inactivity; show "signed out due to inactivity" on `SESSION_IDLE`; keep calling
+  `/auth/refresh` while the MedTech works offline, or the server sees them as idle.
+  **Web (UROLENS-246/247):** the same fields and codes are available.
 - **"Keep me logged in for this shift" couldn't work, an active MedTech was signed
   out at exactly 60 minutes, and any staff role could log into the MedTech app
   (UROLENS-244).**
