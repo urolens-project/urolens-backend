@@ -3,6 +3,25 @@
 ## Unreleased
 
 ### Fixed
+- **Migration `0037` (`patients.dedup_hash`) could not run on a database with
+  patients registered before PII encryption.** Its backfill read every patient with
+  the strict `decryptPii`, which raises `InvalidToken` on plaintext; the live database
+  has 8 such patients out of 38. It now reads through `decryptStoredPii`, so legacy
+  plaintext rows get the same hash the application computes for that person. A name
+  or date of birth that is missing, or is ciphertext the configured `ENCRYPTION_KEY`
+  can't decrypt, stops the migration with a message naming the patient UIDs before any
+  row is changed. The duplicate check (same name and date of birth) is unchanged.
+  The migration had not been applied anywhere, so editing it in place is safe.
+  **Deploy — the live database is behind its own version number.** Its
+  `alembic_version` is `0045`, but `0035` (`lab_requests.special_instructions`,
+  `test_type` widened to 255) and `0037` (`patients.dedup_hash`) were never applied:
+  an `alembic upgrade head` was run without the `alembic stamp 0034` the UROLENS-220
+  deploy note asks for, so only `0038`–`0045` ran. Until this is repaired, patient and
+  lab-request queries from this code fail there. After a backup, with the
+  deployment's `ENCRYPTION_KEY` and `DEDUP_HASH_KEY` in `.env`:
+  `alembic stamp 0034` → `alembic upgrade 0037` → `alembic stamp 0045` →
+  `python -m scripts.check_rls`. Do not re-run `0038`–`0045` (`0042`'s constraint
+  already exists).
 - **The apps couldn't show an unread badge, page past 50 notifications or filter
   unread; a returned result never notified the MedTech; and a shared phone kept
   getting the previous user's pushes (UROLENS-248, story UROLENS-168).**
