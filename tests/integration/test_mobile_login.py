@@ -26,7 +26,12 @@ from main import app
 from src.core import auth_service
 from src.core.auth_service import decodeJwt
 from src.core.config import settings
-from tests.integration.test_auth_login import FakeSupabase, auditEvents, seedUser
+from tests.integration.test_auth_login import (
+    FakeSupabase,
+    auditEvents,
+    seedUser,
+    standInDb,
+)
 
 PASSWORD = "correct-horse-battery-staple"
 
@@ -40,6 +45,7 @@ async def client():
         patch("src.core.auth_service.supabase", fakeSb),
         patch("src.core.audit_logger.supabase", fakeSb),
         patch("src.core.rbac.isSessionActive", auth_service.isSessionActive),
+        standInDb(),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             yield c, fakeSb

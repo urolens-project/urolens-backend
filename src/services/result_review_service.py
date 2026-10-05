@@ -50,6 +50,7 @@ from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .notification_service import NotificationService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
@@ -81,9 +82,15 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
-    def __init__(self, db: AsyncSession, auditLogger: AuditLogger | None = None) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        auditLogger: AuditLogger | None = None,
+        _notifService: NotificationService | None = None,
+    ) -> None:
         self.db = db
         self.auditLogger = auditLogger
+        self._notifService = _notifService or NotificationService(db=db)
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -819,11 +826,15 @@ class ResultReviewService:
     async def returnResult(
         self, resultId: uuid.UUID, userId: uuid.UUID, reason: str
     ) -> dict[str, Any]:
-        """Return a pending result to the MedTech for correction.
+        """Return a pending result to the MedTech for correction, and tell them.
+
+        The specimen's assigned MedTech is notified (`RESULT_RETURNED`) in the
+        same transaction; the push goes out after the commit (UROLENS-248).
 
         Args:
-            user_id: the authenticated supervisor recorded as `returned_by`.
-            reason: required free-text explanation for the return.
+            userId: the authenticated supervisor recorded as `returned_by`.
+            reason: required free-text explanation for the return. Not put in
+                the notification, which reaches the lock screen.
 
         Returns:
             A dict confirming the new status and `returned_at` timestamp.
@@ -834,11 +845,12 @@ class ResultReviewService:
                 `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
                 return, or escalate) won a race for it first.
         """
-        await self._requirePending(resultId)
+        result = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
         await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
+        await self._notifyMedtechOfReturn(resultId, result)
 
         await self.db.commit()
 
@@ -847,6 +859,19 @@ class ResultReviewService:
             "status": ResultStatus.RETURNED_FOR_CORRECTION.value,
             "returnedAt": now,
         }
+
+    async def _notifyMedtechOfReturn(self, resultId: uuid.UUID, result: AnalysisResult) -> None:
+        # The specimen's assigned MedTech has to correct it; whoever confirmed
+        # it is the fallback. `AnalysisResult.medtechId` is never written, so
+        # it can't be used (UROLENS-248).
+        specimen = await self.db.get(Specimen, result.specimenId)
+        medtechId = (specimen.medtechId if specimen is not None else None) or result.confirmedBy
+        if medtechId is None:
+            return
+        sampleUid = (specimen.sampleUid if specimen is not None else None) or str(result.specimenId)
+        await self._notifService.notifyMedtechResultReturned(
+            medtechId=medtechId, resultId=resultId, sampleUid=sampleUid
+        )
 
     # ── Escalate ──────────────────────────────────────────────────────────
 
