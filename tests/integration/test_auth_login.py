@@ -17,6 +17,8 @@ run for real.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -28,6 +30,7 @@ from httpx import ASGITransport, AsyncClient
 from main import app
 from src.core.auth_service import decodeJwt, hashPassword
 from src.core.auth_service import isSessionActive as _realIsSessionActive
+from src.core.database import getDb
 
 # ── Fake Supabase (in-memory, stateful) ──────────────────────────────────────
 
@@ -102,11 +105,29 @@ def fakeSb():
     return FakeSupabase()
 
 
+@contextmanager
+def standInDb() -> Iterator[AsyncMock]:
+    """A mock database session for the auth routes that use one — logout
+    forgets the user's push token (UROLENS-248).
+    """
+    db = AsyncMock()
+
+    async def _override():
+        yield db
+
+    app.dependency_overrides[getDb] = _override
+    try:
+        yield db
+    finally:
+        app.dependency_overrides.pop(getDb, None)
+
+
 @pytest_asyncio.fixture
 async def client(fakeSb):
     with (
         patch("src.core.auth_service.supabase", fakeSb),
         patch("src.core.audit_logger.supabase", fakeSb),
+        standInDb(),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             yield c, fakeSb

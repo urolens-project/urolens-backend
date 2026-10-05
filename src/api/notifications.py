@@ -1,18 +1,25 @@
-"""In-app notification routes and Expo push-token registration."""
+"""In-app notification routes and Expo push-token registration; see
+`services/user_notifications_service.py`.
+"""
 import uuid
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import getDb
-from ..core.exceptions import NotFoundException
 from ..core.rbac import getCurrentUser
-from ..models.notification import Notification
-from ..models.user import User
-from ..schemas.notifications import NotificationOut, PushTokenRequest
+from ..schemas.notifications import (
+    NotificationOut,
+    NotificationUnreadCountResponse,
+    PushTokenRequest,
+)
+from ..services import user_notifications_service
 
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
+
+# The default page keeps `GET /notifications` returning what it always has.
+_DEFAULT_PAGE_SIZE = 50
+_MAX_PAGE_SIZE = 100
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -26,19 +33,34 @@ router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
 @router.get("/notifications", response_model=list[NotificationOut])
 async def listNotifications(
+    limit: int = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
+    before: uuid.UUID | None = Query(default=None),
+    unreadOnly: bool = Query(default=False),
     currentUser: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
-):
-    """List the authenticated user's 50 most recent notifications, newest first."""
-    userId = uuid.UUID(currentUser["user_id"])
-    stmt = (
-        select(Notification)
-        .where(Notification.userId == userId)
-        .order_by(Notification.createdAt.desc())
-        .limit(50)
+) -> list[NotificationOut]:
+    """List the caller's notifications, newest first; see `user_notifications_service.listNotifications`."""
+    return await user_notifications_service.listNotifications(
+        db, uuid.UUID(currentUser["user_id"]), limit=limit, before=before, unreadOnly=unreadOnly
     )
-    result = await db.execute(stmt)
-    return result.scalars().all()
+
+
+@router.get("/notifications/unread-count", response_model=NotificationUnreadCountResponse)
+async def countUnreadNotifications(
+    currentUser: dict = Depends(getCurrentUser),
+    db: AsyncSession = Depends(getDb),
+) -> NotificationUnreadCountResponse:
+    """The bell badge; see `user_notifications_service.countUnreadNotifications`."""
+    return await user_notifications_service.countUnreadNotifications(db, uuid.UUID(currentUser["user_id"]))
+
+
+@router.patch("/notifications/read-all", status_code=204)
+async def markAllNotificationsRead(
+    currentUser: dict = Depends(getCurrentUser),
+    db: AsyncSession = Depends(getDb),
+) -> None:
+    """Mark all the caller's notifications read; see `user_notifications_service.markAllNotificationsRead`."""
+    await user_notifications_service.markAllNotificationsRead(db, uuid.UUID(currentUser["user_id"]))
 
 
 @router.patch("/notifications/{notification_id}/read", status_code=204)
@@ -46,42 +68,11 @@ async def markNotificationRead(
     notification_id: uuid.UUID,
     currentUser: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
-):
-    """Mark one of the authenticated user's own notifications read.
-
-    Raises:
-        HTTPException: 404, if `notification_id` doesn't exist or doesn't
-            belong to the caller.
-    """
-    userId = uuid.UUID(currentUser["user_id"])
-    stmt = (
-        update(Notification)
-        .where(
-            Notification.notificationId == notification_id,
-            Notification.userId == userId,
-        )
-        .values(is_read=True)
+) -> None:
+    """Mark one of the caller's notifications read; see `user_notifications_service.markNotificationRead`."""
+    await user_notifications_service.markNotificationRead(
+        db, uuid.UUID(currentUser["user_id"]), notification_id
     )
-    result = await db.execute(stmt)
-    if result.rowcount == 0:
-        raise NotFoundException(message="Notification not found.")
-    await db.commit()
-
-
-@router.patch("/notifications/read-all", status_code=204)
-async def markAllNotificationsRead(
-    currentUser: dict = Depends(getCurrentUser),
-    db: AsyncSession = Depends(getDb),
-):
-    """Mark all of the authenticated user's unread notifications read."""
-    userId = uuid.UUID(currentUser["user_id"])
-    stmt = (
-        update(Notification)
-        .where(Notification.userId == userId, Notification.isRead.is_(False))
-        .values(is_read=True)
-    )
-    await db.execute(stmt)
-    await db.commit()
 
 
 @router.post("/users/push-token", status_code=204)
@@ -89,15 +80,6 @@ async def registerPushToken(
     body: PushTokenRequest,
     currentUser: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
-):
-    """Register or update the authenticated user's Expo push token for
-    mobile push notifications.
-    """
-    userId = uuid.UUID(currentUser["user_id"])
-    stmt = (
-        update(User)
-        .where(User.userId == userId)
-        .values(expo_push_token=body.token)
-    )
-    await db.execute(stmt)
-    await db.commit()
+) -> None:
+    """Register the caller's device for pushes; see `user_notifications_service.registerPushToken`."""
+    await user_notifications_service.registerPushToken(db, uuid.UUID(currentUser["user_id"]), body.token)
