@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.audit_log import AuditLog
+from ..models.client_ip import clientIpOrNone
 from .config import settings
 from .supabase import supabase
 
@@ -91,7 +92,9 @@ class AuditLogger:
                 "entity_id": str(entityId),
                 "user_id": str(userId) if userId else None,
                 "detail_json": detailJson or {},
-                "ip_address": ipAddress,
+                # `inet` column: a placeholder such as "unknown" would be refused
+                # and the whole row lost, so it is sent as null instead.
+                "ip_address": clientIpOrNone(ipAddress),
             }).execute()
         except Exception:
             # Best-effort path: never break the caller (e.g. rbac's 401), but

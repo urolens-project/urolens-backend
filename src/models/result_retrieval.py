@@ -5,12 +5,13 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import INET, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
 from .base import Base
+from .client_ip import clientIpOrNone
 
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
@@ -40,7 +41,10 @@ class ResultRetrieval(Base):
     retrievedAt: Mapped[datetime] = mapped_column("retrieved_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    ipAddress: Mapped[str | None] = mapped_column("ip_address", Text, nullable=True)
+    ipAddress: Mapped[str | None] = mapped_column("ip_address", INET, nullable=True)
+    """`inet` in the database. Written as text; anything that isn't an IP address
+    is stored as NULL (see `clientIpOrNone`). Nothing reads it back today — the
+    driver would return an `ipaddress` object, not text."""
 
     analysisResult: Mapped[AnalysisResult] = relationship()
 
@@ -48,3 +52,8 @@ class ResultRetrieval(Base):
     def id(self) -> uuid.UUID:
         """Alias for `retrieval_id`, for callers expecting a generic `id` field."""
         return self.retrievalId
+
+    @validates("ipAddress")
+    def _cleanIpAddress(self, _key: str, value: object) -> str | None:
+        # Every write goes through here, so no caller can store a non-address.
+        return clientIpOrNone(value)
