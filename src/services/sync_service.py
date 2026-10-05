@@ -25,6 +25,8 @@ results request's URL, which fails once history grows (UROLENS-236).
 """
 from __future__ import annotations
 
+import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -41,6 +43,8 @@ from src.models.queue_assignment import QueueAssignment
 from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
+
+logger = logging.getLogger(__name__)
 
 # How long a finished sample stays on the MedTech's phone (RA 10173 data
 # minimization); older ones come from GET /results/medtech/history.
@@ -144,14 +148,31 @@ def _assignmentRow(a: QueueAssignment) -> dict[str, Any]:
     }
 
 
-def _overrideRow(o: ManualOverride) -> dict[str, Any]:
+def _number(value: str | float | None) -> float | None:
+    # Counts are text in the DB. One that isn't a finite number is unknown, not
+    # an error: early web builds saved a missing AI value as the text
+    # "undefined", and converting it blindly failed the whole sync with a 500.
+    try:
+        number = float(value)  # type: ignore[arg-type]  # None raises TypeError, handled below
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _overrideRow(o: ManualOverride) -> dict[str, Any] | None:
     # Values are numbers, as the app stores them; they're text in the DB.
+    # An override with no usable corrected value can't be applied, so it is left
+    # out (None); an unknown original value is sent as null.
+    correctedValue = _number(o.correctedValue)
+    if correctedValue is None:
+        logger.warning("Manual override %s has a non-numeric corrected value; left out of sync", o.overrideId)
+        return None
     return {
         "id": str(o.overrideId),
         "result_id": str(o.resultId),
         "parameter_name": o.parameterName,
-        "original_ai_value": float(o.originalAiValue),
-        "corrected_value": float(o.correctedValue),
+        "original_ai_value": _number(o.originalAiValue),
+        "corrected_value": correctedValue,
         "rationale": o.rationale,
         "medtech_id": str(o.medtechId),
         "overridden_at": _iso(o.overriddenAt),
@@ -341,7 +362,9 @@ async def pull(
         key as `"id"`. Specimens carry `patient_name` as `""` and
         `completed_at`; results carry `return_reason` (latest, when
         RETURNED_FOR_CORRECTION), `approved_at`, `released_at` and
-        `particle_classes` (the confirmed counts); overrides carry numbers.
+        `particle_classes` (the confirmed counts); overrides carry numbers,
+        with `original_ai_value` null when the stored one isn't a number, and
+        an override whose corrected value isn't a number is left out.
         `deleted` is only filled on a delta.
     """
     medtechId = uuid.UUID(userId)
@@ -355,7 +378,11 @@ async def pull(
     specimenRows = [_specimenRow(s) for s in specimens]
     resultRows = await _resultRows(db, results)
     assignmentRows = [_assignmentRow(a) for a in await _assignments(db, medtechId, cutoff, lastSyncedAt)]
-    overrideRows = [_overrideRow(o) for o in await _manualOverrides(db, medtechId, cutoff, lastSyncedAt)]
+    overrideRows = [
+        row
+        for o in await _manualOverrides(db, medtechId, cutoff, lastSyncedAt)
+        if (row := _overrideRow(o)) is not None
+    ]
     removed = (
         await _removals(db, medtechId, cutoff, lastSyncedAt)
         if lastSyncedAt is not None

@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Fixed
+- **A full `GET /sync/pull` failed with a 500 when one of the MedTech's results had a
+  manual override whose stored original value wasn't a number.** Early web builds
+  saved a missing AI value as the text `"undefined"` (3 overrides from 2026-05-27 on
+  the live database), and sync converted every stored value with `float()`
+  (UROLENS-227). Only a full sync hit them (first sync, after a reset, or after a
+  different user logs in on the phone), so one MedTech account could not sync at all.
+  Now a stored value that isn't a finite number is treated as unknown:
+  `original_ai_value` is sent as `null`, and an override whose **corrected** value
+  isn't a number is left out of the sync (it can't be applied), logged by override ID,
+  and not listed in the `SYNC_PULLED` audit row. The stored rows are not changed.
+  **Mobile (UROLENS-172):** `manualOverrides[].original_ai_value` can be `null`.
 - **Migration `0037` (`patients.dedup_hash`) could not run on a database with
   patients registered before PII encryption.** Its backfill read every patient with
   the strict `decryptPii`, which raises `InvalidToken` on plaintext; the live database
