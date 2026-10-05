@@ -40,6 +40,21 @@ first, confirm zero collisions among existing rows, only then add the
 no existing duplicates would abort the migration with a raw Postgres
 constraint-violation error instead of a legible message naming the
 conflicting patients.
+
+Legacy plaintext rows (fixed 2026-10-05): patients registered before PII
+encryption existed still hold plaintext names and dates of birth (8 of 38 on
+the live database, all with ISO dates). The backfill read every row with the
+strict `decryptPii`, which raises `InvalidToken` on plaintext, so the
+migration could not run there at all. It now reads through
+`decryptStoredPii`, which passes plaintext through unchanged, so those rows
+get the same hash the application computes for the same person. A value that
+is missing, or is ciphertext the configured `ENCRYPTION_KEY` can't decrypt,
+stops the migration with a message naming the patient UIDs before any row is
+changed, instead of hashing a wrong value.
+
+This migration had not been applied anywhere when it was changed: the live
+database's `alembic_version` passed it without running it (see the
+UROLENS-220 deploy note about `alembic stamp 0034`).
 """
 from collections.abc import Sequence
 
@@ -68,7 +83,7 @@ def _computeDedupHash(firstName: str, lastName: str, dateOfBirth: str) -> str:
 
 def upgrade() -> None:
     """Upgrade schema."""
-    from src.core.encryption import decryptPii
+    from src.core.encryption import decryptStoredPii
 
     op.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS dedup_hash VARCHAR(64)")
 
@@ -79,13 +94,28 @@ def upgrade() -> None:
 
     hashesByPatient: dict[str, str] = {}
     patientUidsByHash: dict[str, list[str]] = {}
-    for patientId, patientUid, firstNameEnc, lastNameEnc, dobEnc in rows:
-        firstName = decryptPii(firstNameEnc)
-        lastName = decryptPii(lastNameEnc)
-        dob = decryptPii(dobEnc)
+    unreadablePatientUids: list[str] = []
+    for patientId, patientUid, firstNameStored, lastNameStored, dobStored in rows:
+        # Legacy rows hold plaintext, which passes through; None means missing
+        # or ciphertext this ENCRYPTION_KEY can't decrypt.
+        firstName = decryptStoredPii(firstNameStored)
+        lastName = decryptStoredPii(lastNameStored)
+        dob = decryptStoredPii(dobStored)
+        if firstName is None or lastName is None or dob is None:
+            unreadablePatientUids.append(patientUid)
+            continue
         dedupHash = _computeDedupHash(firstName, lastName, dob)
         hashesByPatient[str(patientId)] = dedupHash
         patientUidsByHash.setdefault(dedupHash, []).append(patientUid)
+
+    if unreadablePatientUids:
+        raise RuntimeError(
+            "Cannot backfill patients.dedup_hash: "
+            f"{len(unreadablePatientUids)} patient record(s) have a name or date of birth that "
+            "is missing or can't be decrypted with the configured ENCRYPTION_KEY "
+            f"({unreadablePatientUids}). Check that ENCRYPTION_KEY is the deployment's key, or "
+            "correct these records, and re-run this migration. No rows were changed."
+        )
 
     collisions = {h: uids for h, uids in patientUidsByHash.items() if len(uids) > 1}
     if collisions:
