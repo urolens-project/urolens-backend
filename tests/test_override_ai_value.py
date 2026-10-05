@@ -352,6 +352,87 @@ async def test_aSyncCarryingOnlyOverridesIsStillAudited() -> None:
     db.commit.assert_awaited_once()
 
 
+# Early web builds saved a missing AI value as the text "undefined". Three such
+# overrides (2026-05-27) made every full sync for their MedTech fail with a 500.
+def _storedOverrideWith(overrideId: str, **fields: object) -> ManualOverride:
+    override = _storedOverride()
+    override.overrideId = uuid.UUID(overrideId)
+    for name, value in fields.items():
+        setattr(override, name, value)
+    return override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", ["undefined", "", "null", "NaN", "inf", "-inf", "seven", None])
+async def test_anOverrideWithANonNumericOriginalValueIsSentWithItUnknown(stored: str | None) -> None:
+    db = makeSyncDb(overrides=[_storedOverrideWith("00000000-0000-0000-0000-0000000002c2", originalAiValue=stored)])
+
+    pulled = await _syncPull(db)
+
+    [row] = pulled["payload"]["changes"]["manualOverrides"]["created"]
+    assert row["original_ai_value"] is None
+    assert row["corrected_value"] == 4.0
+    assert row["id"] == "00000000-0000-0000-0000-0000000002c2"
+
+
+@pytest.mark.asyncio
+async def test_oneBadOverrideDoesNotStopTheOthersFromSyncing() -> None:
+    good = _storedOverride()
+    badOriginal = _storedOverrideWith("00000000-0000-0000-0000-0000000002c2", originalAiValue="undefined")
+    db = makeSyncDb(overrides=[badOriginal, good])
+
+    pulled = await _syncPull(db)
+
+    rows = pulled["payload"]["changes"]["manualOverrides"]["created"]
+    assert [(r["id"][-3:], r["original_ai_value"], r["corrected_value"]) for r in rows] == [
+        ("2c2", None, 4.0),
+        ("2c1", 7.0, 4.0),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", ["undefined", "", "NaN", "inf", None])
+async def test_anOverrideWithNoUsableCorrectedValueIsLeftOutAndLogged(
+    stored: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    good = _storedOverride()
+    unusable = _storedOverrideWith("00000000-0000-0000-0000-0000000002c3", correctedValue=stored)
+    db = makeSyncDb(overrides=[unusable, good])
+
+    with caplog.at_level("WARNING", logger=sync_service.__name__):
+        pulled = await _syncPull(db)
+
+    rows = pulled["payload"]["changes"]["manualOverrides"]["created"]
+    assert [r["id"] for r in rows] == ["00000000-0000-0000-0000-0000000002c1"]
+    # Not sent, so not recorded as sent.
+    assert pulled["auditLogger"].record.await_args.kwargs["detailJson"]["override_ids"] == [
+        "00000000-0000-0000-0000-0000000002c1"
+    ]
+    [record] = caplog.records
+    assert "00000000-0000-0000-0000-0000000002c3" in record.getMessage()
+    assert "Recounted" not in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_aSyncOfOnlyUnusableOverridesSendsAndAuditsNothing() -> None:
+    unusable = _storedOverrideWith("00000000-0000-0000-0000-0000000002c3", correctedValue="undefined")
+    db = makeSyncDb(overrides=[unusable])
+
+    pulled = await _syncPull(db)
+
+    assert pulled["payload"]["changes"]["manualOverrides"]["created"] == []
+    pulled["auditLogger"].record.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("stored", "number"),
+    [("7.0", 7.0), ("7", 7.0), (" 12 ", 12.0), ("0", 0.0), (3, 3.0), ("1e2", 100.0)],
+)
+def test_storedCountsAreReadAsNumbers(stored: object, number: float) -> None:
+    assert sync_service._number(stored) == number
+
+
 @pytest.mark.asyncio
 async def test_aMedtechWithNoOverridesGetsAnEmptyTable() -> None:
     db = makeSyncDb()
