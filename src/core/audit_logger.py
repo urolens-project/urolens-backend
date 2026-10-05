@@ -180,6 +180,28 @@ async def logLogout(userId, sessionId, ipAddress: str) -> None:
     )
 
 
+async def logSessionTimedOut(
+    userId: uuid.UUID | str | None, sessionId: uuid.UUID | str, ipAddress: str, endedBy: str
+) -> None:
+    """Record a session ended for inactivity as a `SESSION_TIMED_OUT` entry (UROLENS-245).
+
+    Args:
+        userId: the session's user, if known.
+        sessionId: the session that ended.
+        ipAddress: the client address of the request that found or reported it.
+        endedBy: `"server"` when the backend found the session idle, `"client"`
+            when the app signed the user out for inactivity itself.
+    """
+    await _auditLogger.record(
+        eventType="SESSION_TIMED_OUT",
+        entityType="auth",
+        entityId=userId or settings.zeroUuid,
+        userId=userId,
+        detailJson={"session_id": str(sessionId), "ended_by": endedBy},
+        ipAddress=ipAddress,
+    )
+
+
 async def logAccessDenied(ipAddress: str, userId=None) -> None:
     """Record a rejected auth attempt as an `ACCESS_DENIED` audit entry.
 

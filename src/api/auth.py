@@ -16,10 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core import audit_logger
 from src.core.auth_service import (
+    IDLE_WARNING_SECONDS,
     LOCKOUT_MINUTES,
     closeSession,
     createSession,
     getUserByUsername,
+    idleTimeoutMinutesForRole,
     incrementFailedAttempts,
     isLockedOut,
     issueJwt,
@@ -33,7 +35,12 @@ from src.core.database import getDb
 from src.core.enums import UserRole
 from src.core.rate_limit import clearLoginRateLimit, enforceLoginRateLimit
 from src.core.rbac import getCurrentUser
-from src.schemas.auth import LoginRequest, LoginResponse, TokenRefreshResponse
+from src.schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    LogoutRequest,
+    TokenRefreshResponse,
+)
 from src.services import session_service, user_notifications_service
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -159,6 +166,8 @@ async def login(body: LoginRequest, request: Request, backgroundTasks: Backgroun
         userId=str(user["user_id"]),
         expiresAt=tokenExpiresAt(now, body.keepSignedIn, now),
         sessionExpiresAt=sessionEndsAt(now),
+        idleTimeoutMinutes=idleTimeoutMinutesForRole(user["role"]),
+        idleWarningSeconds=IDLE_WARNING_SECONDS,
     )
 
 
@@ -171,16 +180,22 @@ async def refresh(claims: dict = Depends(getCurrentUser)) -> TokenRefreshRespons
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     request: Request,
+    body: LogoutRequest | None = None,
     claims: dict = Depends(getCurrentUser),
     db: AsyncSession = Depends(getDb),
 ) -> Response:
-    """Close the staff session, audit `LOGOUT`, and stop pushes to the user's device.
+    """Close the authenticated staff session and record it.
 
-    The device is forgotten on a manual logout only (UROLENS-248); see
-    `user_notifications_service.forgetPushToken`.
+    Recorded as `LOGOUT`, or as `SESSION_TIMED_OUT` when the app signs the user
+    out for inactivity (`reason: "INACTIVITY"`, UROLENS-245). The body is optional.
+    A manual logout also stops pushes to the user's device; an inactivity
+    sign-out doesn't (UROLENS-248; see `user_notifications_service.forgetPushToken`).
     """
     ipAddress = request.client.host if request.client else "unknown"
     await closeSession(claims["session_id"])
-    await audit_logger.logLogout(claims["user_id"], claims["session_id"], ipAddress)
-    await user_notifications_service.forgetPushToken(db, uuid.UUID(claims["user_id"]))
+    if body is not None and body.reason == "INACTIVITY":
+        await audit_logger.logSessionTimedOut(claims["user_id"], claims["session_id"], ipAddress, endedBy="client")
+    else:
+        await audit_logger.logLogout(claims["user_id"], claims["session_id"], ipAddress)
+        await user_notifications_service.forgetPushToken(db, uuid.UUID(claims["user_id"]))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

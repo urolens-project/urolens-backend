@@ -9,7 +9,8 @@ session whose statements are compiled and checked:
 - every query is scoped to the caller's own user ID, for every role;
 - registering a device takes it away from whoever had it before, and only an
   Expo token is accepted;
-- a manual logout stops pushes to the device.
+- a manual logout stops pushes to the device; an inactivity sign-out
+  (`reason: "INACTIVITY"`, UROLENS-245) doesn't.
 """
 from __future__ import annotations
 
@@ -284,6 +285,32 @@ async def test_aManualLogoutStopsPushesToTheDevice() -> None:
     assert "UPDATE users SET expo_push_token=NULL" in sql
     assert f"users.user_id = '{user['user_id']}'" in sql
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_anInactivitySignOutKeepsTheDevice() -> None:
+    fakeSb = FakeSupabase()
+    seedUser(fakeSb)
+    with (
+        patch("src.core.auth_service.supabase", fakeSb),
+        patch("src.core.audit_logger.supabase", fakeSb),
+        standInDb() as db,
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            login = await c.post(
+                "/api/v1/auth/login",
+                json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+            )
+            resp = await c.post(
+                "/api/v1/auth/logout",
+                json={"reason": "INACTIVITY"},
+                headers={"Authorization": f"Bearer {login.json()['accessToken']}"},
+            )
+
+    assert resp.status_code == 204
+    assert fakeSb.store["sessions"][-1]["is_active"] is False
+    db.execute.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

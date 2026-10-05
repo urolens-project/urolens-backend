@@ -56,6 +56,11 @@ class LoginResponse(BaseModel):
     """When this access token expires; refresh before then to keep working."""
     sessionExpiresAt: datetime
     """When the session ends for good (end of the shift); no refresh goes past it."""
+    idleTimeoutMinutes: int
+    """Inactivity limit for this role (MedTech 60, others 30): a session with no
+    request for this long is signed out by the server (UROLENS-245)."""
+    idleWarningSeconds: int
+    """How long before that the app should warn the user (2 minutes)."""
 
 
 class TokenRefreshResponse(BaseModel):
@@ -65,6 +70,16 @@ class TokenRefreshResponse(BaseModel):
     tokenType: str = "Bearer"
     expiresAt: datetime
     sessionExpiresAt: datetime
+    idleTimeoutMinutes: int
+    idleWarningSeconds: int
+
+
+class LogoutRequest(BaseModel):
+    """Optional body for `POST /auth/logout` (UROLENS-245)."""
+
+    reason: Literal["INACTIVITY"] | None = None
+    """`"INACTIVITY"` when the app signs the user out for inactivity: recorded as
+    `SESSION_TIMED_OUT` instead of `LOGOUT`."""
 
 
 class PatientLoginRequest(BaseModel):
