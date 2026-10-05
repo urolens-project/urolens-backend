@@ -11,7 +11,13 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 
-from src.core.auth_service import issueJwt, sessionEndsAt, tokenExpiresAt
+from src.core.auth_service import (
+    IDLE_WARNING_SECONDS,
+    idleTimeoutMinutesForRole,
+    issueJwt,
+    sessionEndsAt,
+    tokenExpiresAt,
+)
 from src.core.enums import UserRole
 from src.schemas.auth import TokenRefreshResponse
 
@@ -66,4 +72,6 @@ def refreshAccessToken(claims: dict, now: datetime | None = None) -> TokenRefres
         accessToken=token,
         expiresAt=tokenExpiresAt(sessionStart, keepSignedIn, now),
         sessionExpiresAt=sessionEnd,
+        idleTimeoutMinutes=idleTimeoutMinutesForRole(claims["role"]),
+        idleWarningSeconds=IDLE_WARNING_SECONDS,
     )

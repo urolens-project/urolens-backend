@@ -4,11 +4,13 @@ UROLENS-167), and JWT issuing/decoding. Used by the auth router and by
 `core.rbac`'s request-authentication dependency.
 """
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
 
+from . import audit_logger
 from .config import settings
 from .supabase import supabase
 
@@ -26,11 +28,27 @@ account gets one guess per window (UROLENS-222, audit F-07)."""
 _MEDTECH_IDLE_TIMEOUT_MINUTES = 60
 _DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 
+# How long before an idle sign-out the apps warn the user (UROLENS-167's
+# "expires in 2 minutes"); sent to them with the timeout (UROLENS-245).
+IDLE_WARNING_SECONDS = 120
 
-def _idleTimeoutMinutesForRole(role: str | None) -> int:
+# A session's last activity is written at most this often, not on every
+# request (UROLENS-245): one row update per minute per active user instead of
+# per API call. The idle clock is then accurate to within a minute.
+_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=1)
+
+
+def idleTimeoutMinutesForRole(role: str | None) -> int:
+    """How long a session for `role` may go without a request before it ends (UROLENS-167)."""
     if (role or "").upper() == "MEDTECH":
         return _MEDTECH_IDLE_TIMEOUT_MINUTES
     return _DEFAULT_IDLE_TIMEOUT_MINUTES
+
+
+def _parseTimestamp(value: object) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value) if isinstance(value, str) else value  # type: ignore[return-value]
 
 # bcrypt hash (cost 12, same as stored passwords) of a random value nobody
 # knows — checked against when a login names no account, so an unknown
@@ -251,7 +269,7 @@ def decodeJwt(token: str) -> dict:
     return jwt.decode(token, settings.jwtSigningKey, algorithms=[settings.jwtAlgorithm])
 
 
-async def isSessionActive(sessionId) -> bool:
+async def isSessionActive(sessionId: uuid.UUID | str, ipAddress: str = "unknown") -> bool:
     """Check whether a session is still active: not logged out/revoked, AND
     not idle past its role's inactivity timeout (UROLENS-167).
 
@@ -261,22 +279,23 @@ async def isSessionActive(sessionId) -> bool:
     entire absolute lifetime, regardless of how long it's actually been
     idle. This is the backend half of "activity resets the inactivity
     timer"; the frontend's job is tracking client-side activity and
-    showing the warning/countdown/redirect.
+    showing the warning/countdown/redirect. "Keep me signed in" sessions are
+    no exception (UROLENS-245).
 
     A session found past its timeout is revoked here (same effect as an
-    explicit logout) rather than merely reported expired, so a second check
-    against the same stale session answers the same way. A session that's
-    still within its timeout has this call's own request recorded as its
-    new last activity.
+    explicit logout) and recorded once as `SESSION_TIMED_OUT`, so a second
+    check against the same stale session answers the same way. A session
+    still within its timeout has this request recorded as its last activity
+    — at most once per `_ACTIVITY_WRITE_INTERVAL` (UROLENS-245).
 
     Returns:
         `True` only if the session row exists, is active, and its last
-        activity (or, for a session that predates this column, its login)
-        is within `_idle_timeout_minutes_for_role`'s window for its role;
+        activity (or, for a session that predates that column, its login)
+        is within `idleTimeoutMinutesForRole`'s window for its role;
         `False` otherwise.
     """
     result = await supabase.table("sessions").select(
-        "is_active, last_activity_at, login_at, user_role"
+        "is_active, last_activity_at, login_at, user_role, user_id"
     ).eq("session_id", str(sessionId)).maybe_single().execute()
     if result is None or not result.data:
         return False
@@ -284,24 +303,51 @@ async def isSessionActive(sessionId) -> bool:
     if not row.get("is_active", False):
         return False
 
-    lastActivity = row.get("last_activity_at") or row.get("login_at")
+    lastActivity = _parseTimestamp(row.get("last_activity_at") or row.get("login_at"))
     if lastActivity is None:
         # No timestamp at all to judge staleness against (shouldn't happen
         # for any session created after this fix) -- fail closed, not open.
         return False
-    if isinstance(lastActivity, str):
-        lastActivity = datetime.fromisoformat(lastActivity)
 
     now = datetime.now(UTC)
-    idleTimeout = timedelta(minutes=_idleTimeoutMinutesForRole(row.get("user_role")))
+    idleTimeout = timedelta(minutes=idleTimeoutMinutesForRole(row.get("user_role")))
     if now - lastActivity > idleTimeout:
         await closeSession(sessionId)
+        await audit_logger.logSessionTimedOut(row.get("user_id"), sessionId, ipAddress, endedBy="server")
         return False
 
-    await supabase.table("sessions").update(
-        {"last_activity_at": now.isoformat()}
-    ).eq("session_id", str(sessionId)).execute()
+    if now - lastActivity >= _ACTIVITY_WRITE_INTERVAL:
+        await supabase.table("sessions").update(
+            {"last_activity_at": now.isoformat()}
+        ).eq("session_id", str(sessionId)).execute()
     return True
+
+
+async def sessionEndReason(sessionId: uuid.UUID | str) -> str:
+    """Why a session that's no longer active ended: `"IDLE"` or `"ENDED"` (UROLENS-245).
+
+    Read from columns the session already has: a session ended for inactivity
+    was closed more than its idle timeout after its last activity, while a
+    logout or revocation closes it right at (within a minute of) its last
+    activity. Lets every request on a timed-out session say "signed out due
+    to inactivity", not only the first.
+
+    Returns:
+        `"IDLE"` if it was ended for inactivity; `"ENDED"` otherwise (logged
+        out, revoked, or no such session).
+    """
+    result = await supabase.table("sessions").select(
+        "is_active, last_activity_at, login_at, logout_at, user_role"
+    ).eq("session_id", str(sessionId)).maybe_single().execute()
+    if result is None or not result.data:
+        return "ENDED"
+    row = result.data
+    lastActivity = _parseTimestamp(row.get("last_activity_at") or row.get("login_at"))
+    loggedOutAt = _parseTimestamp(row.get("logout_at"))
+    if row.get("is_active") or lastActivity is None or loggedOutAt is None:
+        return "ENDED"
+    idleTimeout = timedelta(minutes=idleTimeoutMinutesForRole(row.get("user_role")))
+    return "IDLE" if loggedOutAt - lastActivity > idleTimeout else "ENDED"
 
 
 async def _getUserById(userId) -> dict | None:
