@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Fixed
+- **Every request that wrote an audit row in its own transaction failed with a 500 on
+  a database whose `audit_logs.ip_address` is `inet`** — found when `GET /sync/pull`
+  failed with *"column "ip_address" is of type inet but expression is of type character
+  varying"*. The models mapped `audit_logs.ip_address` and
+  `result_retrievals.ip_address` as text, so SQLAlchemy sent the client IP as
+  `VARCHAR`, which Postgres won't put in an `inet` column (both columns are `inet` on
+  the live database; `audit_logs` predates Alembic). Since UROLENS-222 put audit rows
+  in the action's transaction, that failed the action too: sync, confirm, override,
+  reject, patient and lab-request creation, result release and retrieval.
+  Both models now map the column as `INET` and clean every value written to it
+  (`clientIpOrNone`, `src/models/client_ip.py`): a real IPv4/IPv6 address is bound as
+  an address; anything else (`"unknown"`, `"testclient"`, empty) is stored as NULL
+  instead of failing the write. The best-effort (Supabase) audit path sends such
+  placeholders as null too — before, the whole audit row was lost. No migration: the
+  columns already have the right type.
 - **A full `GET /sync/pull` failed with a 500 when one of the MedTech's results had a
   manual override whose stored original value wasn't a number.** Early web builds
   saved a missing AI value as the text `"undefined"` (3 overrides from 2026-05-27 on
