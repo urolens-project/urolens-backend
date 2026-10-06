@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Fixed
+- **Backend CI failed the real-engine Smart Diagnosis override test without a
+  developer's local `.env`.** The AI package defaults to a config path inside its
+  source repository and does not bundle the clinical YAML. The integration test
+  now supplies a synthetic test-only YAML to the real loader and rules, verifies
+  that the original count produces HIGH and the corrected count produces LOW,
+  and checks that no diagnosis-unavailable notification is sent. This fixes the
+  test's configuration dependency; production still needs an explicit
+  `RULE_ENGINE_CONFIG_PATH` pointing to the reviewed AI configuration.
 - **Every request that wrote an audit row in its own transaction failed with a 500 on
   a database whose `audit_logs.ip_address` is `inet`** — found when `GET /sync/pull`
   failed with *"column "ip_address" is of type inet but expression is of type character
