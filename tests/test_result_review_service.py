@@ -46,6 +46,7 @@ from src.models.patient import Patient
 from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
+from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 from src.models.specimen import Specimen
 from src.models.user import User
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
@@ -62,6 +63,7 @@ def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> Analy
     result.resultId = RESULT_ID
     result.specimenId = SPECIMEN_ID
     result.status = status
+    result.smartDiagnosis = None
     return result
 
 
@@ -518,8 +520,59 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
     assert detail["annotations"] == []
     assert detail["medtechName"] == ""
     assert detail["imageUrl"] is None
-    assert detail["smartDiagnosisUnavailable"] is True  # no attached output
+    assert detail["smartDiagnosis"] is None
+    assert detail["smartDiagnosisUnavailable"] is False  # absence is not an engine failure
     assert detail["confirmationNotes"] is None  # documented schema-drift field
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hasFormalOutput,isFailed", [(False, False), (True, False), (False, True)])
+async def test_getFullResultPreservesPreviewAndPrefersFormalDiagnosis(
+    hasFormalOutput: bool, isFailed: bool
+) -> None:
+    ar = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    ar.imageId = None
+    ar.aiFindings = {"crystals": 60}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = isFailed
+    ar.smartDiagnosis = {
+        "gout": {"level": "HIGH", "evidence": [{"particle_name": "crystals", "detected_count": 60}]},
+        "glomerulonephritis": {"level": "LOW", "evidence": []},
+        "nephrolithiasis": {"level": "MODERATE", "evidence": []},
+        "no_significant_indicators": False,
+    }
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.medtechId = None
+    specimen.patientName = None
+    output = None
+    if hasFormalOutput:
+        output = MagicMock(spec=SmartDiagnosisOutput)
+        output.status = "ATTACHED"
+        output.goutScore = "LOW"
+        output.gnScore = "LOW"
+        output.nephroScore = "LOW"
+        output.noSignificantIndicators = True
+        output.evidenceMap = {}
+        output.engineVersion = "test-v1"
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[ar, specimen])
+    db.execute = AsyncMock(side_effect=[
+        _makeScalarsResult([]), _makeScalarsResult([]), _makeScalarOneResult(output)
+    ])
+    detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["smartDiagnosisUnavailable"] is isFailed
+    if isFailed:
+        assert detail["smartDiagnosis"] is None
+    elif hasFormalOutput:
+        assert detail["smartDiagnosis"]["goutScore"] == "LOW"
+        assert detail["smartDiagnosis"]["noSignificantIndicators"] is True
+    else:
+        assert detail["smartDiagnosis"]["goutScore"] == "HIGH"
+        assert detail["smartDiagnosis"]["evidenceMap"]["gout"]["evidence"][0]["detected_count"] == 60
 
 
 @pytest.mark.asyncio
