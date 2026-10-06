@@ -1,0 +1,36 @@
+# Synthetic configuration for backend integration tests only.
+# These values exercise count overrides; they are not clinical thresholds.
+conditions:
+  gout:
+    particles:
+      crystals:
+        weight: 1.0
+        normal_range_max: 5
+        display_name: Crystals
+    thresholds:
+      low_max_score: 2.0
+      high_min_score: 10.0
+    evidence_min_count: 1
+  glomerulonephritis:
+    particles:
+      erythrocytes:
+        weight: 1.0
+        normal_range_max: 5
+        display_name: Erythrocytes
+    thresholds:
+      low_max_score: 2.0
+      high_min_score: 10.0
+    evidence_min_count: 1
+  nephrolithiasis:
+    particles:
+      crystals:
+        weight: 1.0
+        normal_range_max: 5
+        display_name: Crystals
+    thresholds:
+      low_max_score: 2.0
+      high_min_score: 10.0
+    evidence_min_count: 1
+display_names:
+  crystals: Crystals
+  erythrocytes: Erythrocytes

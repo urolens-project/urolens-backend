@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -184,6 +185,12 @@ async def test_runRejectsInvalidCorrectedCountsWithoutTruncating(count: float) -
 
 @pytest.mark.asyncio
 async def test_confirmationWithOverrideRunsRealEngine() -> None:
+    from urolens_ai import generate_smart_diagnosis
+    from urolens_ai.smart_diagnosis import rule_engine
+
+    # Exercise the real loader and rules with test data, independent of a local
+    # .env or the clinical YAML omitted from the installed AI package.
+    configPath = Path(__file__).resolve().parents[1] / "fixtures" / "smart_diagnosis_config.yaml"
     result = _makeResult(aiFindings={"crystals": 60})
     override = MagicMock(spec=ManualOverride)
     override.parameterName = "crystals"
@@ -202,13 +209,17 @@ async def test_confirmationWithOverrideRunsRealEngine() -> None:
     )
     with patch.object(service, "_getResult", AsyncMock(return_value=result)), patch.object(
         service, "_validateNoPendingRetake", AsyncMock()
-    ), patch.object(diagnosis, "_loadResult", AsyncMock(return_value=result)):
+    ), patch.object(diagnosis, "_loadResult", AsyncMock(return_value=result)), patch.object(
+        rule_engine, "_CONFIG_PATH", str(configPath)
+    ):
+        assert generate_smart_diagnosis(result.aiFindings).gout.level.value == "HIGH"
         await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=MagicMock())
 
     assert result.particleClasses == {"crystals": 0.0}
+    assert result.smartDiagnosisUnavailable is False
     assert result.smartDiagnosis["gout"]["level"] == "LOW"
     assert result.smartDiagnosis["no_significant_indicators"] is True
-    assert result.smartDiagnosisUnavailable is False
+    notifications.notifySupervisorDiagnosisUnavailable.assert_not_awaited()
     db.commit.assert_awaited_once()
 
 
