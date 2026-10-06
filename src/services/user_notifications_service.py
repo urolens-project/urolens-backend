@@ -94,7 +94,7 @@ async def markNotificationRead(db: AsyncSession, userId: uuid.UUID, notification
     result = await db.execute(
         update(Notification)
         .where(Notification.notificationId == notificationId, Notification.userId == userId)
-        .values(is_read=True)
+        .values(isRead=True)
     )
     if result.rowcount == 0:
         raise _notFound()
@@ -106,7 +106,7 @@ async def markAllNotificationsRead(db: AsyncSession, userId: uuid.UUID) -> None:
     await db.execute(
         update(Notification)
         .where(Notification.userId == userId, Notification.isRead.is_(False))
-        .values(is_read=True)
+        .values(isRead=True)
     )
     await db.commit()
 
@@ -121,9 +121,9 @@ async def registerPushToken(db: AsyncSession, userId: uuid.UUID, token: str) -> 
     await db.execute(
         update(User)
         .where(User.expoPushToken == token, User.userId != userId)
-        .values(expo_push_token=None)
+        .values(expoPushToken=None)
     )
-    await db.execute(update(User).where(User.userId == userId).values(expo_push_token=token))
+    await db.execute(update(User).where(User.userId == userId).values(expoPushToken=token))
     await db.commit()
 
 
@@ -134,7 +134,7 @@ async def forgetPushToken(db: AsyncSession, userId: uuid.UUID) -> None:
     turn a logout into an error. It is logged.
     """
     try:
-        await db.execute(update(User).where(User.userId == userId).values(expo_push_token=None))
+        await db.execute(update(User).where(User.userId == userId).values(expoPushToken=None))
         await db.commit()
     except Exception:
         logger.exception("Failed to clear the push token of user %s at logout", userId)
