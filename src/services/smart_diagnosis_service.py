@@ -69,7 +69,8 @@ class SmartDiagnosisService:
             # without aborting the parent transaction.
             async with db.begin_nested():
                 result = await self._loadResult(resultId, db)
-                classification: dict = result.aiFindings or {}
+                effectiveCounts = {**(result.aiFindings or {}), **(result.particleClasses or {})}
+                classification = _normalizeCounts(effectiveCounts)
 
                 # Call the AI Engineer's function — owned by urolens_ai package
                 from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
@@ -218,6 +219,26 @@ def _classifyError(exc: Exception) -> str:
     if code in _RULE_ENGINE_ERROR_CODES:
         return code
     return "RULE_EVALUATION_FAILED"
+
+
+def _normalizeCounts(counts: dict[str, int | float]) -> dict[str, int]:
+    # Overrides are stored as integral floats; never truncate fractional counts.
+    from urolens_ai.utils.exceptions import RuleEngineError
+
+    classification: dict[str, int] = {}
+    for particle, count in counts.items():
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, (int, float))
+            or count < 0
+            or (isinstance(count, float) and not count.is_integer())
+        ):
+            raise RuleEngineError(
+                code="INVALID_CLASSIFICATION",
+                message="Particle counts must be non-negative integers.",
+            )
+        classification[particle] = int(count)
+    return classification
 
 
 def _buildEvidenceMap(engineOutput) -> dict:
