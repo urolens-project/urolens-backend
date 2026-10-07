@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -128,6 +129,7 @@ def _makeResult(
     result.specimenId = specimenId
     result.status = status
     result.aiFindings = aiFindings or {"uric_acid_crystals": 15, "rbc_casts": 3}
+    result.particleClasses = {}
     result.smartDiagnosisUnavailable = False
     result.smartDiagnosisOutput = None  # first confirmation: no output row yet
     result.image = None
@@ -137,6 +139,89 @@ def _makeResult(
 
 
 # ── SmartDiagnosisService.run() tests ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_runUsesConfirmedCountsWithIntegerNormalization() -> None:
+    result = _makeResult(aiFindings={"crystals": 60, "erythrocytes": 8})
+    result.particleClasses = {"crystals": 0.0}
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=MagicMock())
+
+    def evaluate(classification: dict[str, int]) -> MagicMock:
+        assert classification == {"crystals": 0, "erythrocytes": 8}
+        assert all(type(count) is int for count in classification.values())
+        return _makeAllLowOutput()
+
+    with patch.object(service, "_loadResult", AsyncMock(return_value=result)), patch(
+        "urolens_ai.generate_smart_diagnosis", side_effect=evaluate
+    ):
+        output = await service.run(resultId=RESULT_ID, db=db)
+
+    assert output is not None
+    assert output.goutScore == "LOW"
+    assert result.smartDiagnosis["gout"]["level"] == "LOW"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1.5, -1, float("nan"), float("inf"), True])
+async def test_runRejectsInvalidCorrectedCountsWithoutTruncating(count: float) -> None:
+    result = _makeResult(aiFindings={"crystals": 60})
+    result.particleClasses = {"crystals": count}
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=MagicMock())
+
+    with patch.object(service, "_loadResult", AsyncMock(return_value=result)), patch.object(
+        service, "_handleFailure", AsyncMock()
+    ) as failure, patch("urolens_ai.generate_smart_diagnosis") as engine:
+        output = await service.run(resultId=RESULT_ID, db=db)
+
+    assert output is None
+    engine.assert_not_called()
+    assert _classifyError(failure.call_args.args[1]) == "INVALID_CLASSIFICATION"
+
+@pytest.mark.asyncio
+async def test_confirmationWithOverrideRunsRealEngine() -> None:
+    from urolens_ai import generate_smart_diagnosis
+    from urolens_ai.smart_diagnosis import rule_engine
+
+    # Exercise the real loader and rules with test data, independent of a local
+    # .env or the clinical YAML omitted from the installed AI package.
+    configPath = Path(__file__).resolve().parents[1] / "fixtures" / "smart_diagnosis_config.yaml"
+    result = _makeResult(aiFindings={"crystals": 60})
+    override = MagicMock(spec=ManualOverride)
+    override.parameterName = "crystals"
+    override.correctedValue = "0.0"
+    result.manualOverrides = [override]
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    notifications = MagicMock(spec=NotificationService)
+    notifications.notifySupervisorResultReady = AsyncMock()
+    notifications.notifySupervisorDiagnosisUnavailable = AsyncMock()
+    diagnosis = SmartDiagnosisService(auditLogger=auditLogger, _notifService=notifications)
+    service = ResultConfirmationService(
+        db=db, auditLogger=auditLogger, _smartDiagnosisService=diagnosis,
+        _notifService=notifications,
+    )
+    with patch.object(service, "_getResult", AsyncMock(return_value=result)), patch.object(
+        service, "_validateNoPendingRetake", AsyncMock()
+    ), patch.object(diagnosis, "_loadResult", AsyncMock(return_value=result)), patch.object(
+        rule_engine, "_CONFIG_PATH", str(configPath)
+    ):
+        assert generate_smart_diagnosis(result.aiFindings).gout.level.value == "HIGH"
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=MagicMock())
+
+    assert result.particleClasses == {"crystals": 0.0}
+    assert result.smartDiagnosisUnavailable is False
+    assert result.smartDiagnosis["gout"]["level"] == "LOW"
+    assert result.smartDiagnosis["no_significant_indicators"] is True
+    notifications.notifySupervisorDiagnosisUnavailable.assert_not_awaited()
+    db.commit.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 async def test_runSuccessPersistsOutput():
