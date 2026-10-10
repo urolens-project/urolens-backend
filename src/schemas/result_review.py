@@ -297,6 +297,12 @@ class SpatialAnnotationItem(BaseModel):
         return v
 
 
+class AIDetectionItem(SpatialAnnotationItem):
+    """A model detection, with image-relative percentage geometry and confidence."""
+
+    confidence: float = Field(..., ge=0, le=1, allow_inf_nan=False)
+
+
 class AnnotationItem(BaseModel):
     """One reviewer's annotation on a result, as shown in a result's full detail view.
 
@@ -343,6 +349,9 @@ class FullResultDetail(BaseModel):
     modelVersion: str
     manualOverrides: list[ManualOverrideItem]
     imageUrl: str | None = None
+    imageId: UUID | None = None
+    aiDetections: list[AIDetectionItem] | None = None
+    """None for legacy counts-only analyses; [] for a successful empty analysis."""
     smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str

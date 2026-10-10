@@ -19,12 +19,13 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from PIL import Image as PILImage
 from PIL import PngImagePlugin
-from sqlalchemy import Delete
+from sqlalchemy import Delete, Update
 
 from src.core import config
 from src.core.audit_logger import AuditLogger
@@ -40,7 +41,7 @@ from src.models.image import Image, ImageStatus
 from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 from src.models.specimen import Specimen
 from src.services import ai_integration_service
-from src.services.ai_integration_service import AIIntegrationService
+from src.services.ai_integration_service import AIIntegrationService, InferenceOutput
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import SmartDiagnosisService
@@ -66,6 +67,7 @@ def _makeExistingResult(status: str) -> AnalysisResult:
     result.specimenId = SPECIMEN_ID
     result.status = status
     result.aiFindings = {"erythrocytes": 9}
+    result.aiDetections = [{"id": "old-box"}]
     result.flaggedAnomalies = {"erythrocytes": 9}
     result.particleClasses = {"erythrocytes": 9}
     result.smartDiagnosis = {"gout": {"level": "HIGH"}}
@@ -111,11 +113,18 @@ async def test_retakeClearsTheOldImagesFindingsAndSmartDiagnosis() -> None:
 
     assert (result.aiFindings, result.flaggedAnomalies, result.particleClasses) == ({}, {}, {})
     assert result.smartDiagnosis is None
+    assert result.aiDetections is None
     assert result.smartDiagnosisUnavailable is False
     assert result.modelVersion == config.settings.aiModelVersion
     [stmt] = [c.args[0] for c in db.execute.await_args_list if isinstance(c.args[0], Delete)]
     assert stmt.table.name == "smart_diagnosis_outputs"
     assert stmt.whereclause.right.value == RESULT_ID
+    [clearBoxes] = [c.args[0] for c in db.execute.await_args_list if isinstance(c.args[0], Update)]
+    assert clearBoxes.table.name == "result_reviews"
+    assert clearBoxes.whereclause.right.value == RESULT_ID
+    sql = str(clearBoxes.compile())
+    assert "spatial_annotations=" in sql
+    assert "annotation_notes=" not in sql
 
 
 @pytest.mark.asyncio
@@ -146,21 +155,28 @@ def _patchInfer(infer: object) -> object:
 
 @pytest.mark.asyncio
 async def test_findingsAreNormalizedToUnderscores() -> None:
-    infer = MagicMock(return_value=MagicMock(particles={"epithelial-cells": 3, "erythrocytes": 0}))
+    infer = MagicMock(return_value=SimpleNamespace(
+        particles={"epithelial-cells": 3, "erythrocytes": 0}, model_version="test-model",
+    ))
     service, _ = _serviceReturning(None)
 
     with _patchInfer(infer):
         findings = await service._infer(SPECIMEN_ID, b"jpeg")
 
-    assert findings == {"epithelial_cells": 3, "erythrocytes": 0}
+    assert findings.findings == {"epithelial_cells": 3, "erythrocytes": 0}
+    assert findings.detections is None  # Older engine packages have only counts.
 
 
 @pytest.mark.asyncio
 async def test_nothingDetectedIsARealResultNotAFailure() -> None:
     service, _ = _serviceReturning(None)
 
-    with _patchInfer(MagicMock(return_value=MagicMock(particles={}))):
-        assert await service._infer(SPECIMEN_ID, b"jpeg") == {}
+    with _patchInfer(MagicMock(return_value=SimpleNamespace(
+        particles={}, detections=[], model_version="test-model",
+    ))):
+        inference = await service._infer(SPECIMEN_ID, b"jpeg")
+    assert inference.findings == {}
+    assert inference.detections == []
 
 
 @pytest.mark.asyncio
@@ -176,6 +192,28 @@ async def test_aFailedAnalysisRaisesAiAnalysisFailed(infer: MagicMock) -> None:
 
     assert excInfo.value.status_code == 503
     assert excInfo.value.errorCode == "AI_ANALYSIS_FAILED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("NOT_MICROSCOPY", "This does not look like a urine microscopy image. Please retake."),
+        ("IMAGE_EXPOSURE", "The image is too dark to analyse. Check the microscope light."),
+    ],
+)
+async def test_aGateRejectedImageIsUnprocessableNotAiAnalysisFailed(code: str, message: str) -> None:
+    from urolens_ai.utils.exceptions import ImageValidationError
+
+    infer = MagicMock(side_effect=ImageValidationError(code=code, message=message))
+    service, _ = _serviceReturning(None)
+
+    with _patchInfer(infer), pytest.raises(UnprocessableException) as excInfo:
+        await service._infer(SPECIMEN_ID, b"jpeg")
+
+    assert excInfo.value.status_code == 422
+    assert excInfo.value.errorCode == code
+    assert excInfo.value.detail == message
 
 
 @pytest.mark.asyncio
@@ -195,6 +233,40 @@ async def test_aMissingAiPackageIsAFailedAnalysis() -> None:
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_aiBoxesAreConvertedToImagePercentagesAndRetainConfidence() -> None:
+    output = SimpleNamespace(
+        particles={"epithelial-cells": 1}, model_version="box-model",
+        image_width=1000, image_height=500,
+        detections=[SimpleNamespace(
+            class_name="epithelial-cells", confidence=0.85, bbox=[200, 150, 300, 190],
+        )],
+    )
+    service, _ = _serviceReturning(None)
+    with _patchInfer(MagicMock(return_value=output)):
+        inference = await service._infer(SPECIMEN_ID, b"jpeg")
+    [box] = inference.detections
+    assert box == {
+        "id": box["id"], "particleType": "epithelial_cells", "confidence": 0.85,
+        "x": 20, "y": 30, "w": 10, "h": 8,
+    }
+    assert uuid.UUID(box["id"])
+    assert inference.modelVersion == "box-model"
+    assert inference.findings == {"epithelial_cells": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bbox", [[float("nan"), 0, 10, 10], [20, 20, 10, 10], [1000, 0, 1100, 20]])
+async def test_invalidDetectionGeometryFailsAnalysisInsteadOfSavingMisleadingBoxes(bbox: list) -> None:
+    output = SimpleNamespace(
+        particles={"bacteria": 1}, model_version="box-model", image_width=1000, image_height=500,
+        detections=[SimpleNamespace(class_name="bacteria", confidence=0.8, bbox=bbox)],
+    )
+    service, _ = _serviceReturning(None)
+    with _patchInfer(MagicMock(return_value=output)), pytest.raises(AIAnalysisError):
+        await service._infer(SPECIMEN_ID, b"jpeg")
+
 
 @pytest.mark.asyncio
 async def test_aStorageFailureRaisesStorageError() -> None:
@@ -299,7 +371,12 @@ async def _upload(specimen: Specimen, result: AnalysisResult) -> tuple[AsyncMock
         _requireUploadAllowed=AsyncMock(return_value=specimen),
         _validateImage=AsyncMock(return_value=(800, 600)),
         _stripMetadata=AsyncMock(return_value=b"cleaned"),
-        _infer=AsyncMock(return_value={"erythrocytes": 2}),
+        _infer=AsyncMock(return_value=InferenceOutput(
+            findings={"erythrocytes": 2}, detections=[{
+                "id": "new-box", "particleType": "erythrocytes", "confidence": 0.9,
+                "x": 10, "y": 10, "w": 5, "h": 5,
+            }], modelVersion="new-model",
+        )),
         _replacePreviousImage=AsyncMock(),
         _uploadToStorage=AsyncMock(),
         _getOrCreateResult=AsyncMock(return_value=result),
@@ -349,6 +426,8 @@ async def test_theResultGetsTheNewFindingsAndItsAnomalies() -> None:
 
     assert result.aiFindings == {"erythrocytes": 2}
     assert result.flaggedAnomalies == {"erythrocytes": 2}
+    assert result.aiDetections[0]["id"] == "new-box"
+    assert result.modelVersion == "new-model"
 
 
 # ── Smart Diagnosis: one row per result ───────────────────────────────────────
@@ -468,7 +547,7 @@ async def test_aResultWithNoImageIsNotLookedUp() -> None:
 
 def test_modelWeightsDefaultToThoseBundledInTheAiPackage() -> None:
     with tempfile.TemporaryDirectory() as packageDir:
-        weights = Path(packageDir) / "models" / "yolov8" / "weights.pt"
+        weights = Path(packageDir) / "models" / "yolov8" / "best.pt"
         weights.parent.mkdir(parents=True)
         weights.write_bytes(b"weights")
         spec = MagicMock(submodule_search_locations=[packageDir])
@@ -486,16 +565,50 @@ def test_noBundledWeightsGivesAnEmptyPath(spec: object) -> None:
 def test_theEngineIsToldWhereTheBundledWeightsAre() -> None:
     env = {k: v for k, v in os.environ.items() if k != "MODEL_WEIGHTS_PATH"}
     with patch.dict(os.environ, env, clear=True), \
-         patch.object(config, "_bundledModelWeightsPath", return_value="/engine/weights.pt"):
+         patch.object(config, "_bundledModelWeightsPath", return_value="/engine/best.pt"):
         loaded = config._loadSettings()
-        assert os.environ["MODEL_WEIGHTS_PATH"] == "/engine/weights.pt"
-    assert loaded.modelWeightsPath == "/engine/weights.pt"
+        assert os.environ["MODEL_WEIGHTS_PATH"] == "/engine/best.pt"
+    assert loaded.modelWeightsPath == "/engine/best.pt"
 
 
 def test_anExplicitWeightsPathWins() -> None:
     with patch.dict(os.environ, {"MODEL_WEIGHTS_PATH": "/custom/model.pt"}), \
-         patch.object(config, "_bundledModelWeightsPath", return_value="/engine/weights.pt"):
+         patch.object(config, "_bundledModelWeightsPath", return_value="/engine/best.pt"):
         assert config._loadSettings().modelWeightsPath == "/custom/model.pt"
+
+
+# ── Gate weights default ──────────────────────────────────────────────────────
+
+def test_gateWeightsDefaultToThoseBundledInTheAiPackage() -> None:
+    with tempfile.TemporaryDirectory() as packageDir:
+        weights = Path(packageDir) / "models" / "gate" / "gate.pt"
+        weights.parent.mkdir(parents=True)
+        weights.write_bytes(b"weights")
+        spec = MagicMock(submodule_search_locations=[packageDir])
+
+        with patch.object(config.importlib.util, "find_spec", return_value=spec):
+            assert config._bundledGateWeightsPath() == str(weights)
+
+
+@pytest.mark.parametrize("spec", [None, MagicMock(submodule_search_locations=["/nowhere"])])
+def test_noBundledGateWeightsGivesAnEmptyPath(spec: object) -> None:
+    with patch.object(config.importlib.util, "find_spec", return_value=spec):
+        assert config._bundledGateWeightsPath() == ""
+
+
+def test_theEngineIsToldWhereTheBundledGateWeightsAre() -> None:
+    env = {k: v for k, v in os.environ.items() if k != "GATE_WEIGHTS_PATH"}
+    with patch.dict(os.environ, env, clear=True), \
+         patch.object(config, "_bundledGateWeightsPath", return_value="/engine/gate.pt"):
+        loaded = config._loadSettings()
+        assert os.environ["GATE_WEIGHTS_PATH"] == "/engine/gate.pt"
+    assert loaded.gateWeightsPath == "/engine/gate.pt"
+
+
+def test_anExplicitGateWeightsPathWins() -> None:
+    with patch.dict(os.environ, {"GATE_WEIGHTS_PATH": "/custom/gate.pt"}), \
+         patch.object(config, "_bundledGateWeightsPath", return_value="/engine/gate.pt"):
+        assert config._loadSettings().gateWeightsPath == "/custom/gate.pt"
 
 
 # ── Smart Diagnosis failing at upload is reported ─────────────────────────────

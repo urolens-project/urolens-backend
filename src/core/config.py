@@ -82,8 +82,13 @@ class Settings(BaseModel):
     modelWeightsPath: str = ""
     """YOLOv8 weights the AI engine loads (env `MODEL_WEIGHTS_PATH`). The engine
     package doesn't ship its weights, so production must set this (or place the
-    file at `urolens_ai/models/yolov8/weights.pt`, the default when present).
+    file at `urolens_ai/models/yolov8/best.pt`, the default when present).
     Empty means every upload fails with `AI_ANALYSIS_FAILED`."""
+    gateWeightsPath: str = ""
+    """Input-gate (slide / not-slide) classifier weights the AI engine loads
+    (env `GATE_WEIGHTS_PATH`). Same bundled-package fallback as
+    `modelWeightsPath`, and the same failure mode: empty means every upload
+    fails (503 `MODEL_NOT_LOADED`) once the installed engine includes the gate."""
 
     # ── Misc ──────────────────────────────────────────────────────────────
     zeroUuid: str = "00000000-0000-0000-0000-000000000000"
@@ -111,7 +116,18 @@ def _bundledModelWeightsPath() -> str:
     spec = importlib.util.find_spec("urolens_ai")
     if spec is None or not spec.submodule_search_locations:
         return ""
-    weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "yolov8" / "weights.pt"
+    weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "yolov8" / "best.pt"
+    return str(weights) if weights.is_file() else ""
+
+
+def _bundledGateWeightsPath() -> str:
+    # Same fallback as _bundledModelWeightsPath, for the input gate's own
+    # classifier weights. The engine's default (`src/urolens_ai/models/gate/gate.pt`,
+    # relative to the working directory) only exists inside the engine's repo.
+    spec = importlib.util.find_spec("urolens_ai")
+    if spec is None or not spec.submodule_search_locations:
+        return ""
+    weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "gate" / "gate.pt"
     return str(weights) if weights.is_file() else ""
 
 
@@ -179,6 +195,11 @@ def _loadSettings() -> Settings:
         # The engine reads this variable itself when it loads the model.
         os.environ["MODEL_WEIGHTS_PATH"] = modelWeightsPath
 
+    gateWeightsPath = os.getenv("GATE_WEIGHTS_PATH") or _bundledGateWeightsPath()
+    if gateWeightsPath:
+        # The engine reads this variable itself when it loads the gate classifier.
+        os.environ["GATE_WEIGHTS_PATH"] = gateWeightsPath
+
     return Settings(
         supabaseUrl=supabaseUrl,
         supabaseServiceKey=supabaseServiceKey,
@@ -194,6 +215,7 @@ def _loadSettings() -> Settings:
         dedupHashKey=dedupHashKey,
         aiModelVersion=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
         modelWeightsPath=modelWeightsPath,
+        gateWeightsPath=gateWeightsPath,
     )
 
 

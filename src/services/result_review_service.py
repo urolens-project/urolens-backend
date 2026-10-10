@@ -661,6 +661,8 @@ class ResultReviewService:
             "modelVersion": ar.modelVersion,
             "manualOverrides": overrides,
             "imageUrl": imageUrl,
+            "imageId": ar.imageId,
+            "aiDetections": ar.aiDetections,
             "smartDiagnosis": smartDiagnosis,
             "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
             "status": ar.status,

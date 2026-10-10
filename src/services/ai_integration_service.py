@@ -38,11 +38,13 @@ import asyncio
 import io
 import logging
 import uuid
+from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from fastapi import Request, UploadFile
 from PIL import Image as PILImage
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
@@ -54,14 +56,17 @@ from ..core.exceptions import (
     ImageResolutionError,
     ImageTooLargeError,
     StorageError,
+    UnprocessableException,
 )
 from ..core.supabase import supabase as sb
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.lab_request import LabRequest
 from ..models.manual_override import ManualOverride
+from ..models.result_review import ResultReview
 from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
+from ..schemas.result_review import AIDetectionItem
 from . import specimen_service
 from .consent_check import requireProcessingConsent
 from .specimen_access import (
@@ -80,6 +85,49 @@ MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 # spare; the AI model downsizes to ~640 px anyway, so bigger buys nothing.
 # Migration 0043 sets the same limit on the storage bucket — keep them equal.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+@dataclass
+class InferenceOutput:
+    """Count and spatial output kept together through image persistence."""
+
+    findings: dict[str, int]
+    detections: list[dict[str, Any]] | None = None
+    modelVersion: str | None = None
+
+
+def _normalizeDetections(inferenceResult: Any) -> list[dict[str, Any]] | None:
+    """Convert accepted pixel xyxy detections to image-relative percentages."""
+    detections = getattr(inferenceResult, "detections", None)
+    if detections is None:
+        return None
+    if not isinstance(detections, list):
+        raise ValueError("AI detections must be a list")
+    if not detections:
+        return []
+    width, height = inferenceResult.image_width, inferenceResult.image_height
+    if not all(isfinite(value) and value > 0 for value in (width, height)):
+        raise ValueError("AI detection image dimensions must be positive and finite")
+    normalized = []
+    for detection in detections:
+        x1, y1, x2, y2 = detection.bbox
+        if not all(isfinite(value) for value in (x1, y1, x2, y2)):
+            raise ValueError("AI detection coordinates must be finite")
+        x1, x2 = max(0, min(x1, width)), max(0, min(x2, width))
+        y1, y2 = max(0, min(y1, height)), max(0, min(y2, height))
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError("AI detection must cover part of the image")
+        box = AIDetectionItem(
+            id=str(uuid.uuid4()),
+            particleType=detection.class_name.replace("-", "_"),
+            confidence=detection.confidence,
+            x=100 * x1 / width,
+            y=100 * y1 / height,
+            w=100 * (x2 - x1) / width,
+            h=100 * (y2 - y1) / height,
+        )
+        normalized.append(box.model_dump())
+    return normalized
 
 
 class AIIntegrationService:
@@ -136,6 +184,9 @@ class AIIntegrationService:
                 been submitted, approved or released; `CONSENT_REFUSED`, if
                 the patient refused consent to processing.
             ImageResolutionError: `INVALID_IMAGE_RESOLUTION`, if below 640x480.
+            UnprocessableException: the engine's own code (`NOT_MICROSCOPY` or
+                `IMAGE_EXPOSURE`), if the AI engine's input gate rejected the
+                image itself before analysis ran.
             AIAnalysisError: `AI_ANALYSIS_FAILED` (503), if AI inference failed.
             StorageError: `STORAGE_ERROR` (503), if the image couldn't be stored.
         """
@@ -148,7 +199,8 @@ class AIIntegrationService:
         width, height = await self._validateImage(rawBytes, contentType)
         imageBytes = await self._stripMetadata(rawBytes, contentType)
         # Analyze before storing, so a failed analysis leaves nothing behind.
-        findings = await self._infer(specimenId, imageBytes)
+        inference = await self._infer(specimenId, imageBytes)
+        findings = inference.findings
 
         await self._replacePreviousImage(specimenId)
 
@@ -174,6 +226,9 @@ class AIIntegrationService:
         clearedOverrides = await self._clearManualOverrides(result.resultId)
 
         result.aiFindings = findings
+        result.aiDetections = inference.detections
+        if inference.modelVersion:
+            result.modelVersion = inference.modelVersion
         result.flaggedAnomalies = {k: v for k, v in findings.items() if v > 0}
         await self.db.flush([result])
         if findings:
@@ -394,6 +449,7 @@ class AIIntegrationService:
             if result.status != ResultStatus.RETURNED_FOR_CORRECTION:
                 result.status = ResultStatus.PENDING_CONFIRM
             result.aiFindings = {}
+            result.aiDetections = None
             result.flaggedAnomalies = {}
             result.particleClasses = {}
             result.smartDiagnosis = None
@@ -404,6 +460,13 @@ class AIIntegrationService:
             # Confirmation writes a fresh one for the new findings.
             await self.db.execute(
                 delete(SmartDiagnosisOutput).where(SmartDiagnosisOutput.resultId == result.resultId)
+            )
+            # Keep review notes, but geometry from the replaced image must not
+            # appear over its replacement after the next detail fetch.
+            await self.db.execute(
+                update(ResultReview)
+                .where(ResultReview.resultId == result.resultId)
+                .values(spatialAnnotations=None)
             )
             await self.db.flush([result])
         else:
@@ -433,23 +496,44 @@ class AIIntegrationService:
         deleted = await self.db.execute(delete(ManualOverride).where(ManualOverride.resultId == resultId))
         return deleted.rowcount or 0
 
-    async def _infer(self, specimenId: uuid.UUID, imageBytes: bytes) -> dict:
-        """Run YOLOv8 inference and return the findings (particle class -> count).
+    async def _infer(self, specimenId: uuid.UUID, imageBytes: bytes) -> InferenceOutput:
+        """Keep particle counts and individual boxes from the same inference run.
 
         An empty dict is a real result (nothing detected). A failure — the
         engine erroring, its weights missing, the package absent — raises, so
         a failed analysis can never pass for "no particles" (UROLENS-230).
 
         Raises:
+            UnprocessableException: the engine's own code (`NOT_MICROSCOPY` or
+                `IMAGE_EXPOSURE`), if its input gate rejected the image before
+                analysis ran — the image itself is the problem, not the engine.
             AIAnalysisError: `AI_ANALYSIS_FAILED`, if inference didn't run.
         """
         try:
             from urolens_ai import infer  # type: ignore[import]
+            from urolens_ai.utils.exceptions import (
+                ImageValidationError,  # type: ignore[import]
+            )
 
-            inferenceResult = await asyncio.to_thread(infer, imageBytes)
+            try:
+                inferenceResult = await asyncio.to_thread(infer, imageBytes)
+            except ImageValidationError as exc:
+                # The gate rejected the image itself (not microscopy, or too
+                # dark/bright) — a client-correctable 422, not an engine failure.
+                log.info(
+                    "Image rejected by the input gate for specimen %s: [%s] %s",
+                    specimenId, exc.code, exc.message,
+                )
+                raise UnprocessableException(code=exc.code, message=exc.message) from exc
             # Model emits dashes (epithelial-cells); config.yaml and Smart
             # Diagnosis expect underscores (epithelial_cells).
-            return {k.replace("-", "_"): v for k, v in inferenceResult.particles.items()}
+            return InferenceOutput(
+                findings={k.replace("-", "_"): v for k, v in inferenceResult.particles.items()},
+                detections=_normalizeDetections(inferenceResult),
+                modelVersion=inferenceResult.model_version,
+            )
+        except UnprocessableException:
+            raise
         except Exception as exc:
             log.warning("AI inference failed for specimen %s: %s", specimenId, exc, exc_info=True)
             raise AIAnalysisError() from exc

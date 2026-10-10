@@ -79,7 +79,9 @@ def _inferReturning(particles: dict) -> object:
 
     def _import(name: str, *args: object, **kwargs: object) -> object:
         if name == "urolens_ai":
-            return MagicMock(infer=MagicMock(return_value=MagicMock(particles=particles)))
+            return MagicMock(infer=MagicMock(return_value=MagicMock(
+                particles=particles, detections=[], model_version="test-model",
+            )))
         return realImport(name, *args, **kwargs)
 
     return patch("builtins.__import__", _import)

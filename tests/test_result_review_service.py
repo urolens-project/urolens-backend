@@ -62,6 +62,8 @@ def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> Analy
     result.resultId = RESULT_ID
     result.specimenId = SPECIMEN_ID
     result.status = status
+    result.smartDiagnosis = None
+    result.aiDetections = None
     return result
 
 
@@ -480,7 +482,11 @@ async def test_getFullResultRaisesNotFoundForMissingResult():
 
 
 @pytest.mark.asyncio
-async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
+@pytest.mark.parametrize("detections", [None, [], [{
+    "id": "ai-box-1", "particleType": "erythrocytes", "confidence": 0.9,
+    "x": 10, "y": 20, "w": 5, "h": 6,
+}]])
+async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides(detections):
     """Baseline assembly with no patient_uid on the specimen (so the Patient
     lookup — and its known `.sex` gap, see the dedicated test below — is
     never reached), no image, no medtech, no overrides, no annotation, no
@@ -490,6 +496,7 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
     ar.imageId = None
     ar.confirmedAt = None
     ar.aiFindings = {"RBC": 12}
+    ar.aiDetections = detections
     ar.flaggedAnomalies = {}
     ar.particleClasses = {}
     ar.modelVersion = "mvp-v1.0"
@@ -518,7 +525,10 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
     assert detail["annotations"] == []
     assert detail["medtechName"] == ""
     assert detail["imageUrl"] is None
-    assert detail["smartDiagnosisUnavailable"] is True  # no attached output
+    assert detail["imageId"] is None
+    assert detail["aiDetections"] == detections
+    assert detail["smartDiagnosis"] is None
+    assert detail["smartDiagnosisUnavailable"] is False  # absence is not an engine failure
     assert detail["confirmationNotes"] is None  # documented schema-drift field
 
 

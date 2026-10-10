@@ -131,6 +131,8 @@ async def test_uploadValidImageReturns201(
     jpegBytes = _makeJpeg(800, 600)
     mockInferFn = MagicMock()
     mockInferFn.return_value.particles = FAKE_AI_FINDINGS
+    mockInferFn.return_value.detections = []
+    mockInferFn.return_value.model_version = "test-model"
 
     with (
         patch("src.services.ai_integration_service.sb", sbMock),
@@ -232,6 +234,8 @@ async def test_uploadTriggersAiInferenceWhenPackageAvailable(
     # _runInference() reads `inferenceResult.particles` (a dict), not `.to_dict()`.
     mockInferFn = MagicMock()
     mockInferFn.return_value.particles = FAKE_AI_FINDINGS
+    mockInferFn.return_value.detections = []
+    mockInferFn.return_value.model_version = "test-model"
 
     with (
         patch("src.services.ai_integration_service.sb", sbMock),

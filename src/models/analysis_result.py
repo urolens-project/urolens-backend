@@ -72,6 +72,11 @@ class AnalysisResult(Base):
     aiFindings: Mapped[dict[str, Any]] = mapped_column("ai_findings", 
         JSONB, nullable=False, default=dict
     )
+    aiDetections: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        "ai_detections", JSONB, nullable=True
+    )
+    """Image-relative percentage boxes. None for legacy counts-only analyses;
+    an empty list means inference completed with no particle detections."""
     flaggedAnomalies: Mapped[dict[str, Any]] = mapped_column("flagged_anomalies", 
         JSONB, nullable=False, default=dict
     )

@@ -33,7 +33,7 @@ from src.models.manual_override import ManualOverride
 from src.models.specimen import Specimen
 from src.schemas.result_review import MAX_OVERRIDE_COUNT, OverrideRequest
 from src.services import sync_service
-from src.services.ai_integration_service import AIIntegrationService
+from src.services.ai_integration_service import AIIntegrationService, InferenceOutput
 from src.services.manual_override_service import ManualOverrideService
 from tests.conftest import makeSyncDb, syncQueries
 
@@ -250,7 +250,7 @@ async def test_uploadClearsTheResultsOverridesAndAuditsHowMany() -> None:
         _requireUploadAllowed=AsyncMock(),
         _validateImage=AsyncMock(return_value=(800, 600)),
         _stripMetadata=AsyncMock(return_value=b"jpeg"),
-        _infer=AsyncMock(return_value={}),
+        _infer=AsyncMock(return_value=InferenceOutput(findings={}, detections=[])),
         _replacePreviousImage=AsyncMock(),
         _uploadToStorage=AsyncMock(),
         _getOrCreateResult=AsyncMock(return_value=result),
