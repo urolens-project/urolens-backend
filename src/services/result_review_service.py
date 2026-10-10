@@ -620,6 +620,20 @@ class ResultReviewService:
                 "evidenceMap": sdo.evidenceMap or {},
                 "engineVersion": sdo.engineVersion,
             }
+        elif sdo is None and ar.smartDiagnosis and not ar.smartDiagnosisUnavailable:
+            # Upload previews use the nested engine shape; expose the same detail
+            # contract as the formal output without reviving a failed diagnosis.
+            preview = ar.smartDiagnosis
+            smartDiagnosis = {
+                "goutScore": preview.get("gout", {}).get("level"),
+                "gnScore": preview.get("glomerulonephritis", {}).get("level"),
+                "nephroScore": preview.get("nephrolithiasis", {}).get("level"),
+                "noSignificantIndicators": preview.get("no_significant_indicators", False),
+                "evidenceMap": {
+                    condition: preview.get(condition, {})
+                    for condition in ("gout", "glomerulonephritis", "nephrolithiasis")
+                },
+            }
 
         dob = decryptStoredPii(pat.dateOfBirth) if pat else None
         sex = pat.sex if pat else None
@@ -664,7 +678,9 @@ class ResultReviewService:
             "imageId": ar.imageId,
             "aiDetections": ar.aiDetections,
             "smartDiagnosis": smartDiagnosis,
-            "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
+            "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or (
+                sdo is not None and sdo.status != "ATTACHED"
+            ),
             "status": ar.status,
             "returnReason": returnReason,
             "annotations": annotations,
