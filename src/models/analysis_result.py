@@ -77,9 +77,19 @@ class AnalysisResult(Base):
     flaggedAnomalies: Mapped[dict[str, Any]] = mapped_column("flagged_anomalies", 
         JSONB, nullable=False, default=dict
     )
-    particleClasses: Mapped[dict[str, Any]] = mapped_column("particle_classes", 
+    particleClasses: Mapped[dict[str, Any]] = mapped_column("particle_classes",
         JSONB, nullable=False, default=dict
     )
+    aiDetections: Mapped[list[dict[str, Any]] | None] = mapped_column("ai_detections",
+        JSONB, nullable=True
+    )
+    """Per-particle bounding boxes the AI engine detected, if the pipeline
+    that produced this result wrote any — [{id, x, y, w, h, confidence,
+    particleType}, ...], x/y/w/h as percentages (0-100), same coordinate
+    system as a reviewer's own spatial_annotations. Column predates this
+    mapping (provisioned directly in Supabase, like sessions/qc_reviews —
+    see migration 0045's docstring); no current upload path writes it, so
+    this is null for most results today."""
     modelVersion: Mapped[str] = mapped_column("model_version", 
         String(30), nullable=False, default="mvp-v1.0"
     )

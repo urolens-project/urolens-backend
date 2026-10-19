@@ -670,6 +670,7 @@ class ResultReviewService:
             "confirmedAt": ar.confirmedAt,
             "confirmationNotes": None,  # schema drift — see module docstring
             "aiFindings": ar.aiFindings or {},
+            "aiDetections": ar.aiDetections or [],
             "flaggedAnomalies": ar.flaggedAnomalies or {},
             "particleClasses": ar.particleClasses or {},
             "modelVersion": ar.modelVersion,
