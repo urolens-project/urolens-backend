@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptStoredPii
@@ -40,7 +41,6 @@ from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
-from ..models.image import Image
 from ..models.manual_override import ManualOverride
 from ..models.patient import Patient
 from ..models.result_approval import ResultApproval
@@ -520,13 +520,29 @@ class ResultReviewService:
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
                 another MedTech's result.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
+        # Collapses what used to be 5 sequential round trips (ar, specimen,
+        # medtech user, image — patient is still separate, see below) into
+        # one: AnalysisResult.specimen/.image are plain to-one FK
+        # relationships, and Specimen.medtech (added alongside this fix) is
+        # the same Specimen.medtechId -> User lookup getFullResult always
+        # did, just eager-loaded instead of a second db.get(). Each of these
+        # joins is many-to-one from AnalysisResult's perspective, so no row
+        # duplication risk — .unique() is defensive, not load-bearing here.
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.resultId == resultId)
+            .options(
+                joinedload(AnalysisResult.specimen).joinedload(Specimen.medtech),
+                joinedload(AnalysisResult.image),
+            )
+        )
+        ar = (await self.db.execute(stmt)).unique().scalar_one_or_none()
         if ar is None:
             raise NotFoundException(
                 code="RESULT_NOT_FOUND", message="Analysis result not found."
             )
 
-        spec = await self.db.get(Specimen, ar.specimenId)
+        spec = ar.specimen
         isMedtechViewer = viewerRole is not None and isMedtech(viewerRole)
         if isMedtechViewer:
             if spec is None:
@@ -535,37 +551,32 @@ class ResultReviewService:
                 )
             requireSpecimenAssigned(spec, viewerId)
 
+        # Patient resolution stays its own round trip, and stays keyed off
+        # Specimen.patientUid (not AnalysisResult.patientId) deliberately —
+        # the two can diverge (patientId is only backfilled from the
+        # specimen's lab request, patientUid is the MedTech-facing identity
+        # used everywhere else in this method), and this is a PHI-adjacent
+        # path not worth touching as part of a round-trip-count change.
         pat: Patient | None = None
         if spec and spec.patientUid:
             pat = (
                 await self.db.execute(select(Patient).where(Patient.patientUid == spec.patientUid))
             ).scalar_one_or_none()
 
-        medtechName = ""
-        if spec and spec.medtechId:
-            medtech = await self.db.get(User, spec.medtechId)
-            medtechName = medtech.username if medtech else ""
+        medtechName = spec.medtech.username if spec and spec.medtech else ""
 
         imageUrl: str | None = None
-        if ar.imageId:
-            image = await self.db.get(Image, ar.imageId)
-            imageUrl = await signedImageUrl(image.storageKey) if image else None
+        if ar.image:
+            imageUrl = await signedImageUrl(ar.image.storageKey)
 
         overridesRows = (
             await self.db.execute(
                 select(ManualOverride)
                 .where(ManualOverride.resultId == resultId)
+                .options(joinedload(ManualOverride.medtech))
                 .order_by(ManualOverride.overriddenAt)
             )
         ).scalars().all()
-
-        overriddenByIds = list({o.overriddenBy for o in overridesRows})
-        overriddenByUserMap: dict[uuid.UUID, str] = {}
-        if overriddenByIds:
-            overriddenByRows = (
-                await self.db.execute(select(User).where(User.userId.in_(overriddenByIds)))
-            ).scalars().all()
-            overriddenByUserMap = {u.userId: u.username for u in overriddenByRows}
 
         overrides = [
             {
@@ -576,7 +587,7 @@ class ResultReviewService:
                 "rationale": o.rationale,
                 "overriddenAt": o.overriddenAt,
                 "overriddenBy": o.overriddenBy,
-                "overriddenByName": overriddenByUserMap.get(o.overriddenBy, ""),
+                "overriddenByName": o.medtech.username if o.medtech else "",
             }
             for o in overridesRows
         ]
@@ -585,22 +596,15 @@ class ResultReviewService:
             await self.db.execute(
                 select(ResultReview)
                 .where(ResultReview.resultId == resultId)
+                .options(joinedload(ResultReview.reviewer))
                 .order_by(ResultReview.updatedAt)
             )
         ).scalars().all()
 
-        reviewedByIds = list({r.reviewedBy for r in reviewRows})
-        reviewerRoleMap: dict[uuid.UUID, str] = {}
-        if reviewedByIds:
-            reviewerRows = (
-                await self.db.execute(select(User).where(User.userId.in_(reviewedByIds)))
-            ).scalars().all()
-            reviewerRoleMap = {u.userId: u.role for u in reviewerRows}
-
         annotations = [
             {
                 "reviewedBy": r.reviewedBy,
-                "reviewerRole": reviewerRoleMap.get(r.reviewedBy, ""),
+                "reviewerRole": r.reviewer.role if r.reviewer else "",
                 "annotationNotes": r.annotationNotes,
                 "spatialAnnotations": r.spatialAnnotations,
                 "updatedAt": r.updatedAt,

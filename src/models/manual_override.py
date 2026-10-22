@@ -16,6 +16,7 @@ from .base import Base
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
     from .result_field import ResultField
+    from .user import User
 
 
 class OverrideKind(enum.StrEnum):
@@ -80,6 +81,10 @@ class ManualOverride(Base):
     field: Mapped[ResultField | None] = relationship(
         back_populates="manualOverrides", lazy="raise"
     )
+    # One-directional — lets getFullResult eager-load the overriding user's
+    # username alongside the override row itself, instead of a separate
+    # batch User query.
+    medtech: Mapped[User] = relationship(foreign_keys=[medtechId])
 
     @property
     def id(self) -> uuid.UUID:
