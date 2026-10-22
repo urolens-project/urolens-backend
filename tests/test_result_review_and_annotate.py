@@ -45,6 +45,7 @@ def _makeResult(status: str = ResultStatus.PENDING_CONFIRM) -> AnalysisResult:
     result.specimenId = SPECIMEN_ID
     result.status = status
     result.imageId = None
+    result.image = None
     result.confirmedAt = None
     result.aiFindings = {"RBC": 12}
     result.flaggedAnomalies = {}
@@ -80,17 +81,31 @@ def _makeAuditLogger() -> MagicMock:
 # ── getFullResult: return reason and patient name ─────────────────────────────
 
 def _detailDb(result: AnalysisResult, specimen: Specimen, returnReason: str | None = None) -> tuple[AsyncMock, list]:
-    """A session answering each getFullResult query by the entity it selects."""
+    """A session answering each getFullResult query by the entity it selects.
+
+    getFullResult now reads the specimen/medtech/image via eager-loaded
+    relationships on the AnalysisResult row (joinedload), not separate
+    db.get() calls — wired directly onto the fixtures here since a mocked
+    session doesn't actually perform the join.
+    """
     medtech = SimpleNamespace(username="medtech1")
+    specimen.medtech = medtech
+    result.specimen = specimen
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[result, specimen, medtech])
     returnQueries: list = []
 
     def _execute(stmt: Select) -> MagicMock:
         entity = stmt.column_descriptions[0].get("entity")
         executeResult = MagicMock()
+        executeResult.unique.return_value = executeResult
         executeResult.scalars.return_value.all.return_value = []
-        answers = {Patient: _patient(), ResultReturn: returnReason, ManualOverride: None, ResultReview: None}
+        answers = {
+            AnalysisResult: result,
+            Patient: _patient(),
+            ResultReturn: returnReason,
+            ManualOverride: None,
+            ResultReview: None,
+        }
         if entity is ResultReturn:
             returnQueries.append(stmt)
         executeResult.scalar_one_or_none.return_value = answers.get(entity)
