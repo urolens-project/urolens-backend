@@ -133,6 +133,9 @@ def _makeResult(
     result.smartDiagnosisUnavailable = False
     result.smartDiagnosisOutput = None  # first confirmation: no output row yet
     result.image = None
+    # confirmResult also checks requireNoPendingRetake — no image attached
+    # means "not mid-retake" without a db.get(Image, ...) call.
+    result.imageId = None
     result.confirmedBy = None
     result.confirmedAt = None
     return result
@@ -207,8 +210,8 @@ async def test_confirmationWithOverrideRunsRealEngine() -> None:
         db=db, auditLogger=auditLogger, _smartDiagnosisService=diagnosis,
         _notifService=notifications,
     )
-    with patch.object(service, "_getResult", AsyncMock(return_value=result)), patch.object(
-        service, "_validateNoPendingRetake", AsyncMock()
+    with patch.object(service, "_getResult", AsyncMock(return_value=result)), patch(
+        "src.services.result_confirmation_service.requireNoPendingRetake", AsyncMock()
     ), patch.object(diagnosis, "_loadResult", AsyncMock(return_value=result)), patch.object(
         rule_engine, "_CONFIG_PATH", str(configPath)
     ):
@@ -418,7 +421,7 @@ async def test_confirmResultTriggersSmartDiagnosis():
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.requireNoPendingRetake",
         new_callable=AsyncMock,
     ):
         await _service.confirmResult(
@@ -460,7 +463,7 @@ async def test_confirmResultSucceedsEvenWhenSmartDiagnosisFails():
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.requireNoPendingRetake",
         new_callable=AsyncMock,
     ):
         # Must NOT raise even though smart diagnosis returned None

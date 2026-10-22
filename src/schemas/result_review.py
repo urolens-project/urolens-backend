@@ -397,6 +397,12 @@ class FullResultDetail(BaseModel):
     returnReason: str | None = None
     """The supervisor's latest reason, only while the result is
     RETURNED_FOR_CORRECTION (UROLENS-226)."""
+    isRetakePending: bool = False
+    """True while the result's attached image is mid-retake — marked
+    IMAGE_RETAKE_REQUESTED, or pointing at a discarded image with no
+    replacement uploaded yet (UROLENS-230). Confirm, annotate and override
+    all refuse to act while this is true; surfaced here so the frontend can
+    warn before a write is attempted, not just after it 422s."""
     annotations: list[AnnotationItem]
     """Every reviewer's annotation, attributed. Previously flattened to a
     single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer

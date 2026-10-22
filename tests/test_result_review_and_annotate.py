@@ -24,6 +24,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.image import Image, ImageStatus
 from src.models.manual_override import ManualOverride
 from src.models.patient import Patient
 from src.models.result_return import ResultReturn
@@ -264,6 +265,33 @@ async def test_medtechCannotAnnotateOnceTheResultLeftTheirHands(status: ResultSt
 
     assert excInfo.value.status_code == 409
     assert excInfo.value.errorCode == "RESULT_NOT_EDITABLE"
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_annotateRefusedWhileImageRetakeIsPending() -> None:
+    """UROLENS-230: boxes drawn while the result's image is discarded
+    (retake pending) would be anchored to an image about to be replaced —
+    saveAnnotation must refuse it, same as confirmResult already did.
+    """
+    result = _makeResult(ResultStatus.PENDING_CONFIRM)
+    imageId = uuid.uuid4()
+    result.imageId = imageId
+    specimen = _makeSpecimen()
+    image = MagicMock(spec=Image)
+    image.status = ImageStatus.DISCARDED
+
+    async def _get(model, _id, **_kwargs):
+        return image if model is Image else specimen
+
+    db = _annotateDb(result, specimen)
+    db.get = AsyncMock(side_effect=_get)
+
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _annotate(db, MEDTECH_ID, "MEDTECH")
+
+    assert excInfo.value.errorCode == "PENDING_RETAKE"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
 
