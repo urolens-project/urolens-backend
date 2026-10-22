@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.models.analysis_result import AnalysisResult
+from src.models.lab_request import LabRequest
 from src.models.specimen import Specimen
 from src.models.user import User
 from src.schemas.patient_portal import PatientResultDetailResponse
@@ -56,10 +57,14 @@ def _makeResultRow(resultId=None, resultStatus="RELEASED", patientId=_UNSET, **o
     return row
 
 
-def _makeSpecimen(specimenId=None, medtechId=_UNSET) -> MagicMock:
+LAB_REQUEST_ID = uuid.UUID("00000000-0000-0000-0000-000000000056")
+
+
+def _makeSpecimen(specimenId=None, medtechId=_UNSET, labRequestId=_UNSET) -> MagicMock:
     spec = MagicMock(spec=Specimen)
     spec.specimenId = specimenId or SPECIMEN_ID
     spec.medtechId = MEDTECH_ID if medtechId is _UNSET else medtechId
+    spec.labRequestId = LAB_REQUEST_ID if labRequestId is _UNSET else labRequestId
     return spec
 
 
@@ -68,6 +73,13 @@ def _makeUser(userId=None, username="jdoe") -> MagicMock:
     user.userId = userId or MEDTECH_ID
     user.username = username
     return user
+
+
+def _makeLabRequest(labRequestId=None, physicianName="Dr. Santos") -> MagicMock:
+    labRequest = MagicMock(spec=LabRequest)
+    labRequest.labRequestId = labRequestId or LAB_REQUEST_ID
+    labRequest.physicianName = physicianName
+    return labRequest
 
 
 def _makeAuditLogger() -> MagicMock:
@@ -278,6 +290,37 @@ async def test_getResultDetailAnalyzedByIsNoneWhenSpecimenHasNoMedtech():
     result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
 
     assert result.analyzedBy is None
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailRequestingPhysicianComesFromLabRequest():
+    """The requesting physician's name comes from LabRequest.physicianName
+    (via Specimen.labRequestId), not from AnalysisResult or Specimen
+    directly — neither model has anything resembling a physician field.
+    """
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (LabRequest, LAB_REQUEST_ID): _makeLabRequest(physicianName="Dr. Santos"),
+    }
+    db = _makeDetailDb(PATIENT_ID, row, getMap)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.requestingPhysician == "Dr. Santos"
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailRequestingPhysicianIsNoneWhenNoLabRequest():
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {(Specimen, SPECIMEN_ID): _makeSpecimen(labRequestId=None)}
+    db = _makeDetailDb(PATIENT_ID, row, getMap)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.requestingPhysician is None
 
 
 @pytest.mark.asyncio
