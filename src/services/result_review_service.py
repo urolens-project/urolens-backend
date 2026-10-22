@@ -41,6 +41,7 @@ from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
+from ..models.image import ImageStatus
 from ..models.manual_override import ManualOverride
 from ..models.patient import Patient
 from ..models.result_approval import ResultApproval
@@ -55,6 +56,7 @@ from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
+    requireNoPendingRetake,
     requireResultEditable,
     requireSpecimenAssigned,
     requireSpecimenNotRejected,
@@ -665,6 +667,13 @@ class ResultReviewService:
                 )
             ).scalar_one_or_none()
 
+        # Reuses the already-eager-loaded ar.image (see the combined query
+        # above) rather than calling specimen_access.isRetakePending, which
+        # would re-fetch the same image with a second round trip.
+        isRetakePending = ar.status == ResultStatus.IMAGE_RETAKE_REQUESTED or (
+            ar.image is not None and ar.image.status != ImageStatus.ACTIVE
+        )
+
         detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
@@ -689,6 +698,7 @@ class ResultReviewService:
             ),
             "status": ar.status,
             "returnReason": returnReason,
+            "isRetakePending": isRetakePending,
             "annotations": annotations,
         }
         if viewerId is not None and self.auditLogger is not None:
@@ -737,6 +747,9 @@ class ResultReviewService:
             ConflictException: `SPECIMEN_REJECTED`, if a MedTech annotates a
                 rejected specimen; `RESULT_NOT_EDITABLE`, for any other status
                 the caller's role may not change.
+            UnprocessableException: `PENDING_RETAKE`, if the result's image
+                is mid-retake (UROLENS-230) — annotating it would anchor
+                boxes to an image about to be replaced.
         """
         ar = await self._getAnnotatableResult(resultId)
         isSupervisor = not isMedtech(callerRole)
@@ -747,6 +760,7 @@ class ResultReviewService:
             requireSpecimenNotRejected(specimen)
             ar = await self._getAnnotatableResult(resultId, fresh=True)
         requireResultEditable(ar, isSupervisor)
+        await requireNoPendingRetake(self.db, ar, action="annotate")
 
         existing = (
             await self.db.execute(

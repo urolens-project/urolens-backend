@@ -19,6 +19,7 @@ from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
+    requireNoPendingRetake,
     requireResultEditable,
     requireSpecimenNotRejected,
 )
@@ -93,6 +94,9 @@ class ManualOverrideService:
             ConflictException: `SPECIMEN_REJECTED`, if a MedTech calls on a
                 rejected specimen; `RESULT_NOT_EDITABLE`, if the result isn't in
                 a status the caller's role may override.
+            UnprocessableException: `PENDING_RETAKE`, if the result's image
+                is mid-retake (UROLENS-230) — a correction here would be
+                against findings about to be reset by the replacement image.
         """
         result = await self._getResult(resultId)
         isSupervisor = not isMedtech(callerRole)
@@ -103,6 +107,7 @@ class ManualOverrideService:
             requireSpecimenNotRejected(specimen)
             result = await self._getResult(resultId, fresh=True)
         requireResultEditable(result, isSupervisor)
+        await requireNoPendingRetake(self.db, result, action="correct")
 
         # Read original AI value safely from the db findings (Source of Truth)
         dbOriginalValue = await self._extractOriginalValue(result, parameter)

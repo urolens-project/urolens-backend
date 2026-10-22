@@ -40,6 +40,7 @@ from src.core.exceptions import (
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.escalation import Escalation
+from src.models.image import ImageStatus
 from src.models.manual_override import ManualOverride
 from src.models.patient import Patient
 from src.models.result_approval import ResultApproval
@@ -65,8 +66,11 @@ def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> Analy
     result.smartDiagnosis = None
     # getFullResult now reads ar.image (eager-loaded), not a separate
     # db.get(Image, ar.imageId) call — default to "no image attached",
-    # overridden per-test where one is needed.
+    # overridden per-test where one is needed. imageId stays None too:
+    # saveAnnotation/overrideParameter's requireNoPendingRetake guard reads
+    # it directly (a second db.get(Image, ...), not the eager-loaded ar.image).
     result.image = None
+    result.imageId = None
     return result
 
 
@@ -603,7 +607,7 @@ async def test_getFullResultGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
     ar.specimen = specimen
 
     storageKey = f"specimens/{specimen.specimenId}/images/{uuid.uuid4()}.jpg"
-    ar.image = SimpleNamespace(storageKey=storageKey)
+    ar.image = SimpleNamespace(storageKey=storageKey, status=ImageStatus.ACTIVE)
     signedUrl = f"https://example.supabase.co/storage/v1/object/sign/microscopy/{storageKey}?token=t"
 
     db = AsyncMock()
@@ -623,10 +627,77 @@ async def test_getFullResultGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
     with patch("src.core.storage.supabase", fakeSb):
         detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
 
+    assert detail["isRetakePending"] is False
+
     assert detail["imageUrl"] == signedUrl
     assert "/object/public/" not in detail["imageUrl"]
     bucket.create_signed_url.assert_awaited_once()
     assert bucket.create_signed_url.await_args.args[0] == storageKey
+
+
+@pytest.mark.asyncio
+async def test_getFullResultIsRetakePendingWhenImageIsDiscarded():
+    """UROLENS-230: surfaced so the frontend can warn before a write is
+    attempted, not just after confirm/annotate/override 422s."""
+    ar = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+    ar.image = SimpleNamespace(storageKey="irrelevant.jpg", status=ImageStatus.DISCARDED)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),
+            _makeScalarsResult([]),
+            _makeScalarsResult([]),
+            _makeScalarOneResult(None),
+        ]
+    )
+
+    with patch("src.services.result_review_service.signedImageUrl", AsyncMock(return_value=None)):
+        detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["isRetakePending"] is True
+
+
+@pytest.mark.asyncio
+async def test_getFullResultIsRetakePendingWhenStatusIsImageRetakeRequested():
+    """A result explicitly marked IMAGE_RETAKE_REQUESTED counts as pending
+    even before any image is attached at all."""
+    ar = _makeResult(status=ResultStatus.IMAGE_RETAKE_REQUESTED)
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+    ar.image = None
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),
+            _makeScalarsResult([]),
+            _makeScalarsResult([]),
+            _makeScalarOneResult(None),
+        ]
+    )
+
+    detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["isRetakePending"] is True
 
 
 @pytest.mark.asyncio
