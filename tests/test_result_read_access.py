@@ -108,7 +108,17 @@ async def test_roleClaimIsComparedCaseInsensitively():
 
 @pytest.mark.asyncio
 async def test_resultDetailRefusesAnotherMedtechBeforeDecryptingOrLogging():
-    db = _makeDb(_makeResult(), _makeSpecimen(medtechId=OTHER_MEDTECH_ID))
+    # getFullResult reads the specimen via an eager-loaded relationship on
+    # the AnalysisResult row (joinedload), not a separate db.get() —
+    # wired directly onto the fixture since a mocked session doesn't
+    # actually perform the join.
+    ar = _makeResult()
+    ar.specimen = _makeSpecimen(medtechId=OTHER_MEDTECH_ID)
+    executeResult = MagicMock()
+    executeResult.unique.return_value = executeResult
+    executeResult.scalar_one_or_none.return_value = ar
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=executeResult)
     auditLogger = MagicMock()
     auditLogger.record = AsyncMock()
     service = ResultReviewService(db=db, auditLogger=auditLogger)
