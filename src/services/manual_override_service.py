@@ -15,6 +15,7 @@ from ..core.exceptions import (
 )
 from ..models.analysis_result import AnalysisResult
 from ..models.manual_override import ManualOverride
+from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
@@ -28,16 +29,24 @@ class ManualOverrideService:
 
     SRP  — one responsibility: record a MedTech's correction alongside the
             original AI value.
-    DIP  — depends on injected AuditLogger.
+    DIP  — depends on injected AuditLogger, SmartDiagnosisService.
     """
 
     def __init__(
         self,
         db: AsyncSession,
         auditLogger: AuditLogger,
+        smartDiagnosisService: SmartDiagnosisService | None = None,
     ) -> None:
         self.db = db
         self.auditLogger = auditLogger
+        # Optional: Smart Diagnosis previously went stale after any override
+        # made post-confirmation (a Supervisor's correction, or a MedTech's
+        # on a returned result) — nothing re-ran the rule engine once the
+        # upload-time preview or confirm-time formal run had already
+        # happened. None is still accepted so existing callers/tests that
+        # construct this service directly keep working.
+        self.smartDiagnosisService = smartDiagnosisService
 
     async def overrideParameter(
         self,
@@ -132,6 +141,12 @@ class ManualOverrideService:
             db=self.db,
             request=request,
         )
+
+        if self.smartDiagnosisService:
+            # Re-derives evidence from the now-updated particleClasses —
+            # run() is SAVEPOINT-isolated and never raises, so a diagnosis
+            # engine failure here can't lose this override.
+            await self.smartDiagnosisService.run(resultId=resultId, db=self.db)
 
         await self.db.commit()
         await self.db.refresh(override)
