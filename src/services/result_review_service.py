@@ -51,6 +51,7 @@ from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
 from .notification_service import NotificationService
+from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
@@ -87,10 +88,12 @@ class ResultReviewService:
         db: AsyncSession,
         auditLogger: AuditLogger | None = None,
         _notifService: NotificationService | None = None,
+        _smartDiagnosisService: SmartDiagnosisService | None = None,
     ) -> None:
         self.db = db
         self.auditLogger = auditLogger
         self._notifService = _notifService or NotificationService(db=db)
+        self._smartDiagnosisService = _smartDiagnosisService
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -750,6 +753,15 @@ class ResultReviewService:
             )
         ).scalar_one_or_none()
 
+        # The diff baseline for a reviewer's first-ever save on this result
+        # is the AI's own detected boxes, not empty — those are what the
+        # current particle counts already reflect (the canvas pre-fills
+        # from them too; see MicroscopyImageSection). Diffing against []
+        # would count every AI-seeded box as newly hand-drawn the moment
+        # someone saves the AI's suggestions untouched, double-counting on
+        # top of ai_findings.
+        previousBoxes = existing.spatialAnnotations if existing else (ar.aiDetections or [])
+
         if existing:
             existing.annotationNotes = annotationNotes
             if spatialAnnotations is not None:
@@ -764,6 +776,15 @@ class ResultReviewService:
                 )
             )
 
+        adjustedParticles: list[str] = []
+        if spatialAnnotations is not None:
+            adjustedParticles = await self._applyBoxDrivenCountAdjustments(
+                ar=ar,
+                previousBoxes=previousBoxes or [],
+                newBoxes=spatialAnnotations,
+                userId=userId,
+            )
+
         await self.auditLogger.record(
             eventType="ANNOTATION_SAVED",
             entityType="analysis_result",
@@ -771,11 +792,19 @@ class ResultReviewService:
             userId=userId,
             db=self.db,
             detailJson={
-                "resultStatus": ar.status.value,
+                "resultStatus": ar.status,
                 "hasSpatialAnnotations": spatialAnnotations is not None,
+                "countsAdjustedFor": adjustedParticles,
             },
             request=request,
         )
+
+        if adjustedParticles and self._smartDiagnosisService:
+            # The box edit changed particleClasses — re-derive evidence so
+            # the diagnosis panel doesn't keep showing scores computed from
+            # counts the reviewer has since corrected.
+            await self._smartDiagnosisService.run(resultId=resultId, db=self.db)
+
         await self.db.commit()
 
         return {
@@ -783,6 +812,85 @@ class ResultReviewService:
             "annotationNotes": annotationNotes,
             "spatialAnnotations": spatialAnnotations,
         }
+
+    async def _applyBoxDrivenCountAdjustments(
+        self,
+        ar: AnalysisResult,
+        previousBoxes: list,
+        newBoxes: list,
+        userId: uuid.UUID,
+    ) -> list[str]:
+        """Keeps particle counts in sync with bounding-box edits.
+
+        Boxes and counts were previously two disconnected editing paths —
+        deleting or relabeling a box never touched the count shown in the
+        particle table. Diffs the box set by `id` (removed / added /
+        relabeled) and turns the net per-particle-type delta into the same
+        kind of `ManualOverride` row a human-typed correction creates, with
+        an auto-generated rationale, batched one row per affected particle
+        type rather than one per box (a dense AI-seeded set can be hundreds
+        of boxes touching only one or two types).
+
+        Returns the list of particle types adjusted, so the caller knows
+        whether a Smart Diagnosis re-run is actually warranted.
+        """
+        # Legacy boxes (saved before `id`/`particleType` existed — see
+        # SpatialAnnotationItemOut's docstring) can't be tracked across a
+        # diff at all; skip anything without both rather than guess.
+        prevById = {b["id"]: b for b in previousBoxes if b.get("id") and b.get("particleType")}
+        newById = {b["id"]: b for b in newBoxes if b.get("id") and b.get("particleType")}
+
+        delta: dict[str, int] = {}
+        removed = added = relabeled = 0
+        for boxId, prevBox in prevById.items():
+            if boxId not in newById:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                removed += 1
+        for boxId, newBox in newById.items():
+            prevBox = prevById.get(boxId)
+            if prevBox is None:
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                added += 1
+            elif prevBox["particleType"] != newBox["particleType"]:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                relabeled += 1
+
+        if not delta:
+            return []
+
+        particleClasses = dict(ar.particleClasses or {})
+        aiFindings = ar.aiFindings or {}
+        adjusted: list[str] = []
+
+        for parameter, change in delta.items():
+            if change == 0:
+                continue
+            current = particleClasses.get(parameter, aiFindings.get(parameter, 0))
+            correctedValue = max(0, int(current) + change)
+            if correctedValue == current:
+                continue
+
+            self.db.add(
+                ManualOverride(
+                    resultId=ar.resultId,
+                    medtechId=userId,
+                    parameterName=parameter,
+                    originalAiValue=str(float(aiFindings.get(parameter, 0))),
+                    correctedValue=str(float(correctedValue)),
+                    rationale=(
+                        f"Adjusted via bounding-box edit "
+                        f"({removed} removed, {added} added, {relabeled} relabeled)."
+                    ),
+                )
+            )
+            particleClasses[parameter] = correctedValue
+            adjusted.append(parameter)
+
+        if adjusted:
+            ar.particleClasses = particleClasses
+
+        return adjusted
 
     async def _getAnnotatableResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # `fresh` overwrites the already-loaded object with current DB state.
