@@ -48,6 +48,9 @@ def _db() -> AsyncMock:
     result = MagicMock(spec=AnalysisResult)
     result.resultId = RESULT_ID
     result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
+    # saveAnnotation also checks requireNoPendingRetake — no image attached
+    # means "not mid-retake" without a db.get(Image, ...) call.
+    result.imageId = None
 
     resultLookup = MagicMock()
     resultLookup.scalar_one_or_none.return_value = result

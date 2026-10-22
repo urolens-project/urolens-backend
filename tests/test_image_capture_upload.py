@@ -42,8 +42,8 @@ from src.models.specimen import Specimen
 from src.services import ai_integration_service
 from src.services.ai_integration_service import AIIntegrationService
 from src.services.notification_service import NotificationService
-from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import SmartDiagnosisService
+from src.services.specimen_access import requireNoPendingRetake
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-0000000003a1")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-0000000003a2")
@@ -431,35 +431,32 @@ async def test_aFailedDiagnosisFlagsTheEarlierOneUnavailable() -> None:
     [(ImageStatus.DISCARDED, True), (ImageStatus.REPLACED, True), (ImageStatus.ACTIVE, False)],
 )
 async def test_retakeGuardRefusesAResultWhoseImageIsNotActive(imageStatus: str, refused: bool) -> None:
+    # Shared across confirm/annotate/override (specimen_access.py) since
+    # UROLENS-230 widened this guard beyond just confirmResult — still
+    # exercised here rather than duplicated per call site.
     image = MagicMock(spec=Image)
     image.status = imageStatus
     db = AsyncMock()
     db.get = AsyncMock(return_value=image)
-    service = ResultConfirmationService(
-        db=db, auditLogger=MagicMock(), _smartDiagnosisService=MagicMock(), _notifService=MagicMock()
-    )
     result = _makeExistingResult(ResultStatus.PENDING_CONFIRM)
     result.imageId = IMAGE_ID
 
     if refused:
         with pytest.raises(UnprocessableException) as excInfo:
-            await service._validateNoPendingRetake(result)
+            await requireNoPendingRetake(db, result, action="confirm")
         assert excInfo.value.errorCode == "PENDING_RETAKE"
     else:
-        await service._validateNoPendingRetake(result)
+        await requireNoPendingRetake(db, result, action="confirm")
     db.get.assert_awaited_once_with(Image, IMAGE_ID)
 
 
 @pytest.mark.asyncio
 async def test_aResultWithNoImageIsNotLookedUp() -> None:
     db = AsyncMock()
-    service = ResultConfirmationService(
-        db=db, auditLogger=MagicMock(), _smartDiagnosisService=MagicMock(), _notifService=MagicMock()
-    )
     result = _makeExistingResult(ResultStatus.PENDING_CONFIRM)
     result.imageId = None
 
-    await service._validateNoPendingRetake(result)
+    await requireNoPendingRetake(db, result, action="confirm")
 
     db.get.assert_not_awaited()
 
