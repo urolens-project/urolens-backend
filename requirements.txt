@@ -36,4 +36,4 @@ Pillow==12.3.0
 pre-commit==4.6.2
 python-multipart==0.0.32
 
-urolens-ai-engine @ git+https://github.com/urolens-project/urolens-ai-engine.git@develop
+urolens-ai-engine @ git+https://github.com/urolens-project/urolens-ai-engine.git@50aa94e6269d78b6ca52c0fe727196b3bcd5dc7d

@@ -1,4 +1,6 @@
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -32,11 +34,26 @@ from src.api.results import router as results_router
 # Web developer routers
 from src.api.specimens import router as src_specimens_router
 from src.api.sync import router as sync_router
+from src.core.config import engineFileProblems, settings
 from src.schemas.system import HealthCheckResponse
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="UroLens LIS Engine")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+    """Report missing AI engine files once, when the server starts.
+
+    Logged as errors instead of stopping the app: without these files only image
+    uploads and Smart Diagnosis fail, and they would otherwise fail on the first
+    upload with nothing in the logs at startup to say why.
+    """
+    for problem in engineFileProblems(settings):
+        logger.error("AI engine: %s", problem)
+    yield
+
+
+app = FastAPI(title="UroLens LIS Engine", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
