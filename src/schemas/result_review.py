@@ -279,6 +279,10 @@ class SpatialAnnotationItem(BaseModel):
     frontend canvas's coordinate system, not pixels — a pixel conversion is
     always derivable later via the result's `Image.widthPx`/`.heightPx`
     (UROLENS-224).
+
+    Request-side only (`AnnotationRequest`/`AnnotationResponse`) — a newly
+    saved box must have a current, known `particleType`. For reading
+    historical boxes back, see `SpatialAnnotationItemOut` below.
     """
 
     id: str = Field(..., min_length=1, max_length=64)
@@ -297,6 +301,49 @@ class SpatialAnnotationItem(BaseModel):
         return v
 
 
+class SpatialAnnotationItemOut(BaseModel):
+    """Read-side counterpart to `SpatialAnnotationItem`, used only in
+    `FullResultDetail` (`get_full_result`'s response).
+
+    Historical boxes in the live DB predate both the `particleType` key
+    (written as `label` before this model existed — see the
+    "spatial_annotations regression" changelog entry) and the current
+    `PARTICLE_LABELS` set (some used labels since retired/renamed, e.g.
+    `"debris"`). Rejecting those on write is correct — `SpatialAnnotationItem`
+    still does, via `AnnotationRequest` — but rejecting them on read would
+    500 the entire result detail page for any result with an old box on it.
+    So this accepts the legacy key and does not whitelist the value; it
+    passes whatever is stored straight through for display.
+    """
+
+    id: str
+    x: float
+    y: float
+    w: float
+    h: float
+    particleType: str = Field(..., validation_alias=AliasChoices("particleType", "label"))
+
+
+class AiDetectionItem(BaseModel):
+    """One AI-detected particle bounding box, as shown in a result's full
+    detail view before any reviewer has drawn their own annotation.
+
+    Read-only — there is no corresponding request schema; these come from
+    `AnalysisResult.aiDetections` and are never written back. Lenient like
+    `SpatialAnnotationItemOut`: this is the AI engine's own output, not
+    bound by the current `PARTICLE_LABELS` set a reviewer's manual save is
+    validated against.
+    """
+
+    id: str
+    x: float
+    y: float
+    w: float
+    h: float
+    particleType: str
+    confidence: float | None = None
+
+
 class AnnotationItem(BaseModel):
     """One reviewer's annotation on a result, as shown in a result's full detail view.
 
@@ -311,7 +358,7 @@ class AnnotationItem(BaseModel):
     """Resolved from `reviewedBy` via a batched `User` lookup; `""` if the
     user record can't be found (mirrors `overriddenByName`'s fallback)."""
     annotationNotes: str | None = None
-    spatialAnnotations: list[SpatialAnnotationItem] | None = None
+    spatialAnnotations: list[SpatialAnnotationItemOut] | None = None
     updatedAt: datetime
 
 
@@ -338,6 +385,7 @@ class FullResultDetail(BaseModel):
     has no Alembic history (schema-drift finding, not modeled). Kept in the
     response shape for API-contract compatibility."""
     aiFindings: dict[str, Any]
+    aiDetections: list[AiDetectionItem] = []
     flaggedAnomalies: dict[str, Any]
     particleClasses: dict[str, Any]
     modelVersion: str
@@ -349,6 +397,12 @@ class FullResultDetail(BaseModel):
     returnReason: str | None = None
     """The supervisor's latest reason, only while the result is
     RETURNED_FOR_CORRECTION (UROLENS-226)."""
+    isRetakePending: bool = False
+    """True while the result's attached image is mid-retake — marked
+    IMAGE_RETAKE_REQUESTED, or pointing at a discarded image with no
+    replacement uploaded yet (UROLENS-230). Confirm, annotate and override
+    all refuse to act while this is true; surfaced here so the frontend can
+    warn before a write is attempted, not just after it 422s."""
     annotations: list[AnnotationItem]
     """Every reviewer's annotation, attributed. Previously flattened to a
     single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer

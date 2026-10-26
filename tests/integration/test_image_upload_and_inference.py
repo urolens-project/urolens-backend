@@ -556,8 +556,16 @@ async def test_resultDetailOfAnotherMedtechsResultReturns403BeforeAnyPatientData
     result = MagicMock(spec=AnalysisResult)
     result.resultId = uuid.uuid4()
     result.specimenId = TEST_SPECIMEN_ID
+    # getFullResult reads the specimen via an eager-loaded relationship on
+    # the AnalysisResult row (joinedload), not a separate db.get() — wired
+    # directly onto the fixture since a mocked session doesn't actually
+    # perform the join.
+    result.specimen = _makeAssignedSpecimen(medtechId=OTHER_MEDTECH_ID)
+    executeResult = MagicMock()
+    executeResult.unique.return_value = executeResult
+    executeResult.scalar_one_or_none.return_value = result
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[result, _makeAssignedSpecimen(medtechId=OTHER_MEDTECH_ID)])
+    db.execute = AsyncMock(return_value=executeResult)
 
     async def _override():
         yield db
@@ -573,5 +581,5 @@ async def test_resultDetailOfAnotherMedtechsResultReturns403BeforeAnyPatientData
 
     assert response.status_code == 403, response.text
     assert response.json()["error"]["code"] == "SPECIMEN_NOT_ASSIGNED"
-    assert db.get.await_count == 2  # result + specimen only; no Patient lookup
+    assert db.execute.await_count == 1  # result (+specimen/medtech/image) only; no Patient lookup
     db.commit.assert_not_awaited()  # no view logged for a refused read
