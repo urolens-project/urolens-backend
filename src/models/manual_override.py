@@ -1,11 +1,12 @@
 """ORM model for the `manual_overrides` table."""
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -14,6 +15,15 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
+    from .result_field import ResultField
+
+
+class OverrideKind(enum.StrEnum):
+    """For a field and class the latest row decides: OVERRIDE sets the count,
+    REVERT returns it to the box count."""
+
+    OVERRIDE = "OVERRIDE"
+    REVERT = "REVERT"
 
 
 class ManualOverride(Base):
@@ -23,6 +33,9 @@ class ManualOverride(Base):
     """
 
     __tablename__ = "manual_overrides"
+    __table_args__ = (
+        CheckConstraint("kind IN ('OVERRIDE', 'REVERT')", name="ck_manual_overrides_kind"),
+    )
 
     overrideId: Mapped[uuid.UUID] = mapped_column("override_id", 
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -46,9 +59,26 @@ class ManualOverride(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    fieldId: Mapped[uuid.UUID | None] = mapped_column(
+        "field_id",
+        UUID(as_uuid=True),
+        ForeignKey("result_fields.field_id", name="fk_manual_overrides_field", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    """Set on every override written by the multi-field workflow. NULL on older
+    result-level rows, which stay as history."""
+    kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default=OverrideKind.OVERRIDE,
+        server_default=OverrideKind.OVERRIDE.value,
+    )
+
     # ── Relationships ────────────────────────────────────────────────────────
     analysisResult: Mapped[AnalysisResult] = relationship(
         back_populates="manualOverrides"
+    )
+    field: Mapped[ResultField | None] = relationship(
+        back_populates="manualOverrides", lazy="raise"
     )
 
     @property
