@@ -351,3 +351,31 @@ async def test_noFieldMayBeAddedToARejectedSpecimen() -> None:
         await _checkAccess(_accessService(None), _specimen(status="REJECTED"))
 
     assert excInfo.value.errorCode == "SPECIMEN_REJECTED"
+
+
+# ── Consent ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_theCallersConsentCheckRunsForTheSpecimenBeingCaptured() -> None:
+    service, specimen, consent = _accessService(None), _specimen(), AsyncMock()
+
+    with patch.object(field_capture_service, "getAssignedSpecimen", AsyncMock(return_value=specimen)), \
+         patch.object(field_capture_service, "requireProcessingConsent", consent):
+        await service._requireFieldUploadAllowed(SPECIMEN_ID, MEDTECH_ID, None)
+
+    consent.assert_awaited_once_with(
+        service.db, specimen, MEDTECH_ID, service.auditLogger, action="IMAGE_UPLOAD", request=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_noFieldMayBeAddedForAPatientWhoRefusedProcessing() -> None:
+    refused = ConflictException(code="CONSENT_REFUSED", message="The patient refused processing.")
+
+    with patch.object(field_capture_service, "getAssignedSpecimen", AsyncMock(return_value=_specimen())), \
+         patch.object(field_capture_service, "requireProcessingConsent", AsyncMock(side_effect=refused)), \
+         pytest.raises(ConflictException) as excInfo:
+        await _accessService(None)._requireFieldUploadAllowed(SPECIMEN_ID, MEDTECH_ID, None)
+
+    assert excInfo.value.errorCode == "CONSENT_REFUSED"
+
