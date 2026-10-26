@@ -20,6 +20,24 @@
   Needs the B1 baseline migrations (`0000`, `0046`) first.
 
 ### Fixed
+- **A fresh install of the AI engine made every image upload fail with
+  `AI_ANALYSIS_FAILED`, and nothing said why until the first upload.** The engine's
+  `develop` branch renamed its detector weights to `best.pt` and added an input gate
+  with its own weights (`gate.pt`), while the backend only looked for `weights.pt` and
+  never set `GATE_WEIGHTS_PATH`; the engine's own defaults are relative paths that only
+  exist inside its repo. `src/core/config.py` now resolves four engine files the same
+  way: an explicit env var wins, otherwise the file inside the installed `urolens_ai`
+  package (`models/yolov8/best.pt`, falling back to the old `weights.pt`;
+  `models/gate/gate.pt`; `smart_diagnosis/config.yaml`; the optional
+  `models/yolov8/thresholds.yaml`), and the result is handed to the engine through
+  `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`, `RULE_ENGINE_CONFIG_PATH` and
+  `CLASS_THRESHOLDS_PATH`. At startup the server logs one `AI engine:` error for each
+  required file that is unset or missing; it does not stop the app. The engine is now
+  pinned to commit `50aa94e` instead of the moving `develop` branch, so a deploy can no
+  longer pick up an untested engine. **Deploy note:** the engine's install currently
+  ships no data files (no weights, gate or rule config), so every environment must set
+  `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH` and `RULE_ENGINE_CONFIG_PATH` until the
+  engine packages them. No route, response or error code changes.
 - **Backend CI failed the real-engine Smart Diagnosis override test without a
   developer's local `.env`.** The AI package defaults to a config path inside its
   source repository and does not bundle the clinical YAML. The integration test
