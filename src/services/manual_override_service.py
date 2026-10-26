@@ -15,9 +15,11 @@ from ..core.exceptions import (
 )
 from ..models.analysis_result import AnalysisResult
 from ..models.manual_override import ManualOverride
+from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
+    requireNoPendingRetake,
     requireResultEditable,
     requireSpecimenNotRejected,
 )
@@ -28,16 +30,24 @@ class ManualOverrideService:
 
     SRP  — one responsibility: record a MedTech's correction alongside the
             original AI value.
-    DIP  — depends on injected AuditLogger.
+    DIP  — depends on injected AuditLogger, SmartDiagnosisService.
     """
 
     def __init__(
         self,
         db: AsyncSession,
         auditLogger: AuditLogger,
+        smartDiagnosisService: SmartDiagnosisService | None = None,
     ) -> None:
         self.db = db
         self.auditLogger = auditLogger
+        # Optional: Smart Diagnosis previously went stale after any override
+        # made post-confirmation (a Supervisor's correction, or a MedTech's
+        # on a returned result) — nothing re-ran the rule engine once the
+        # upload-time preview or confirm-time formal run had already
+        # happened. None is still accepted so existing callers/tests that
+        # construct this service directly keep working.
+        self.smartDiagnosisService = smartDiagnosisService
 
     async def overrideParameter(
         self,
@@ -84,6 +94,9 @@ class ManualOverrideService:
             ConflictException: `SPECIMEN_REJECTED`, if a MedTech calls on a
                 rejected specimen; `RESULT_NOT_EDITABLE`, if the result isn't in
                 a status the caller's role may override.
+            UnprocessableException: `PENDING_RETAKE`, if the result's image
+                is mid-retake (UROLENS-230) — a correction here would be
+                against findings about to be reset by the replacement image.
         """
         result = await self._getResult(resultId)
         isSupervisor = not isMedtech(callerRole)
@@ -94,6 +107,7 @@ class ManualOverrideService:
             requireSpecimenNotRejected(specimen)
             result = await self._getResult(resultId, fresh=True)
         requireResultEditable(result, isSupervisor)
+        await requireNoPendingRetake(self.db, result, action="correct")
 
         # Read original AI value safely from the db findings (Source of Truth)
         dbOriginalValue = await self._extractOriginalValue(result, parameter)
@@ -132,6 +146,12 @@ class ManualOverrideService:
             db=self.db,
             request=request,
         )
+
+        if self.smartDiagnosisService:
+            # Re-derives evidence from the now-updated particleClasses —
+            # run() is SAVEPOINT-isolated and never raises, so a diagnosis
+            # engine failure here can't lose this override.
+            await self.smartDiagnosisService.run(resultId=resultId, db=self.db)
 
         await self.db.commit()
         await self.db.refresh(override)

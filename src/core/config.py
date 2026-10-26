@@ -80,10 +80,23 @@ class Settings(BaseModel):
     # ── AI integration ────────────────────────────────────────────────────
     aiModelVersion: str = "mvp-v1.0"
     modelWeightsPath: str = ""
-    """YOLOv8 weights the AI engine loads (env `MODEL_WEIGHTS_PATH`). The engine
-    package doesn't ship its weights, so production must set this (or place the
-    file at `urolens_ai/models/yolov8/weights.pt`, the default when present).
-    Empty means every upload fails with `AI_ANALYSIS_FAILED`."""
+    """YOLOv8 detector weights the AI engine loads (env `MODEL_WEIGHTS_PATH`).
+    Falls back to `urolens_ai/models/yolov8/best.pt` (or the older `weights.pt`)
+    inside the installed package. The engine's install currently ships no data
+    files, so production must set this. Empty means every upload fails with
+    `AI_ANALYSIS_FAILED`."""
+    gateWeightsPath: str = ""
+    """Input-gate (slide / not-slide) classifier weights (env `GATE_WEIGHTS_PATH`).
+    Falls back to `urolens_ai/models/gate/gate.pt` inside the installed package.
+    An engine that includes the gate fails every upload without it."""
+    ruleEngineConfigPath: str = ""
+    """Smart Diagnosis rule configuration (env `RULE_ENGINE_CONFIG_PATH`). Falls
+    back to `urolens_ai/smart_diagnosis/config.yaml` inside the installed package.
+    Without it every Smart Diagnosis is marked unavailable."""
+    classThresholdsPath: str = ""
+    """Per-class confidence thresholds (env `CLASS_THRESHOLDS_PATH`). Falls back to
+    `urolens_ai/models/yolov8/thresholds.yaml`. Optional: without it the engine
+    uses one confidence threshold for every class."""
 
     # ── Multi-field workflow ──────────────────────────────────────────────
     fieldWorkflowEnabled: bool = False
@@ -117,17 +130,82 @@ def _toAsyncDatabaseUrl(syncUrl: str) -> str:
     return syncUrl
 
 
-def _bundledModelWeightsPath() -> str:
-    # The engine's own default (`src/urolens_ai/models/yolov8/best.pt`, relative
-    # to the working directory) only exists inside the engine's repo, so an
-    # unset MODEL_WEIGHTS_PATH meant inference failed on every upload. Use a
-    # weights file placed inside the installed package, if there is one (found
-    # without importing the package).
+def _bundledEngineFile(*parts: str) -> str:
+    # The engine's own defaults (`src/urolens_ai/...`, relative to the working
+    # directory) only exist inside the engine's repo, so from the backend they
+    # never resolve. Use a file placed inside the installed package instead, if
+    # there is one (found without importing the package, which reads these
+    # paths at import time).
     spec = importlib.util.find_spec("urolens_ai")
     if spec is None or not spec.submodule_search_locations:
         return ""
-    weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "yolov8" / "weights.pt"
-    return str(weights) if weights.is_file() else ""
+    path = Path(next(iter(spec.submodule_search_locations))).joinpath(*parts)
+    return str(path) if path.is_file() else ""
+
+
+def _bundledModelWeightsPath() -> str:
+    # The engine renamed its weights from weights.pt to best.pt; installs that
+    # still carry the old file keep working.
+    return (
+        _bundledEngineFile("models", "yolov8", "best.pt")
+        or _bundledEngineFile("models", "yolov8", "weights.pt")
+    )
+
+
+def _bundledGateWeightsPath() -> str:
+    return _bundledEngineFile("models", "gate", "gate.pt")
+
+
+def _bundledRuleEngineConfigPath() -> str:
+    return _bundledEngineFile("smart_diagnosis", "config.yaml")
+
+
+def _bundledClassThresholdsPath() -> str:
+    return _bundledEngineFile("models", "yolov8", "thresholds.yaml")
+
+
+def _resolveEnginePath(envName: str, bundled: str) -> str:
+    # An explicit path wins; otherwise the bundled file, if any. Whatever is
+    # chosen is written back to the environment, because the engine reads these
+    # variables itself, once, when its modules are first imported.
+    path = os.getenv(envName) or bundled
+    if path:
+        os.environ[envName] = path
+    return path
+
+
+# Engine files every upload or every Smart Diagnosis needs: (env var, setting).
+# The class thresholds file is optional, so it is not listed.
+_REQUIRED_ENGINE_FILES = (
+    ("MODEL_WEIGHTS_PATH", "modelWeightsPath"),
+    ("GATE_WEIGHTS_PATH", "gateWeightsPath"),
+    ("RULE_ENGINE_CONFIG_PATH", "ruleEngineConfigPath"),
+)
+
+
+def engineFileProblems(current: Settings) -> list[str]:
+    """List the AI engine files that are missing, one sentence each.
+
+    Run at startup (see `main.py`), which logs each problem as an error. It
+    does not stop the app: the engine is only needed for image uploads and
+    Smart Diagnosis, and development or CI may run without its files.
+
+    Args:
+        current: the settings to check, normally the module's `settings`.
+
+    Returns:
+        An empty list when every required file exists.
+    """
+    problems = []
+    for envName, attribute in _REQUIRED_ENGINE_FILES:
+        path = getattr(current, attribute)
+        if not path:
+            problems.append(
+                f"{envName} is unset and the installed AI engine has no bundled file."
+            )
+        elif not Path(path).is_file():
+            problems.append(f"{envName} points to a file that does not exist: {path}")
+    return problems
 
 
 _TRUE_WORDS = frozenset({"true", "1", "yes", "on"})
@@ -223,11 +301,6 @@ def _loadSettings() -> Settings:
             "before starting the app — the patient duplicate-check hash cannot run without it."
         )
 
-    modelWeightsPath = os.getenv("MODEL_WEIGHTS_PATH") or _bundledModelWeightsPath()
-    if modelWeightsPath:
-        # The engine reads this variable itself when it loads the model.
-        os.environ["MODEL_WEIGHTS_PATH"] = modelWeightsPath
-
     lowConfidence = _envNumber("FIELD_LOW_CONFIDENCE_THRESHOLD", 0.5, float, 0.0, lowInclusive=False)
     if lowConfidence > 1:
         raise RuntimeError(f"FIELD_LOW_CONFIDENCE_THRESHOLD must be <= 1, got {lowConfidence}.")
@@ -251,7 +324,14 @@ def _loadSettings() -> Settings:
         encryptionKey=encryptionKey,
         dedupHashKey=dedupHashKey,
         aiModelVersion=os.getenv("AI_MODEL_VERSION", "mvp-v1.0"),
-        modelWeightsPath=modelWeightsPath,
+        modelWeightsPath=_resolveEnginePath("MODEL_WEIGHTS_PATH", _bundledModelWeightsPath()),
+        gateWeightsPath=_resolveEnginePath("GATE_WEIGHTS_PATH", _bundledGateWeightsPath()),
+        ruleEngineConfigPath=_resolveEnginePath(
+            "RULE_ENGINE_CONFIG_PATH", _bundledRuleEngineConfigPath()
+        ),
+        classThresholdsPath=_resolveEnginePath(
+            "CLASS_THRESHOLDS_PATH", _bundledClassThresholdsPath()
+        ),
     )
 
 

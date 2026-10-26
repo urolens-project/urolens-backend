@@ -24,6 +24,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.image import Image, ImageStatus
 from src.models.manual_override import ManualOverride
 from src.models.patient import Patient
 from src.models.result_return import ResultReturn
@@ -45,6 +46,7 @@ def _makeResult(status: str = ResultStatus.PENDING_CONFIRM) -> AnalysisResult:
     result.specimenId = SPECIMEN_ID
     result.status = status
     result.imageId = None
+    result.image = None
     result.confirmedAt = None
     result.aiFindings = {"RBC": 12}
     result.flaggedAnomalies = {}
@@ -80,17 +82,31 @@ def _makeAuditLogger() -> MagicMock:
 # ── getFullResult: return reason and patient name ─────────────────────────────
 
 def _detailDb(result: AnalysisResult, specimen: Specimen, returnReason: str | None = None) -> tuple[AsyncMock, list]:
-    """A session answering each getFullResult query by the entity it selects."""
+    """A session answering each getFullResult query by the entity it selects.
+
+    getFullResult now reads the specimen/medtech/image via eager-loaded
+    relationships on the AnalysisResult row (joinedload), not separate
+    db.get() calls — wired directly onto the fixtures here since a mocked
+    session doesn't actually perform the join.
+    """
     medtech = SimpleNamespace(username="medtech1")
+    specimen.medtech = medtech
+    result.specimen = specimen
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[result, specimen, medtech])
     returnQueries: list = []
 
     def _execute(stmt: Select) -> MagicMock:
         entity = stmt.column_descriptions[0].get("entity")
         executeResult = MagicMock()
+        executeResult.unique.return_value = executeResult
         executeResult.scalars.return_value.all.return_value = []
-        answers = {Patient: _patient(), ResultReturn: returnReason, ManualOverride: None, ResultReview: None}
+        answers = {
+            AnalysisResult: result,
+            Patient: _patient(),
+            ResultReturn: returnReason,
+            ManualOverride: None,
+            ResultReview: None,
+        }
         if entity is ResultReturn:
             returnQueries.append(stmt)
         executeResult.scalar_one_or_none.return_value = answers.get(entity)
@@ -249,6 +265,33 @@ async def test_medtechCannotAnnotateOnceTheResultLeftTheirHands(status: ResultSt
 
     assert excInfo.value.status_code == 409
     assert excInfo.value.errorCode == "RESULT_NOT_EDITABLE"
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_annotateRefusedWhileImageRetakeIsPending() -> None:
+    """UROLENS-230: boxes drawn while the result's image is discarded
+    (retake pending) would be anchored to an image about to be replaced —
+    saveAnnotation must refuse it, same as confirmResult already did.
+    """
+    result = _makeResult(ResultStatus.PENDING_CONFIRM)
+    imageId = uuid.uuid4()
+    result.imageId = imageId
+    specimen = _makeSpecimen()
+    image = MagicMock(spec=Image)
+    image.status = ImageStatus.DISCARDED
+
+    async def _get(model, _id, **_kwargs):
+        return image if model is Image else specimen
+
+    db = _annotateDb(result, specimen)
+    db.get = AsyncMock(side_effect=_get)
+
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _annotate(db, MEDTECH_ID, "MEDTECH")
+
+    assert excInfo.value.errorCode == "PENDING_RETAKE"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
 
