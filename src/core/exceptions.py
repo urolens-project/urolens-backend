@@ -192,3 +192,110 @@ class UnprocessableException(HTTPException):
     def __init__(self, code: str = "UNPROCESSABLE", message: str = "Request cannot be processed."):
         super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
         self.errorCode = code
+
+
+# ── Multi-field workflow ─────────────────────────────────────────────────────
+# Backend-owned codes the mobile and web apps tell apart. The error envelope
+# carries only `code` and `message`, so any numbers go in the message.
+
+
+class ImageNotMicroscopyError(HTTPException):
+    """422 — the engine's input gate says this is not a microscope image.
+    `errorCode` is `"IMAGE_NOT_MICROSCOPY"`; nothing is saved."""
+
+    def __init__(
+        self, message: str = "This does not look like a microscope image. Retake it."
+    ) -> None:
+        """Build the 422 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
+        self.errorCode = "IMAGE_NOT_MICROSCOPY"
+
+
+class ImageExposureError(HTTPException):
+    """422 — the engine's input gate says the image is badly exposed.
+    `errorCode` is `"IMAGE_EXPOSURE"`; nothing is saved."""
+
+    def __init__(
+        self,
+        message: str = "Check the light and fill the screen with the eyepiece circle, then retake.",
+    ) -> None:
+        """Build the 422 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
+        self.errorCode = "IMAGE_EXPOSURE"
+
+
+class AppUpdateRequiredError(HTTPException):
+    """410 — a retired route called by an app version that predates multi-field.
+    `errorCode` is `"APP_UPDATE_REQUIRED"`."""
+
+    def __init__(self, message: str = "Update UroLens to continue") -> None:
+        """Build the 410 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_410_GONE, detail=message)
+        self.errorCode = "APP_UPDATE_REQUIRED"
+
+
+class FieldNotOpenedError(ConflictException):
+    """409 `FIELD_NOT_OPENED` — verify was called before the same user opened the
+    field since its last correction."""
+
+    def __init__(self, message: str = "Open the field before marking it as checked.") -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="FIELD_NOT_OPENED", message=message)
+
+
+class FieldVersionConflictError(ConflictException):
+    """409 `FIELD_VERSION_CONFLICT` — the field changed since the client loaded it;
+    nothing was written."""
+
+    def __init__(
+        self, message: str = "This field was changed by someone else. Reload it and try again."
+    ) -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="FIELD_VERSION_CONFLICT", message=message)
+
+
+class FieldsUndecidedError(ConflictException):
+    """409 `FIELDS_UNDECIDED` — fields are still waiting for Proceed or Discard."""
+
+    def __init__(self, count: int) -> None:
+        """Build the 409; `count` is the number of fields not reviewed."""
+        noun = "field" if count == 1 else "fields"
+        super().__init__(code="FIELDS_UNDECIDED", message=f"{count} {noun} not reviewed.")
+
+
+class FieldsBelowMinimumError(ConflictException):
+    """409 `FIELDS_BELOW_MINIMUM` — fewer accepted fields than the minimum."""
+
+    def __init__(self, accepted: int, minimum: int) -> None:
+        """Build the 409; the message names both numbers."""
+        super().__init__(
+            code="FIELDS_BELOW_MINIMUM",
+            message=f"{accepted} of {minimum} required fields accepted.",
+        )
+
+
+class FieldsNotVerifiedError(ConflictException):
+    """409 `FIELDS_NOT_VERIFIED` — an accepted field has not been checked."""
+
+    def __init__(self, message: str = "Every accepted field must be checked first.") -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="FIELDS_NOT_VERIFIED", message=message)
+
+
+class FeatureDisabledError(HTTPException):
+    """404 `FEATURE_DISABLED` — a multi-field route called while
+    `fieldWorkflowEnabled` is off."""
+
+    def __init__(self, message: str = "This feature is not available.") -> None:
+        """Build the 404 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+        self.errorCode = "FEATURE_DISABLED"
+
+
+class NotImplementedYetError(HTTPException):
+    """501 `NOT_IMPLEMENTED` — a multi-field route whose handler is not written yet."""
+
+    def __init__(self, message: str = "This endpoint is not implemented yet.") -> None:
+        """Build the 501 with `message` as the client-facing detail."""
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=message)
+        self.errorCode = "NOT_IMPLEMENTED"

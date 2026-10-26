@@ -85,6 +85,21 @@ class Settings(BaseModel):
     file at `urolens_ai/models/yolov8/weights.pt`, the default when present).
     Empty means every upload fails with `AI_ANALYSIS_FAILED`."""
 
+    # ── Multi-field workflow ──────────────────────────────────────────────
+    fieldWorkflowEnabled: bool = False
+    """Master switch (env `FIELD_WORKFLOW_ENABLED`). Off: the multi-field routes
+    answer 404 `FEATURE_DISABLED` and nothing else changes. Read once at startup;
+    flipping it needs a restart."""
+    minFieldsPerSpecimen: int = 10
+    """Accepted fields needed to submit and to confirm (env `MIN_FIELDS_PER_SPECIMEN`)."""
+    fieldLowConfidenceThreshold: float = 0.5
+    """A field whose mean confidence is below this is flagged LOW_CONFIDENCE."""
+    fieldOutlierMultiplier: float = 2.0
+    fieldOutlierMinAbove: int = 5
+    """A field's class count is an outlier when it is more than
+    `fieldOutlierMultiplier` times the specimen mean AND at least
+    `fieldOutlierMinAbove` above it."""
+
     # ── Misc ──────────────────────────────────────────────────────────────
     zeroUuid: str = "00000000-0000-0000-0000-000000000000"
 
@@ -113,6 +128,40 @@ def _bundledModelWeightsPath() -> str:
         return ""
     weights = Path(next(iter(spec.submodule_search_locations))) / "models" / "yolov8" / "weights.pt"
     return str(weights) if weights.is_file() else ""
+
+
+_TRUE_WORDS = frozenset({"true", "1", "yes", "on"})
+_FALSE_WORDS = frozenset({"false", "0", "no", "off"})
+
+
+def _envBool(name: str, default: bool) -> bool:
+    # Unset or blank means the default. Anything that is not an obvious yes/no is
+    # an error, so a typo in a feature flag cannot silently leave it off (or on).
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    word = raw.strip().lower()
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise RuntimeError(
+        f"{name} must be one of true/false/1/0/yes/no/on/off, got {raw!r}."
+    )
+
+
+def _envNumber(name: str, default: float, cast: type, low: float, lowInclusive: bool = True) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = cast(raw.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}.") from exc
+    if value < low or (value == low and not lowInclusive):
+        bound = ">=" if lowInclusive else ">"
+        raise RuntimeError(f"{name} must be {bound} {low}, got {raw!r}.")
+    return value
 
 
 def _loadSettings() -> Settings:
@@ -179,7 +228,16 @@ def _loadSettings() -> Settings:
         # The engine reads this variable itself when it loads the model.
         os.environ["MODEL_WEIGHTS_PATH"] = modelWeightsPath
 
+    lowConfidence = _envNumber("FIELD_LOW_CONFIDENCE_THRESHOLD", 0.5, float, 0.0, lowInclusive=False)
+    if lowConfidence > 1:
+        raise RuntimeError(f"FIELD_LOW_CONFIDENCE_THRESHOLD must be <= 1, got {lowConfidence}.")
+
     return Settings(
+        fieldWorkflowEnabled=_envBool("FIELD_WORKFLOW_ENABLED", False),
+        minFieldsPerSpecimen=int(_envNumber("MIN_FIELDS_PER_SPECIMEN", 10, int, 1)),
+        fieldLowConfidenceThreshold=lowConfidence,
+        fieldOutlierMultiplier=float(_envNumber("FIELD_OUTLIER_MULTIPLIER", 2.0, float, 1.0, lowInclusive=False)),
+        fieldOutlierMinAbove=int(_envNumber("FIELD_OUTLIER_MIN_ABOVE", 5, int, 1)),
         supabaseUrl=supabaseUrl,
         supabaseServiceKey=supabaseServiceKey,
         supabaseImageBucket=os.getenv("SUPABASE_IMAGE_BUCKET", "microscopy"),

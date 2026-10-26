@@ -19,6 +19,7 @@ from src.api import (
     physician,
     queue,
 )
+from src.api.fields import router as fields_router
 from src.api.image import router as images_router
 from src.api.lab_requests import router as lab_requests_router
 from src.api.labeling import router as labeling_router
@@ -120,6 +121,7 @@ app.include_router(src_specimens_router)
 app.include_router(sync_router)
 app.include_router(results_router)
 app.include_router(images_router)
+app.include_router(fields_router)
 app.include_router(notifications_router)
 
 

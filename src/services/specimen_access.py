@@ -41,6 +41,11 @@ FINALISED_RESULT_STATUSES = frozenset({ResultStatus.APPROVED, ResultStatus.RELEA
 # PENDING_SUPERVISOR_APPROVAL.
 SUPERVISOR_EDITABLE_RESULT_STATUSES = frozenset({ResultStatus.PENDING_SUPERVISOR_APPROVAL})
 
+# Multi-field capture: while a result is CAPTURING the MedTech collects fields on
+# the phone. Verification reuses MEDTECH_EDITABLE_RESULT_STATUSES. Neither
+# multi-field lane changes this set alone.
+CAPTURE_PHASE_RESULT_STATUSES = frozenset({ResultStatus.CAPTURING})
+
 # A result's image may be discarded or replaced in the editable statuses,
 # plus the two that exist precisely to ask for a new image.
 MEDTECH_IMAGE_REPLACEABLE_RESULT_STATUSES = MEDTECH_EDITABLE_RESULT_STATUSES | frozenset({
