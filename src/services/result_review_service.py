@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from ..core.audit_logger import AuditLogger
 from ..core.encryption import decryptStoredPii
@@ -40,7 +41,7 @@ from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
-from ..models.image import Image
+from ..models.image import ImageStatus
 from ..models.manual_override import ManualOverride
 from ..models.patient import Patient
 from ..models.result_approval import ResultApproval
@@ -51,9 +52,11 @@ from ..models.specimen import Specimen
 from ..models.user import User
 from ..schemas.result_review import VALID_ESCALATION_PATHS
 from .notification_service import NotificationService
+from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
+    requireNoPendingRetake,
     requireResultEditable,
     requireSpecimenAssigned,
     requireSpecimenNotRejected,
@@ -87,10 +90,12 @@ class ResultReviewService:
         db: AsyncSession,
         auditLogger: AuditLogger | None = None,
         _notifService: NotificationService | None = None,
+        _smartDiagnosisService: SmartDiagnosisService | None = None,
     ) -> None:
         self.db = db
         self.auditLogger = auditLogger
         self._notifService = _notifService or NotificationService(db=db)
+        self._smartDiagnosisService = _smartDiagnosisService
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -517,13 +522,29 @@ class ResultReviewService:
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
                 another MedTech's result.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
+        # Collapses what used to be 5 sequential round trips (ar, specimen,
+        # medtech user, image — patient is still separate, see below) into
+        # one: AnalysisResult.specimen/.image are plain to-one FK
+        # relationships, and Specimen.medtech (added alongside this fix) is
+        # the same Specimen.medtechId -> User lookup getFullResult always
+        # did, just eager-loaded instead of a second db.get(). Each of these
+        # joins is many-to-one from AnalysisResult's perspective, so no row
+        # duplication risk — .unique() is defensive, not load-bearing here.
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.resultId == resultId)
+            .options(
+                joinedload(AnalysisResult.specimen).joinedload(Specimen.medtech),
+                joinedload(AnalysisResult.image),
+            )
+        )
+        ar = (await self.db.execute(stmt)).unique().scalar_one_or_none()
         if ar is None:
             raise NotFoundException(
                 code="RESULT_NOT_FOUND", message="Analysis result not found."
             )
 
-        spec = await self.db.get(Specimen, ar.specimenId)
+        spec = ar.specimen
         isMedtechViewer = viewerRole is not None and isMedtech(viewerRole)
         if isMedtechViewer:
             if spec is None:
@@ -532,37 +553,32 @@ class ResultReviewService:
                 )
             requireSpecimenAssigned(spec, viewerId)
 
+        # Patient resolution stays its own round trip, and stays keyed off
+        # Specimen.patientUid (not AnalysisResult.patientId) deliberately —
+        # the two can diverge (patientId is only backfilled from the
+        # specimen's lab request, patientUid is the MedTech-facing identity
+        # used everywhere else in this method), and this is a PHI-adjacent
+        # path not worth touching as part of a round-trip-count change.
         pat: Patient | None = None
         if spec and spec.patientUid:
             pat = (
                 await self.db.execute(select(Patient).where(Patient.patientUid == spec.patientUid))
             ).scalar_one_or_none()
 
-        medtechName = ""
-        if spec and spec.medtechId:
-            medtech = await self.db.get(User, spec.medtechId)
-            medtechName = medtech.username if medtech else ""
+        medtechName = spec.medtech.username if spec and spec.medtech else ""
 
         imageUrl: str | None = None
-        if ar.imageId:
-            image = await self.db.get(Image, ar.imageId)
-            imageUrl = await signedImageUrl(image.storageKey) if image else None
+        if ar.image:
+            imageUrl = await signedImageUrl(ar.image.storageKey)
 
         overridesRows = (
             await self.db.execute(
                 select(ManualOverride)
                 .where(ManualOverride.resultId == resultId)
+                .options(joinedload(ManualOverride.medtech))
                 .order_by(ManualOverride.overriddenAt)
             )
         ).scalars().all()
-
-        overriddenByIds = list({o.overriddenBy for o in overridesRows})
-        overriddenByUserMap: dict[uuid.UUID, str] = {}
-        if overriddenByIds:
-            overriddenByRows = (
-                await self.db.execute(select(User).where(User.userId.in_(overriddenByIds)))
-            ).scalars().all()
-            overriddenByUserMap = {u.userId: u.username for u in overriddenByRows}
 
         overrides = [
             {
@@ -573,7 +589,7 @@ class ResultReviewService:
                 "rationale": o.rationale,
                 "overriddenAt": o.overriddenAt,
                 "overriddenBy": o.overriddenBy,
-                "overriddenByName": overriddenByUserMap.get(o.overriddenBy, ""),
+                "overriddenByName": o.medtech.username if o.medtech else "",
             }
             for o in overridesRows
         ]
@@ -582,22 +598,15 @@ class ResultReviewService:
             await self.db.execute(
                 select(ResultReview)
                 .where(ResultReview.resultId == resultId)
+                .options(joinedload(ResultReview.reviewer))
                 .order_by(ResultReview.updatedAt)
             )
         ).scalars().all()
 
-        reviewedByIds = list({r.reviewedBy for r in reviewRows})
-        reviewerRoleMap: dict[uuid.UUID, str] = {}
-        if reviewedByIds:
-            reviewerRows = (
-                await self.db.execute(select(User).where(User.userId.in_(reviewedByIds)))
-            ).scalars().all()
-            reviewerRoleMap = {u.userId: u.role for u in reviewerRows}
-
         annotations = [
             {
                 "reviewedBy": r.reviewedBy,
-                "reviewerRole": reviewerRoleMap.get(r.reviewedBy, ""),
+                "reviewerRole": r.reviewer.role if r.reviewer else "",
                 "annotationNotes": r.annotationNotes,
                 "spatialAnnotations": r.spatialAnnotations,
                 "updatedAt": r.updatedAt,
@@ -658,6 +667,13 @@ class ResultReviewService:
                 )
             ).scalar_one_or_none()
 
+        # Reuses the already-eager-loaded ar.image (see the combined query
+        # above) rather than calling specimen_access.isRetakePending, which
+        # would re-fetch the same image with a second round trip.
+        isRetakePending = ar.status == ResultStatus.IMAGE_RETAKE_REQUESTED or (
+            ar.image is not None and ar.image.status != ImageStatus.ACTIVE
+        )
+
         detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
@@ -670,6 +686,7 @@ class ResultReviewService:
             "confirmedAt": ar.confirmedAt,
             "confirmationNotes": None,  # schema drift — see module docstring
             "aiFindings": ar.aiFindings or {},
+            "aiDetections": ar.aiDetections or [],
             "flaggedAnomalies": ar.flaggedAnomalies or {},
             "particleClasses": ar.particleClasses or {},
             "modelVersion": ar.modelVersion,
@@ -681,6 +698,7 @@ class ResultReviewService:
             ),
             "status": ar.status,
             "returnReason": returnReason,
+            "isRetakePending": isRetakePending,
             "annotations": annotations,
         }
         if viewerId is not None and self.auditLogger is not None:
@@ -729,6 +747,9 @@ class ResultReviewService:
             ConflictException: `SPECIMEN_REJECTED`, if a MedTech annotates a
                 rejected specimen; `RESULT_NOT_EDITABLE`, for any other status
                 the caller's role may not change.
+            UnprocessableException: `PENDING_RETAKE`, if the result's image
+                is mid-retake (UROLENS-230) — annotating it would anchor
+                boxes to an image about to be replaced.
         """
         ar = await self._getAnnotatableResult(resultId)
         isSupervisor = not isMedtech(callerRole)
@@ -739,6 +760,7 @@ class ResultReviewService:
             requireSpecimenNotRejected(specimen)
             ar = await self._getAnnotatableResult(resultId, fresh=True)
         requireResultEditable(ar, isSupervisor)
+        await requireNoPendingRetake(self.db, ar, action="annotate")
 
         existing = (
             await self.db.execute(
@@ -748,6 +770,15 @@ class ResultReviewService:
                 )
             )
         ).scalar_one_or_none()
+
+        # The diff baseline for a reviewer's first-ever save on this result
+        # is the AI's own detected boxes, not empty — those are what the
+        # current particle counts already reflect (the canvas pre-fills
+        # from them too; see MicroscopyImageSection). Diffing against []
+        # would count every AI-seeded box as newly hand-drawn the moment
+        # someone saves the AI's suggestions untouched, double-counting on
+        # top of ai_findings.
+        previousBoxes = existing.spatialAnnotations if existing else (ar.aiDetections or [])
 
         if existing:
             existing.annotationNotes = annotationNotes
@@ -763,6 +794,15 @@ class ResultReviewService:
                 )
             )
 
+        adjustedParticles: list[str] = []
+        if spatialAnnotations is not None:
+            adjustedParticles = await self._applyBoxDrivenCountAdjustments(
+                ar=ar,
+                previousBoxes=previousBoxes or [],
+                newBoxes=spatialAnnotations,
+                userId=userId,
+            )
+
         await self.auditLogger.record(
             eventType="ANNOTATION_SAVED",
             entityType="analysis_result",
@@ -770,11 +810,19 @@ class ResultReviewService:
             userId=userId,
             db=self.db,
             detailJson={
-                "resultStatus": ar.status.value,
+                "resultStatus": ar.status,
                 "hasSpatialAnnotations": spatialAnnotations is not None,
+                "countsAdjustedFor": adjustedParticles,
             },
             request=request,
         )
+
+        if adjustedParticles and self._smartDiagnosisService:
+            # The box edit changed particleClasses — re-derive evidence so
+            # the diagnosis panel doesn't keep showing scores computed from
+            # counts the reviewer has since corrected.
+            await self._smartDiagnosisService.run(resultId=resultId, db=self.db)
+
         await self.db.commit()
 
         return {
@@ -782,6 +830,85 @@ class ResultReviewService:
             "annotationNotes": annotationNotes,
             "spatialAnnotations": spatialAnnotations,
         }
+
+    async def _applyBoxDrivenCountAdjustments(
+        self,
+        ar: AnalysisResult,
+        previousBoxes: list,
+        newBoxes: list,
+        userId: uuid.UUID,
+    ) -> list[str]:
+        """Keeps particle counts in sync with bounding-box edits.
+
+        Boxes and counts were previously two disconnected editing paths —
+        deleting or relabeling a box never touched the count shown in the
+        particle table. Diffs the box set by `id` (removed / added /
+        relabeled) and turns the net per-particle-type delta into the same
+        kind of `ManualOverride` row a human-typed correction creates, with
+        an auto-generated rationale, batched one row per affected particle
+        type rather than one per box (a dense AI-seeded set can be hundreds
+        of boxes touching only one or two types).
+
+        Returns the list of particle types adjusted, so the caller knows
+        whether a Smart Diagnosis re-run is actually warranted.
+        """
+        # Legacy boxes (saved before `id`/`particleType` existed — see
+        # SpatialAnnotationItemOut's docstring) can't be tracked across a
+        # diff at all; skip anything without both rather than guess.
+        prevById = {b["id"]: b for b in previousBoxes if b.get("id") and b.get("particleType")}
+        newById = {b["id"]: b for b in newBoxes if b.get("id") and b.get("particleType")}
+
+        delta: dict[str, int] = {}
+        removed = added = relabeled = 0
+        for boxId, prevBox in prevById.items():
+            if boxId not in newById:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                removed += 1
+        for boxId, newBox in newById.items():
+            prevBox = prevById.get(boxId)
+            if prevBox is None:
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                added += 1
+            elif prevBox["particleType"] != newBox["particleType"]:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                relabeled += 1
+
+        if not delta:
+            return []
+
+        particleClasses = dict(ar.particleClasses or {})
+        aiFindings = ar.aiFindings or {}
+        adjusted: list[str] = []
+
+        for parameter, change in delta.items():
+            if change == 0:
+                continue
+            current = particleClasses.get(parameter, aiFindings.get(parameter, 0))
+            correctedValue = max(0, int(current) + change)
+            if correctedValue == current:
+                continue
+
+            self.db.add(
+                ManualOverride(
+                    resultId=ar.resultId,
+                    medtechId=userId,
+                    parameterName=parameter,
+                    originalAiValue=str(float(aiFindings.get(parameter, 0))),
+                    correctedValue=str(float(correctedValue)),
+                    rationale=(
+                        f"Adjusted via bounding-box edit "
+                        f"({removed} removed, {added} added, {relabeled} relabeled)."
+                    ),
+                )
+            )
+            particleClasses[parameter] = correctedValue
+            adjusted.append(parameter)
+
+        if adjusted:
+            ar.particleClasses = particleClasses
+
+        return adjusted
 
     async def _getAnnotatableResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # `fresh` overwrites the already-loaded object with current DB state.

@@ -108,6 +108,7 @@ def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -
         ["Result ID:", str(resultId)],
         ["Date of Test:", testDate.strftime("%B %d, %Y") if testDate else "N/A"],
         ["Status:", result.status],
+        ["Requested by:", _safeStr(result.requestingPhysician)],
     ]
     infoTable = Table(infoData, colWidths=[40 * mm, 100 * mm])
     infoTable.setStyle(
