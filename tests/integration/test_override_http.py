@@ -1,7 +1,7 @@
 """HTTP-level tests — overriding an AI-detected value (UROLENS-227).
 
 Through the real `POST /results/{id}/override` route and the real
-`ManualOverrideService` (DB mocked): request validation (whole counts 0–300, a
+`ManualOverrideService` (DB mocked): request validation (whole counts 0–1000, a
 required rationale) answers with the 422 envelope, an unchanged value gets
 `OVERRIDE_UNCHANGED`, and a real correction is saved. `GET /sync/pull` carries
 the overrides to the phone.
@@ -97,13 +97,13 @@ async def _post(asyncClient: AsyncClient, body: dict) -> object:
 @pytest.mark.parametrize(
     "body",
     [
-        {"parameter": "erythrocytes", "correctedValue": 301, "rationale": "Recounted"},
+        {"parameter": "erythrocytes", "correctedValue": 1001, "rationale": "Recounted"},
         {"parameter": "erythrocytes", "correctedValue": 3.7, "rationale": "Recounted"},
         {"parameter": "erythrocytes", "correctedValue": -1, "rationale": "Recounted"},
         {"parameter": "erythrocytes", "correctedValue": 4},
         {"parameter": "erythrocytes", "correctedValue": 4, "rationale": "   "},
     ],
-    ids=["over-300", "fraction", "negative", "no-rationale", "blank-rationale"],
+    ids=["over-1000", "fraction", "negative", "no-rationale", "blank-rationale"],
 )
 async def test_invalidOverridesAreRejectedBeforeReachingTheService(
     asyncClient: AsyncClient, useDb: AsyncMock, body: dict

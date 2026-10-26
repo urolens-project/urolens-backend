@@ -13,10 +13,10 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from .patient_portal import PARTICLE_LABELS
 
 # The largest particle count an override may set (UROLENS-227). The AI engine
-# reports at most 300 detections per image (YOLO's default `max_det`), and lab
-# reporting tops out at ">100" per field (CLSI GP16), so anything larger is a
-# typo (e.g. an extra zero), not a count. Raise it here if the lab asks.
-MAX_OVERRIDE_COUNT = 300
+# reports at most 1,000 detections per image, so a larger value is a typo (e.g.
+# an extra zero), not a count. It was 300, the engine's old `max_det`, which
+# refused corrections the engine could itself produce.
+MAX_OVERRIDE_COUNT = 1000
 
 
 class ConfirmResultRequest(BaseModel):
