@@ -79,5 +79,7 @@ def test_liveFksAreCreatedAndDroppedWithAGuard(scriptDir, name, table, target):
     assert f"DROP CONSTRAINT {name}" in down
 
 
-def test_singleHeadIs0046(scriptDir):
-    assert scriptDir.get_heads() == ["0046"]
+def test_chainHasExactlyOneHeadAndItSitsOn0046(scriptDir):
+    heads = scriptDir.get_heads()
+    assert len(heads) == 1
+    assert scriptDir.get_revision("0047").down_revision == "0046"
