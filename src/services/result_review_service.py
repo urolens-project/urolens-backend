@@ -111,6 +111,30 @@ class ResultReviewService:
             )
         return result
 
+    async def _auditAction(
+        self,
+        eventType: str,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        specimenId: uuid.UUID,
+        request: Request | None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        # One audit row for a supervisor action, in the action's transaction (the
+        # caller commits). Ids and the escalation path only: the approval notes,
+        # return reason and escalation note stay out of the audit log.
+        if self.auditLogger is None:
+            return
+        await self.auditLogger.record(
+            eventType=eventType,
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=userId,
+            detailJson={"specimen_id": str(specimenId), **(extra or {})},
+            db=self.db,
+            request=request,
+        )
+
     async def _transitionIfPending(self, resultId: uuid.UUID, newStatus: ResultStatus) -> None:
         """The actual race-safety gate behind approve/return/escalate
         (UROLENS-151, mirrors UROLENS-142/143's conditional-UPDATE-plus-
@@ -796,7 +820,11 @@ class ResultReviewService:
     # ── Approve ───────────────────────────────────────────────────────────
 
     async def approveResult(
-        self, resultId: uuid.UUID, userId: uuid.UUID, notes: str | None
+        self,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        notes: str | None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Approve a pending result, marking its specimen `COMPLETED`.
 
@@ -833,6 +861,7 @@ class ResultReviewService:
             specimen.status = "COMPLETED"
             specimen.completedAt = now
 
+        await self._auditAction("RESULT_APPROVED", resultId, userId, ar.specimenId, request)
         await self.db.commit()
 
         return {"resultId": resultId, "status": ResultStatus.APPROVED.value, "approvedAt": now}
@@ -840,7 +869,11 @@ class ResultReviewService:
     # ── Return for correction ────────────────────────────────────────────
 
     async def returnResult(
-        self, resultId: uuid.UUID, userId: uuid.UUID, reason: str
+        self,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        reason: str,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Return a pending result to the MedTech for correction, and tell them.
 
@@ -868,6 +901,7 @@ class ResultReviewService:
         await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
         await self._notifyMedtechOfReturn(resultId, result)
 
+        await self._auditAction("RESULT_RETURNED", resultId, userId, result.specimenId, request)
         await self.db.commit()
 
         return {
@@ -897,6 +931,7 @@ class ResultReviewService:
         userId: uuid.UUID,
         escalationPath: str,
         escalationNote: str | None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Escalate a pending result to `CRITICAL_ESCALATED`.
 
@@ -923,7 +958,7 @@ class ResultReviewService:
                 message=f"Invalid escalation_path '{escalationPath}'.",
             )
 
-        await self._requirePending(resultId)
+        ar = await self._requirePending(resultId)
 
         now = datetime.now(_PHT)
         self.db.add(
@@ -937,6 +972,10 @@ class ResultReviewService:
         )
         await self._transitionIfPending(resultId, ResultStatus.CRITICAL_ESCALATED)
 
+        await self._auditAction(
+            "RESULT_ESCALATED", resultId, userId, ar.specimenId, request,
+            extra={"escalation_path": escalationPath},
+        )
         await self.db.commit()
 
         return {
