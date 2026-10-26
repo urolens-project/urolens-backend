@@ -4,10 +4,12 @@ from sqlalchemy import engine_from_config, pool
 
 import src.models.analysis_result  # noqa: F401
 import src.models.audit_log  # noqa: F401
+import src.models.field_annotation_edit  # noqa: F401
 import src.models.image  # noqa: F401 — register tables with Base
 import src.models.manual_override  # noqa: F401
 import src.models.patient  # noqa: F401
 import src.models.result_confirmation  # noqa: F401
+import src.models.result_field  # noqa: F401
 import src.models.result_view  # noqa: F401
 import src.models.smart_diagnosis_output  # noqa: F401
 from alembic import context

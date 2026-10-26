@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+- **Multi-field foundation (no behavior change while `FIELD_WORKFLOW_ENABLED` is off).**
+  Migration `0047` adds the `result_fields` and `field_annotation_edits` tables (RLS
+  enabled), `manual_overrides.field_id`/`kind`, and `analysis_results.field_count`,
+  `field_summary` and `is_legacy_single_field`, then backfills one accepted field for
+  every result with an active image. Single-image results still in progress are flagged
+  legacy and keep their status. New settings: `FIELD_WORKFLOW_ENABLED` (default false,
+  read at startup, so changing it needs a restart), `MIN_FIELDS_PER_SPECIMEN` (10) and the
+  field-flag thresholds. Adds the `CAPTURING` result status and capture-phase status set,
+  the backend-owned error codes (`IMAGE_NOT_MICROSCOPY`, `IMAGE_EXPOSURE`,
+  `APP_UPDATE_REQUIRED`, `FIELD_NOT_OPENED`, `FIELD_VERSION_CONFLICT`,
+  `FIELDS_UNDECIDED`, `FIELDS_BELOW_MINIMUM`, `FIELDS_NOT_VERIFIED`) and eleven field
+  routes under `/api/v1/fields` and `/api/v1/results/{id}/...` that answer 404
+  `FEATURE_DISABLED` (flag off) or 501 `NOT_IMPLEMENTED` (flag on) until the mobile and
+  web lanes fill them in. Client-facing shapes: `docs/contract/field-shapes.json`.
+  Needs the B1 baseline migrations (`0000`, `0046`) first.
+
 ### Fixed
 - **Backend CI failed the real-engine Smart Diagnosis override test without a
   developer's local `.env`.** The AI package defaults to a config path inside its
