@@ -183,18 +183,38 @@ _REQUIRED_ENGINE_FILES = (
 )
 
 
+# The engine stores its weights with Git LFS. A checkout without `git lfs pull`
+# (and a pip install of the engine from GitHub) has only this small text pointer
+# in place of each file, which exists but can't be loaded.
+_GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
+
+
+def _isGitLfsPointer(path: str) -> bool:
+    # Whether the file is a Git LFS pointer rather than the content it names.
+    # Unreadable counts as "not a pointer"; the caller reports what it can.
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(_GIT_LFS_POINTER_PREFIX)) == _GIT_LFS_POINTER_PREFIX
+    except OSError:
+        return False
+
+
 def engineFileProblems(current: Settings) -> list[str]:
-    """List the AI engine files that are missing, one sentence each.
+    """List the AI engine files that are missing or unusable, one sentence each.
 
     Run at startup (see `main.py`), which logs each problem as an error. It
     does not stop the app: the engine is only needed for image uploads and
     Smart Diagnosis, and development or CI may run without its files.
 
+    A required file is a problem when its path is unset, when nothing exists
+    there, or when what exists is a Git LFS pointer instead of the real file:
+    that last case passes an existence check but fails every upload.
+
     Args:
         current: the settings to check, normally the module's `settings`.
 
     Returns:
-        An empty list when every required file exists.
+        An empty list when every required file exists and is real.
     """
     problems = []
     for envName, attribute in _REQUIRED_ENGINE_FILES:
@@ -205,6 +225,12 @@ def engineFileProblems(current: Settings) -> list[str]:
             )
         elif not Path(path).is_file():
             problems.append(f"{envName} points to a file that does not exist: {path}")
+        elif _isGitLfsPointer(path):
+            problems.append(
+                f"{envName} points to a Git LFS pointer, not the real file: {path}. "
+                "Fetch it with `git lfs pull` in the engine repo, or set the variable "
+                "to the downloaded file."
+            )
     return problems
 
 
