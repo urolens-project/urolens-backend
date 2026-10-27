@@ -296,6 +296,65 @@ def storedFieldSummary(result: Aggregate) -> dict[str, Any]:
     }
 
 
+# ── The stored field_summary, as the contract shows it ───────────────────────
+
+SINGLE_IMAGE_LABEL = "single image"
+"""Shown instead of a field count for a result from before multi-field."""
+
+
+def countsLabelFor(fieldCount: int) -> str:
+    """The label beside averaged counts: `average per field (10 fields)`."""
+    return f"average per field ({fieldCount} {'field' if fieldCount == 1 else 'fields'})"
+
+
+def toContractFieldSummary(stored: Any) -> dict[str, Any] | None:
+    """`analysis_results.field_summary` as the `FieldSummary` contract shape, or None.
+
+    The only place that reads the stored keys (`storedFieldSummary` writes them);
+    every reader goes through here. Adds `displayValue` per class and, per class,
+    the field numbers where the class is above the normal maximum while its mean is
+    not (taken from the stored focal findings). Returns None for a missing, empty or
+    malformed summary, so callers fall back to what they showed before multi-field.
+    """
+    if not isinstance(stored, Mapping):
+        return None
+    perClassStored = stored.get("perClass")
+    if not isinstance(perClassStored, Mapping) or not perClassStored:
+        return None
+
+    focal: list[dict[str, Any]] = []
+    focalByClass: dict[str, list[int]] = {}
+    for entry in stored.get("focalFindings") or []:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("particleType"), str):
+            continue
+        fieldNos = [int(n) for n in entry.get("fieldNos") or [] if isinstance(n, int)]
+        focalByClass[entry["particleType"]] = fieldNos
+        focal.append({"particleType": entry["particleType"], "fieldNos": fieldNos})
+
+    perClass: dict[str, dict[str, Any]] = {}
+    for particleType, agg in perClassStored.items():
+        if not isinstance(agg, Mapping):
+            continue
+        mean = _number(agg.get("mean"))
+        perClass[str(particleType)] = {
+            "mean": mean,
+            "min": _number(agg.get("min")),
+            "max": _number(agg.get("max")),
+            "total": _number(agg.get("total")),
+            "fieldsSeen": int(_number(agg.get("fieldsSeen"))),
+            "aiMean": _number(agg.get("aiMean")),
+            "displayValue": displayValue(mean),
+            "fieldsAboveNormal": focalByClass.get(str(particleType), []),
+        }
+    if not perClass:
+        return None
+    return {
+        "fieldCount": int(_number(stored.get("fieldCount"))),
+        "perClass": perClass,
+        "focalFindings": focal,
+    }
+
+
 # ── Can this result be confirmed? (shared by confirm and the summary) ────────
 
 def fieldBlockingReason(
