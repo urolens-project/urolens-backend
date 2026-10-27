@@ -1,3 +1,7 @@
+import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -17,6 +21,7 @@ from src.api import (
     physician,
     queue,
 )
+from src.api.fields import router as fields_router
 from src.api.image import router as images_router
 from src.api.lab_requests import router as lab_requests_router
 from src.api.labeling import router as labeling_router
@@ -29,9 +34,37 @@ from src.api.results import router as results_router
 # Web developer routers
 from src.api.specimens import router as src_specimens_router
 from src.api.sync import router as sync_router
+from src.core.config import engineFileProblems, settings
 from src.schemas.system import HealthCheckResponse
 
-app = FastAPI(title="UroLens LIS Engine")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+    """Check the AI engine once, when the server starts.
+
+    Each problem is logged as an error, so a broken upload has a cause in the logs
+    from the start. With `FIELD_WORKFLOW_ENABLED` off the app still starts: only
+    uploads and Smart Diagnosis need the engine. With it on, the server refuses to
+    start, because the multi-field workflow relies on the pinned engine (its boxes,
+    upright size and decimal Smart Diagnosis) and must not run on an old one.
+
+    Raises:
+        RuntimeError: if the flag is on and any engine problem was found.
+    """
+    problems = engineFileProblems(settings)
+    for problem in problems:
+        logger.error("AI engine: %s", problem)
+    if problems and settings.fieldWorkflowEnabled:
+        raise RuntimeError(
+            "FIELD_WORKFLOW_ENABLED is on but the AI engine is not ready; fix the "
+            "'AI engine:' errors above (or turn the flag off) and restart."
+        )
+    yield
+
+
+app = FastAPI(title="UroLens LIS Engine", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +89,7 @@ _STATUS_TO_CODE = {
     409: "CONFLICT",
     422: "VALIDATION_ERROR",
     423: "ACCOUNT_LOCKED",
+    429: "TOO_MANY_REQUESTS",
 }
 
 
@@ -65,6 +99,7 @@ async def httpExceptionHandler(request: Request, exc: HTTPException) -> JSONResp
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": code, "message": exc.detail}},
+        headers=getattr(exc, "headers", None),  # e.g. Retry-After on a 429
     )
 
 
@@ -80,6 +115,19 @@ async def validationExceptionHandler(request: Request, exc: RequestValidationErr
                 "details": errors,
             }
         },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandledExceptionHandler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort handler so an unexpected error (e.g. a DB race not covered
+    by an explicit HTTPException) still returns the standard envelope instead
+    of Starlette's default plain-text 500.
+    """
+    logger.exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred."}},
     )
 
 
@@ -101,6 +149,7 @@ app.include_router(src_specimens_router)
 app.include_router(sync_router)
 app.include_router(results_router)
 app.include_router(images_router)
+app.include_router(fields_router)
 app.include_router(notifications_router)
 
 

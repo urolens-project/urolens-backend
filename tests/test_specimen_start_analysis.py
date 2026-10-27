@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.core.exceptions import ConflictException, SpecimenNotFoundError
+from src.models.audit_log import AuditLog
 from src.models.specimen import Specimen
 from src.services import specimen_service
 
@@ -18,10 +19,12 @@ OTHER_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000033")
 
 def _makeDb(status: str = "ASSIGNED", medtechId: uuid.UUID = MEDTECH_ID, exists: bool = True):
     specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
     specimen.status = status
     specimen.medtechId = medtechId
     db = AsyncMock()
     db.get = AsyncMock(return_value=specimen if exists else None)
+    db.add = MagicMock()
     db.commit = AsyncMock()
     return db, specimen
 
@@ -70,3 +73,24 @@ async def test_startAnalysisRaisesNotFoundForUnknownSpecimen():
     db, _ = _makeDb(exists=False)
     with pytest.raises(SpecimenNotFoundError):
         await specimen_service.startAnalysis(db, SPECIMEN_ID, MEDTECH_ID)
+
+
+@pytest.mark.asyncio
+async def test_startingIsAuditedInTheSameTransaction():
+    db, _ = _makeDb(status="ASSIGNED")
+
+    await specimen_service.startAnalysis(db, SPECIMEN_ID, MEDTECH_ID)
+
+    [auditRow] = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], AuditLog)]
+    assert auditRow.eventType == "SPECIMEN_ANALYSIS_STARTED"
+    assert auditRow.detailJson == {"previous_status": "ASSIGNED"}
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_anAlreadyProcessingSpecimenIsNotAuditedAgain():
+    db, _ = _makeDb(status="PROCESSING")
+
+    await specimen_service.startAnalysis(db, SPECIMEN_ID, MEDTECH_ID)
+
+    db.add.assert_not_called()

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SpecimenReceiveRequest(BaseModel):
@@ -24,6 +24,7 @@ class SpecimenReceiveResponse(BaseModel):
     sampleUid: str | None = None
     status: str
     message: str
+    patientUid: str | None = None
 
 
 class SpecimenListItem(BaseModel):
@@ -41,20 +42,29 @@ class SpecimenListItem(BaseModel):
 
 
 class LabRequestSearchItem(BaseModel):
-    """One `PENDING_SAMPLE` lab request, for the specimen-receiving search."""
+    """One `PENDING_SAMPLE` lab request, for the specimen-receiving search.
+
+    `patientUid`/`patientName` are included so the receptionist can check
+    "Label Matches Patient" against the physical specimen without a second,
+    fuller patient lookup (RA 10173 data-minimization — same concern as the
+    physician-portal patient search).
+    """
 
     labRequestId: UUID
     requestUid: str
     testType: str
     physicianName: str | None = None
     patientId: UUID
+    patientUid: str | None = None
+    patientName: str | None = None
 
 
 class SpecimenRejectRequest(BaseModel):
     """Request body for a MedTech's post-assignment specimen rejection."""
 
     reasonCode: str
-    freeTextNote: str | None = None
+    freeTextNote: str | None = Field(None, max_length=500)
+    """Optional detail for the rejection; the app allows up to 500 characters."""
 
 
 class SpecimenRejectResponse(BaseModel):

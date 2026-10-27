@@ -9,8 +9,9 @@ def _safeStr(value: str | None, fallback: str = "Pending") -> str:
     return value if value else fallback
 
 
-def _safeVal(value: int | None, fallback: int = 0) -> int:
-    # Placeholder count (0) for an unset cell-count field in the PDF.
+def _safeVal(value: int | str | None, fallback: int = 0) -> int | str:
+    # Placeholder count (0) for an unset cell-count field in the PDF. A multi-field
+    # result passes its display text ("<1", "4") through unchanged.
     return value if value is not None else fallback
 
 
@@ -108,6 +109,7 @@ def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -
         ["Result ID:", str(resultId)],
         ["Date of Test:", testDate.strftime("%B %d, %Y") if testDate else "N/A"],
         ["Status:", result.status],
+        ["Requested by:", _safeStr(result.requestingPhysician)],
     ]
     infoTable = Table(infoData, colWidths=[40 * mm, 100 * mm])
     infoTable.setStyle(
@@ -126,11 +128,17 @@ def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -
 
     # ── Cell Count Results ───────────────────────────────────────────────────
     elements.append(Paragraph("Cell Count Results", headingStyle))
+    if result.countsLabel:
+        # Multi-field results: say how the counts were taken.
+        elements.append(Paragraph(f"Counts shown as: {result.countsLabel}", bodyStyle))
     # result.particleCounts is a list[ParticleCount] (label/count pairs, per
     # PARTICLE_LABELS) — not the "cellCounts" object with named fields
     # (.rbc/.wbc/etc.) this function used to assume; that shape doesn't exist
     # on PatientResultDetail and made every PDF download 500.
-    counts = {pc.label: pc.count for pc in result.particleCounts}
+    counts = {
+        pc.label: pc.displayValue if pc.displayValue is not None else pc.count
+        for pc in result.particleCounts
+    }
     params = [
         ("Red Blood Cells (RBC)", _safeVal(counts.get("erythrocytes"))),
         ("White Blood Cells (WBC)", _safeVal(counts.get("leukocytes"))),

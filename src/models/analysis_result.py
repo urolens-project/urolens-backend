@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, SmallInteger, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .manual_override import ManualOverride
     from .patient import Patient
     from .result_confirmation import ResultConfirmation
+    from .result_field import ResultField
     from .result_view import ResultView
     from .smart_diagnosis_output import SmartDiagnosisOutput
     from .specimen import Specimen
@@ -30,6 +31,7 @@ class ResultStatus(enum.StrEnum):
     override -> approve -> release chain plus retake/escalation/failure exits.
     """
 
+    CAPTURING = "CAPTURING"
     PENDING_CONFIRM = "PENDING_CONFIRM"
     PENDING_SUPERVISOR_APPROVAL = "PENDING_SUPERVISOR_APPROVAL"
     APPROVED = "APPROVED"
@@ -75,9 +77,19 @@ class AnalysisResult(Base):
     flaggedAnomalies: Mapped[dict[str, Any]] = mapped_column("flagged_anomalies", 
         JSONB, nullable=False, default=dict
     )
-    particleClasses: Mapped[dict[str, Any]] = mapped_column("particle_classes", 
+    particleClasses: Mapped[dict[str, Any]] = mapped_column("particle_classes",
         JSONB, nullable=False, default=dict
     )
+    aiDetections: Mapped[list[dict[str, Any]] | None] = mapped_column("ai_detections",
+        JSONB, nullable=True
+    )
+    """Per-particle bounding boxes the AI engine detected, if the pipeline
+    that produced this result wrote any — [{id, x, y, w, h, confidence,
+    particleType}, ...], x/y/w/h as percentages (0-100), same coordinate
+    system as a reviewer's own spatial_annotations. Column predates this
+    mapping (provisioned directly in Supabase, like sessions/qc_reviews —
+    see migration 0045's docstring); no current upload path writes it, so
+    this is null for most results today."""
     modelVersion: Mapped[str] = mapped_column("model_version", 
         String(30), nullable=False, default="mvp-v1.0"
     )
@@ -100,6 +112,20 @@ class AnalysisResult(Base):
     confirmedAt: Mapped[datetime | None] = mapped_column("confirmed_at", 
         DateTime(timezone=True), nullable=True
     )
+
+    # ── Multi-field ──────────────────────────────────────────────────────────
+    fieldCount: Mapped[int] = mapped_column(
+        "field_count", SmallInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """Number of ACCEPTED fields."""
+    fieldSummary: Mapped[dict[str, Any] | None] = mapped_column("field_summary", JSONB, nullable=True)
+    """Per class: mean, min, max, total, fields seen. NULL until confirmation (and for
+    results backfilled from a single image); readers fall back to `particle_classes`."""
+    isLegacySingleField: Mapped[bool] = mapped_column(
+        "is_legacy_single_field", Boolean, nullable=False, default=False,
+        server_default=text("false"),
+    )
+    """True for a single-image result that was in progress when multi-field shipped."""
 
     # ── Patient Portal ───────────────────────────────────────────────────────
     patientId: Mapped[uuid.UUID | None] = mapped_column("patient_id", 
@@ -149,7 +175,13 @@ class AnalysisResult(Base):
         back_populates="analysisResult", uselist=False
     )
     manualOverrides: Mapped[list[ManualOverride]] = relationship(
-        back_populates="analysisResult"
+        back_populates="analysisResult",
+        # Oldest first, so merging them in order leaves each parameter's
+        # latest override as its effective value (see confirmResult).
+        order_by="ManualOverride.overriddenAt",
+    )
+    fields: Mapped[list[ResultField]] = relationship(
+        back_populates="analysisResult", order_by="ResultField.fieldNo", lazy="raise"
     )
     smartDiagnosisOutput: Mapped[SmartDiagnosisOutput | None] = relationship(
         back_populates="analysisResult", uselist=False

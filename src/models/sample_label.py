@@ -40,15 +40,24 @@ class SampleLabel(Base):
         ForeignKey("users.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    affixedConfirmed: Mapped[bool] = mapped_column("affixed_confirmed", 
+    affixedConfirmed: Mapped[bool] = mapped_column("affixed_confirmed",
         Boolean, nullable=False, default=False
     )
-    affixedAt: Mapped[datetime | None] = mapped_column("affixed_at", 
+    affixedAt: Mapped[datetime | None] = mapped_column("affixed_at",
         DateTime(timezone=True), nullable=True
     )
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    createdAt: Mapped[datetime] = mapped_column("created_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    superseded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """`True` once a newer label has been generated for the same specimen —
+    added via migration 0035. `generateLabel` sets this on every prior label
+    for the specimen before creating the new one; `confirmLabelAffixed` and
+    the print-job endpoint both pick the current (non-superseded) label by
+    `createdAt` descending rather than relying on insertion order alone.
+    """
 
     @property
     def id(self) -> uuid.UUID:

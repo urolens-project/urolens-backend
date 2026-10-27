@@ -15,6 +15,9 @@ from src.core.auth_service import (
     verifyPassword,
 )
 
+MEDTECH_IDLE_TIMEOUT_MINUTES = 60
+DEFAULT_IDLE_TIMEOUT_MINUTES = 30
+
 
 class TestPasswordHashing:
     @pytest.mark.asyncio
@@ -166,39 +169,135 @@ class TestFailedAttempts:
             await resetFailedAttempts(uuid.uuid4())
 
 
+def _makeSessionSupabaseMock(selectData: dict | None) -> tuple[MagicMock, AsyncMock, AsyncMock]:
+    """Mocks `supabase.table("sessions")`'s select-by-id and update-by-id
+    chains separately, so a test can both feed `is_session_active`'s read
+    and assert on whatever it subsequently wrote (a touch, or a revoke).
+    """
+    mock = MagicMock()
+    selectExecute = AsyncMock(return_value=MagicMock(data=selectData))
+    mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = (
+        selectExecute
+    )
+    updateExecute = AsyncMock()
+    mock.table.return_value.update.return_value.eq.return_value.execute = updateExecute
+    return mock, selectExecute, updateExecute
+
+
 class TestSessionActive:
     @pytest.mark.asyncio
-    async def test_activeSession(self):
-        with patch(
-            "src.core.auth_service.supabase",
-            MagicMock(),
-        ) as mock:
-            mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
-                return_value=MagicMock(data={"is_active": True})
-            )
+    async def test_activeRecentlyTouchedSessionIsActive(self):
+        recent = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": recent, "login_at": recent, "user_role": "RECEPTIONIST"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
             result = await isSessionActive(uuid.uuid4())
-            assert result is True
+
+        assert result is True
+        update.assert_awaited_once()  # UROLENS-167: touched as still-active
 
     @pytest.mark.asyncio
     async def test_closedSession(self):
-        with patch(
-            "src.core.auth_service.supabase",
-            MagicMock(),
-        ) as mock:
-            mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
-                return_value=MagicMock(data={"is_active": False})
-            )
+        mock, _select, update = _makeSessionSupabaseMock({"is_active": False})
+        with patch("src.core.auth_service.supabase", mock):
             result = await isSessionActive(uuid.uuid4())
-            assert result is False
+
+        assert result is False
+        update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_nonexistentSession(self):
-        with patch(
-            "src.core.auth_service.supabase",
-            MagicMock(),
-        ) as mock:
-            mock.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
-                return_value=MagicMock(data=None)
-            )
+        mock, _select, update = _makeSessionSupabaseMock(None)
+        with patch("src.core.auth_service.supabase", mock):
             result = await isSessionActive(uuid.uuid4())
-            assert result is False
+
+        assert result is False
+        update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sessionWithNoTimestampAtAllFailsClosed(self):
+        """A session row active but with neither last_activity_at nor
+        login_at (shouldn't happen post-UROLENS-167, but nothing to judge
+        staleness against) is denied rather than treated as always-fresh.
+        """
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": None, "login_at": None, "user_role": "RECEPTIONIST"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is False
+        update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_nonMedtechIdleFor31MinutesIsExpiredAndRevoked(self):
+        stale = (datetime.now(UTC) - timedelta(minutes=DEFAULT_IDLE_TIMEOUT_MINUTES + 1)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": stale, "login_at": stale, "user_role": "SUPERVISOR"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is False
+        # closeSession() is what actually revokes it -- assert the real
+        # effect (an update setting is_active False) rather than the name
+        # of the helper that performed it.
+        update.assert_awaited_once()
+        assert mock.table.return_value.update.call_args.args[0]["is_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_nonMedtechIdleFor29MinutesIsStillActive(self):
+        fresh = (datetime.now(UTC) - timedelta(minutes=DEFAULT_IDLE_TIMEOUT_MINUTES - 1)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": fresh, "login_at": fresh, "user_role": "SUPERVISOR"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is True
+        # Still active -> touched (last_activity_at updated), never revoked.
+        touchCall = mock.table.return_value.update.call_args.args[0]
+        assert "last_activity_at" in touchCall
+        assert "is_active" not in touchCall
+
+    @pytest.mark.asyncio
+    async def test_medtechGetsTheLongerSixtyMinuteTimeout(self):
+        """The UAC gives MedTech a longer idle window than every other role
+        -- 29 minutes idle (which would already expire SUPERVISOR etc.)
+        must still be well within MedTech's own window.
+        """
+        age = (datetime.now(UTC) - timedelta(minutes=DEFAULT_IDLE_TIMEOUT_MINUTES + 1)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": age, "login_at": age, "user_role": "MEDTECH"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_medtechIdleFor61MinutesIsExpired(self):
+        stale = (datetime.now(UTC) - timedelta(minutes=MEDTECH_IDLE_TIMEOUT_MINUTES + 1)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": stale, "login_at": stale, "user_role": "MEDTECH"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_fallsBackToLoginAtWhenLastActivityAtIsMissing(self):
+        """A session row that predates the UROLENS-167 column (no
+        `last_activity_at` yet) is judged by `login_at` until its first
+        touch, not denied outright.
+        """
+        recentLogin = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+        mock, _select, update = _makeSessionSupabaseMock(
+            {"is_active": True, "last_activity_at": None, "login_at": recentLogin, "user_role": "ADMINISTRATOR"}
+        )
+        with patch("src.core.auth_service.supabase", mock):
+            result = await isSessionActive(uuid.uuid4())
+
+        assert result is True

@@ -1,0 +1,1973 @@
+{
+  "DiscardFieldRequest": {
+    "description": "`POST /fields/{field_id}/discard`. The reason is optional on the mobile\npath and required on the web path (the service enforces which).",
+    "properties": {
+      "reason": {
+        "anyOf": [
+          {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reason"
+      }
+    },
+    "title": "DiscardFieldRequest",
+    "type": "object"
+  },
+  "FieldActionResponse": {
+    "$defs": {
+      "FieldFlag": {
+        "description": "Why a field is flagged for a closer look. Computed when read, not stored.",
+        "properties": {
+          "particleType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Particletype"
+          },
+          "reason": {
+            "enum": [
+              "LOW_CONFIDENCE",
+              "OUTLIER_COUNT",
+              "ABOVE_NORMAL_MAX"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "FieldFlag",
+        "type": "object"
+      },
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "FieldSummaryItem": {
+        "description": "One row of `GET /results/{id}/fields`. Never carries detections.",
+        "properties": {
+          "aiFindings": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Aifindings",
+            "type": "object"
+          },
+          "confidenceScores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Confidencescores",
+            "type": "object"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "discardReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Discardreason"
+          },
+          "effectiveCounts": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Effectivecounts",
+            "type": "object"
+          },
+          "fieldId": {
+            "format": "uuid",
+            "title": "Fieldid",
+            "type": "string"
+          },
+          "fieldNo": {
+            "title": "Fieldno",
+            "type": "integer"
+          },
+          "flags": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FieldFlag"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "hasCorrections": {
+            "default": false,
+            "title": "Hascorrections",
+            "type": "boolean"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Imageurl"
+          },
+          "magnification": {
+            "$ref": "#/$defs/Magnification"
+          },
+          "overriddenClasses": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Overriddenclasses",
+            "type": "array"
+          },
+          "resultId": {
+            "format": "uuid",
+            "title": "Resultid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/FieldStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedat"
+          },
+          "verifiedBy": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedby"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fieldId",
+          "resultId",
+          "fieldNo",
+          "magnification",
+          "status",
+          "aiFindings",
+          "effectiveCounts",
+          "confidenceScores",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "FieldSummaryItem",
+        "type": "object"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      }
+    },
+    "description": "Returned by accept, discard, annotations, override, revert and verify, so a\nclient can update the field and the running totals in one go.",
+    "properties": {
+      "acceptedFieldCount": {
+        "title": "Acceptedfieldcount",
+        "type": "integer"
+      },
+      "field": {
+        "$ref": "#/$defs/FieldSummaryItem"
+      },
+      "undecidedFieldCount": {
+        "title": "Undecidedfieldcount",
+        "type": "integer"
+      },
+      "verifiedFieldCount": {
+        "title": "Verifiedfieldcount",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "field",
+      "acceptedFieldCount",
+      "verifiedFieldCount",
+      "undecidedFieldCount"
+    ],
+    "title": "FieldActionResponse",
+    "type": "object"
+  },
+  "FieldAnalysisResponse": {
+    "$defs": {
+      "Detection": {
+        "description": "One AI box. `id` is assigned by the backend and is stable within a field.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          },
+          "w": {
+            "title": "W",
+            "type": "number"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "particleType",
+          "confidence",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "Detection",
+        "type": "object"
+      },
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      }
+    },
+    "description": "`POST /fields` (201): the field one image upload added to a specimen.",
+    "properties": {
+      "acceptedFieldCount": {
+        "title": "Acceptedfieldcount",
+        "type": "integer"
+      },
+      "aiFindings": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Aifindings",
+        "type": "object"
+      },
+      "confidenceScores": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Confidencescores",
+        "type": "object"
+      },
+      "detections": {
+        "items": {
+          "$ref": "#/$defs/Detection"
+        },
+        "title": "Detections",
+        "type": "array"
+      },
+      "fieldId": {
+        "format": "uuid",
+        "title": "Fieldid",
+        "type": "string"
+      },
+      "fieldNo": {
+        "title": "Fieldno",
+        "type": "integer"
+      },
+      "imageHeight": {
+        "title": "Imageheight",
+        "type": "integer"
+      },
+      "imageId": {
+        "format": "uuid",
+        "title": "Imageid",
+        "type": "string"
+      },
+      "imageWidth": {
+        "title": "Imagewidth",
+        "type": "integer"
+      },
+      "magnification": {
+        "$ref": "#/$defs/Magnification"
+      },
+      "minFields": {
+        "title": "Minfields",
+        "type": "integer"
+      },
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
+      },
+      "smartDiagnosisUnavailable": {
+        "default": false,
+        "title": "Smartdiagnosisunavailable",
+        "type": "boolean"
+      },
+      "status": {
+        "$ref": "#/$defs/FieldStatus"
+      }
+    },
+    "required": [
+      "fieldId",
+      "fieldNo",
+      "magnification",
+      "resultId",
+      "imageId",
+      "status",
+      "aiFindings",
+      "detections",
+      "imageWidth",
+      "imageHeight",
+      "confidenceScores",
+      "acceptedFieldCount",
+      "minFields"
+    ],
+    "title": "FieldAnalysisResponse",
+    "type": "object"
+  },
+  "FieldDetail": {
+    "$defs": {
+      "AddedBox": {
+        "description": "A box the MedTech drew.",
+        "properties": {
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          },
+          "w": {
+            "title": "W",
+            "type": "number"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "particleType",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "AddedBox",
+        "type": "object"
+      },
+      "Detection": {
+        "description": "One AI box. `id` is assigned by the backend and is stable within a field.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          },
+          "w": {
+            "title": "W",
+            "type": "number"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "particleType",
+          "confidence",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "Detection",
+        "type": "object"
+      },
+      "FieldAnnotationEdits": {
+        "description": "The current (not superseded) box edits on a field.",
+        "properties": {
+          "addedBoxes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AddedBox"
+            },
+            "title": "Addedboxes",
+            "type": "array"
+          },
+          "editedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Editedat"
+          },
+          "editedBy": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Editedby"
+          },
+          "removedDetectionIds": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Removeddetectionids",
+            "type": "array"
+          }
+        },
+        "title": "FieldAnnotationEdits",
+        "type": "object"
+      },
+      "FieldFlag": {
+        "description": "Why a field is flagged for a closer look. Computed when read, not stored.",
+        "properties": {
+          "particleType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Particletype"
+          },
+          "reason": {
+            "enum": [
+              "LOW_CONFIDENCE",
+              "OUTLIER_COUNT",
+              "ABOVE_NORMAL_MAX"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "FieldFlag",
+        "type": "object"
+      },
+      "FieldOverride": {
+        "description": "The override currently in force for one class of a field.",
+        "properties": {
+          "correctedValue": {
+            "title": "Correctedvalue",
+            "type": "integer"
+          },
+          "originalAiValue": {
+            "title": "Originalaivalue",
+            "type": "integer"
+          },
+          "overriddenAt": {
+            "format": "date-time",
+            "title": "Overriddenat",
+            "type": "string"
+          },
+          "overriddenBy": {
+            "format": "uuid",
+            "title": "Overriddenby",
+            "type": "string"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          }
+        },
+        "required": [
+          "particleType",
+          "originalAiValue",
+          "correctedValue",
+          "rationale",
+          "overriddenBy",
+          "overriddenAt"
+        ],
+        "title": "FieldOverride",
+        "type": "object"
+      },
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      }
+    },
+    "description": "`GET /fields/{field_id}`: one field in full. Opening a field this way is\nwhat lets the same user mark it as checked afterwards.",
+    "properties": {
+      "aiFindings": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Aifindings",
+        "type": "object"
+      },
+      "annotationEdits": {
+        "$ref": "#/$defs/FieldAnnotationEdits"
+      },
+      "confidenceScores": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Confidencescores",
+        "type": "object"
+      },
+      "createdAt": {
+        "format": "date-time",
+        "title": "Createdat",
+        "type": "string"
+      },
+      "detections": {
+        "items": {
+          "$ref": "#/$defs/Detection"
+        },
+        "title": "Detections",
+        "type": "array"
+      },
+      "discardReason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Discardreason"
+      },
+      "effectiveCounts": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Effectivecounts",
+        "type": "object"
+      },
+      "fieldId": {
+        "format": "uuid",
+        "title": "Fieldid",
+        "type": "string"
+      },
+      "fieldNo": {
+        "title": "Fieldno",
+        "type": "integer"
+      },
+      "flags": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/FieldFlag"
+        },
+        "title": "Flags",
+        "type": "array"
+      },
+      "hasCorrections": {
+        "default": false,
+        "title": "Hascorrections",
+        "type": "boolean"
+      },
+      "imageHeight": {
+        "title": "Imageheight",
+        "type": "integer"
+      },
+      "imageUrl": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Imageurl"
+      },
+      "imageWidth": {
+        "title": "Imagewidth",
+        "type": "integer"
+      },
+      "magnification": {
+        "$ref": "#/$defs/Magnification"
+      },
+      "modelVersion": {
+        "title": "Modelversion",
+        "type": "string"
+      },
+      "overriddenClasses": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Overriddenclasses",
+        "type": "array"
+      },
+      "overrides": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/FieldOverride"
+        },
+        "title": "Overrides",
+        "type": "array"
+      },
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
+      },
+      "smartDiagnosisUnavailable": {
+        "default": false,
+        "title": "Smartdiagnosisunavailable",
+        "type": "boolean"
+      },
+      "status": {
+        "$ref": "#/$defs/FieldStatus"
+      },
+      "updatedAt": {
+        "format": "date-time",
+        "title": "Updatedat",
+        "type": "string"
+      },
+      "verifiedAt": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Verifiedat"
+      },
+      "verifiedBy": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Verifiedby"
+      },
+      "version": {
+        "title": "Version",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "fieldId",
+      "resultId",
+      "fieldNo",
+      "magnification",
+      "status",
+      "aiFindings",
+      "effectiveCounts",
+      "confidenceScores",
+      "version",
+      "createdAt",
+      "updatedAt",
+      "detections",
+      "imageWidth",
+      "imageHeight",
+      "annotationEdits",
+      "modelVersion"
+    ],
+    "title": "FieldDetail",
+    "type": "object"
+  },
+  "FieldListResponse": {
+    "$defs": {
+      "FieldFlag": {
+        "description": "Why a field is flagged for a closer look. Computed when read, not stored.",
+        "properties": {
+          "particleType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Particletype"
+          },
+          "reason": {
+            "enum": [
+              "LOW_CONFIDENCE",
+              "OUTLIER_COUNT",
+              "ABOVE_NORMAL_MAX"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "FieldFlag",
+        "type": "object"
+      },
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "FieldSummaryItem": {
+        "description": "One row of `GET /results/{id}/fields`. Never carries detections.",
+        "properties": {
+          "aiFindings": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Aifindings",
+            "type": "object"
+          },
+          "confidenceScores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Confidencescores",
+            "type": "object"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "discardReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Discardreason"
+          },
+          "effectiveCounts": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Effectivecounts",
+            "type": "object"
+          },
+          "fieldId": {
+            "format": "uuid",
+            "title": "Fieldid",
+            "type": "string"
+          },
+          "fieldNo": {
+            "title": "Fieldno",
+            "type": "integer"
+          },
+          "flags": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FieldFlag"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "hasCorrections": {
+            "default": false,
+            "title": "Hascorrections",
+            "type": "boolean"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Imageurl"
+          },
+          "magnification": {
+            "$ref": "#/$defs/Magnification"
+          },
+          "overriddenClasses": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Overriddenclasses",
+            "type": "array"
+          },
+          "resultId": {
+            "format": "uuid",
+            "title": "Resultid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/FieldStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedat"
+          },
+          "verifiedBy": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedby"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fieldId",
+          "resultId",
+          "fieldNo",
+          "magnification",
+          "status",
+          "aiFindings",
+          "effectiveCounts",
+          "confidenceScores",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "FieldSummaryItem",
+        "type": "object"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      },
+      "ResultStatus": {
+        "description": "Lifecycle states for an `AnalysisResult`, spanning the confirm ->\noverride -> approve -> release chain plus retake/escalation/failure exits.",
+        "enum": [
+          "CAPTURING",
+          "PENDING_CONFIRM",
+          "PENDING_SUPERVISOR_APPROVAL",
+          "APPROVED",
+          "RELEASED",
+          "RETURNED_FOR_CORRECTION",
+          "CRITICAL_ESCALATED",
+          "IMAGE_RETAKE_REQUESTED",
+          "FAILED"
+        ],
+        "title": "ResultStatus",
+        "type": "string"
+      }
+    },
+    "description": "`GET /results/{id}/fields`.",
+    "properties": {
+      "acceptedFieldCount": {
+        "title": "Acceptedfieldcount",
+        "type": "integer"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/FieldSummaryItem"
+        },
+        "title": "Items",
+        "type": "array"
+      },
+      "minFields": {
+        "title": "Minfields",
+        "type": "integer"
+      },
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "resultStatus": {
+        "$ref": "#/$defs/ResultStatus"
+      },
+      "undecidedFieldCount": {
+        "title": "Undecidedfieldcount",
+        "type": "integer"
+      },
+      "verifiedFieldCount": {
+        "title": "Verifiedfieldcount",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "resultId",
+      "resultStatus",
+      "minFields",
+      "acceptedFieldCount",
+      "verifiedFieldCount",
+      "undecidedFieldCount",
+      "items"
+    ],
+    "title": "FieldListResponse",
+    "type": "object"
+  },
+  "FieldOverrideRequest": {
+    "description": "`POST /fields/{field_id}/override`.",
+    "properties": {
+      "correctedValue": {
+        "maximum": 1000,
+        "minimum": 0,
+        "title": "Correctedvalue",
+        "type": "integer"
+      },
+      "particleType": {
+        "title": "Particletype",
+        "type": "string"
+      },
+      "rationale": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "title": "Rationale",
+        "type": "string"
+      }
+    },
+    "required": [
+      "particleType",
+      "correctedValue",
+      "rationale"
+    ],
+    "title": "FieldOverrideRequest",
+    "type": "object"
+  },
+  "FullResultFieldAdditions": {
+    "$defs": {
+      "FieldFlag": {
+        "description": "Why a field is flagged for a closer look. Computed when read, not stored.",
+        "properties": {
+          "particleType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Particletype"
+          },
+          "reason": {
+            "enum": [
+              "LOW_CONFIDENCE",
+              "OUTLIER_COUNT",
+              "ABOVE_NORMAL_MAX"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "FieldFlag",
+        "type": "object"
+      },
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "FieldSummary": {
+        "description": "A result's stored field summary as the contract shows it: per-class statistics over\nthe accepted fields (exact means, plus `displayValue`) and the focal findings.",
+        "properties": {
+          "fieldCount": {
+            "title": "Fieldcount",
+            "type": "integer"
+          },
+          "focalFindings": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FocalFinding"
+            },
+            "title": "Focalfindings",
+            "type": "array"
+          },
+          "perClass": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ParticleAggregate"
+            },
+            "title": "Perclass",
+            "type": "object"
+          }
+        },
+        "required": [
+          "fieldCount",
+          "perClass"
+        ],
+        "title": "FieldSummary",
+        "type": "object"
+      },
+      "FieldSummaryItem": {
+        "description": "One row of `GET /results/{id}/fields`. Never carries detections.",
+        "properties": {
+          "aiFindings": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Aifindings",
+            "type": "object"
+          },
+          "confidenceScores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Confidencescores",
+            "type": "object"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "discardReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Discardreason"
+          },
+          "effectiveCounts": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Effectivecounts",
+            "type": "object"
+          },
+          "fieldId": {
+            "format": "uuid",
+            "title": "Fieldid",
+            "type": "string"
+          },
+          "fieldNo": {
+            "title": "Fieldno",
+            "type": "integer"
+          },
+          "flags": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FieldFlag"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "hasCorrections": {
+            "default": false,
+            "title": "Hascorrections",
+            "type": "boolean"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Imageurl"
+          },
+          "magnification": {
+            "$ref": "#/$defs/Magnification"
+          },
+          "overriddenClasses": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Overriddenclasses",
+            "type": "array"
+          },
+          "resultId": {
+            "format": "uuid",
+            "title": "Resultid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/FieldStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedat"
+          },
+          "verifiedBy": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verifiedby"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fieldId",
+          "resultId",
+          "fieldNo",
+          "magnification",
+          "status",
+          "aiFindings",
+          "effectiveCounts",
+          "confidenceScores",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "FieldSummaryItem",
+        "type": "object"
+      },
+      "FocalFinding": {
+        "description": "A class that is above its normal maximum in one or more fields even though\nthe average may look normal.",
+        "properties": {
+          "fieldNos": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fieldnos",
+            "type": "array"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "particleType",
+          "fieldNos"
+        ],
+        "title": "FocalFinding",
+        "type": "object"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      },
+      "ParticleAggregate": {
+        "description": "One class over the accepted fields.",
+        "properties": {
+          "aiMean": {
+            "title": "Aimean",
+            "type": "number"
+          },
+          "displayValue": {
+            "title": "Displayvalue",
+            "type": "string"
+          },
+          "fieldsAboveNormal": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fieldsabovenormal",
+            "type": "array"
+          },
+          "fieldsSeen": {
+            "title": "Fieldsseen",
+            "type": "integer"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "total": {
+            "title": "Total",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mean",
+          "min",
+          "max",
+          "total",
+          "fieldsSeen",
+          "aiMean",
+          "displayValue"
+        ],
+        "title": "ParticleAggregate",
+        "type": "object"
+      }
+    },
+    "description": "Additions to `GET /results/{result_id}`. `imageUrl` stays and points to the\nfirst accepted field for older readers.",
+    "properties": {
+      "fieldCount": {
+        "title": "Fieldcount",
+        "type": "integer"
+      },
+      "fieldSummary": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/FieldSummary"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "fields": {
+        "items": {
+          "$ref": "#/$defs/FieldSummaryItem"
+        },
+        "title": "Fields",
+        "type": "array"
+      }
+    },
+    "required": [
+      "fields",
+      "fieldCount"
+    ],
+    "title": "FullResultFieldAdditions",
+    "type": "object"
+  },
+  "MedtechPendingFieldCounts": {
+    "description": "Additions to each item of `GET /results/medtech/pending`.",
+    "properties": {
+      "fieldCount": {
+        "title": "Fieldcount",
+        "type": "integer"
+      },
+      "flaggedFieldCount": {
+        "title": "Flaggedfieldcount",
+        "type": "integer"
+      },
+      "verifiedFieldCount": {
+        "title": "Verifiedfieldcount",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "fieldCount",
+      "verifiedFieldCount",
+      "flaggedFieldCount"
+    ],
+    "title": "MedtechPendingFieldCounts",
+    "type": "object"
+  },
+  "ResultStatusResponse": {
+    "$defs": {
+      "ResultStatus": {
+        "description": "Lifecycle states for an `AnalysisResult`, spanning the confirm ->\noverride -> approve -> release chain plus retake/escalation/failure exits.",
+        "enum": [
+          "CAPTURING",
+          "PENDING_CONFIRM",
+          "PENDING_SUPERVISOR_APPROVAL",
+          "APPROVED",
+          "RELEASED",
+          "RETURNED_FOR_CORRECTION",
+          "CRITICAL_ESCALATED",
+          "IMAGE_RETAKE_REQUESTED",
+          "FAILED"
+        ],
+        "title": "ResultStatus",
+        "type": "string"
+      }
+    },
+    "description": "Returned by submit and reopen-capture.",
+    "properties": {
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/ResultStatus"
+      },
+      "updatedAt": {
+        "format": "date-time",
+        "title": "Updatedat",
+        "type": "string"
+      }
+    },
+    "required": [
+      "resultId",
+      "status",
+      "updatedAt"
+    ],
+    "title": "ResultStatusResponse",
+    "type": "object"
+  },
+  "RevertOverrideRequest": {
+    "description": "`POST /fields/{field_id}/override/revert`.",
+    "properties": {
+      "particleType": {
+        "title": "Particletype",
+        "type": "string"
+      },
+      "rationale": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "title": "Rationale",
+        "type": "string"
+      }
+    },
+    "required": [
+      "particleType",
+      "rationale"
+    ],
+    "title": "RevertOverrideRequest",
+    "type": "object"
+  },
+  "SaveAnnotationsRequest": {
+    "$defs": {
+      "AddedBoxInput": {
+        "description": "A box to add, as sent by the client (the backend assigns the id).",
+        "properties": {
+          "h": {
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "title": "H",
+            "type": "number"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          },
+          "w": {
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "title": "W",
+            "type": "number"
+          },
+          "x": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "particleType",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "AddedBoxInput",
+        "type": "object"
+      }
+    },
+    "description": "`PUT /fields/{field_id}/annotations`: the full list of edits, replacing the\nprevious list. A stale `expectedVersion` answers 409 `FIELD_VERSION_CONFLICT`\nand writes nothing.",
+    "properties": {
+      "addedBoxes": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/AddedBoxInput"
+        },
+        "title": "Addedboxes",
+        "type": "array"
+      },
+      "expectedVersion": {
+        "minimum": 1,
+        "title": "Expectedversion",
+        "type": "integer"
+      },
+      "removedDetectionIds": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Removeddetectionids",
+        "type": "array"
+      }
+    },
+    "required": [
+      "expectedVersion"
+    ],
+    "title": "SaveAnnotationsRequest",
+    "type": "object"
+  },
+  "SyncResultField": {
+    "$defs": {
+      "FieldStatus": {
+        "description": "Lifecycle of one field. Only ACCEPTED fields count toward the minimum and\nthe averages.",
+        "enum": [
+          "ANALYZED",
+          "ACCEPTED",
+          "DISCARDED"
+        ],
+        "title": "FieldStatus",
+        "type": "string"
+      },
+      "Magnification": {
+        "description": "Objective used for a field. Recorded now, not yet used in the averages.",
+        "enum": [
+          "HPF",
+          "LPF"
+        ],
+        "title": "Magnification",
+        "type": "string"
+      }
+    },
+    "description": "One field in `GET /sync/pull`. Explicit columns; never detections.",
+    "properties": {
+      "aiFindings": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Aifindings",
+        "type": "object"
+      },
+      "confidenceScores": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Confidencescores",
+        "type": "object"
+      },
+      "createdAt": {
+        "format": "date-time",
+        "title": "Createdat",
+        "type": "string"
+      },
+      "effectiveCounts": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "title": "Effectivecounts",
+        "type": "object"
+      },
+      "fieldId": {
+        "format": "uuid",
+        "title": "Fieldid",
+        "type": "string"
+      },
+      "fieldNo": {
+        "title": "Fieldno",
+        "type": "integer"
+      },
+      "imageHeight": {
+        "title": "Imageheight",
+        "type": "integer"
+      },
+      "imageId": {
+        "format": "uuid",
+        "title": "Imageid",
+        "type": "string"
+      },
+      "imageWidth": {
+        "title": "Imagewidth",
+        "type": "integer"
+      },
+      "magnification": {
+        "$ref": "#/$defs/Magnification"
+      },
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
+      },
+      "smartDiagnosisUnavailable": {
+        "default": false,
+        "title": "Smartdiagnosisunavailable",
+        "type": "boolean"
+      },
+      "specimenId": {
+        "format": "uuid",
+        "title": "Specimenid",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/FieldStatus"
+      },
+      "updatedAt": {
+        "format": "date-time",
+        "title": "Updatedat",
+        "type": "string"
+      },
+      "version": {
+        "title": "Version",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "fieldId",
+      "resultId",
+      "specimenId",
+      "imageId",
+      "fieldNo",
+      "magnification",
+      "status",
+      "aiFindings",
+      "effectiveCounts",
+      "confidenceScores",
+      "imageWidth",
+      "imageHeight",
+      "version",
+      "createdAt",
+      "updatedAt"
+    ],
+    "title": "SyncResultField",
+    "type": "object"
+  },
+  "VerificationSummaryResponse": {
+    "$defs": {
+      "FocalFinding": {
+        "description": "A class that is above its normal maximum in one or more fields even though\nthe average may look normal.",
+        "properties": {
+          "fieldNos": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fieldnos",
+            "type": "array"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "particleType",
+          "fieldNos"
+        ],
+        "title": "FocalFinding",
+        "type": "object"
+      },
+      "ParticleAggregate": {
+        "description": "One class over the accepted fields.",
+        "properties": {
+          "aiMean": {
+            "title": "Aimean",
+            "type": "number"
+          },
+          "displayValue": {
+            "title": "Displayvalue",
+            "type": "string"
+          },
+          "fieldsAboveNormal": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fieldsabovenormal",
+            "type": "array"
+          },
+          "fieldsSeen": {
+            "title": "Fieldsseen",
+            "type": "integer"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "total": {
+            "title": "Total",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mean",
+          "min",
+          "max",
+          "total",
+          "fieldsSeen",
+          "aiMean",
+          "displayValue"
+        ],
+        "title": "ParticleAggregate",
+        "type": "object"
+      },
+      "SummaryCorrection": {
+        "description": "One correction made during verification.",
+        "properties": {
+          "aiValue": {
+            "title": "Aivalue",
+            "type": "integer"
+          },
+          "effectiveValue": {
+            "title": "Effectivevalue",
+            "type": "integer"
+          },
+          "fieldId": {
+            "format": "uuid",
+            "title": "Fieldid",
+            "type": "string"
+          },
+          "fieldNo": {
+            "title": "Fieldno",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "BOXES",
+              "OVERRIDE"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fieldId",
+          "fieldNo",
+          "particleType",
+          "aiValue",
+          "effectiveValue",
+          "kind"
+        ],
+        "title": "SummaryCorrection",
+        "type": "object"
+      }
+    },
+    "description": "`GET /results/{id}/summary`: the numbers confirmation will store.",
+    "properties": {
+      "blockingReason": {
+        "anyOf": [
+          {
+            "enum": [
+              "RESULT_NOT_CONFIRMABLE",
+              "LEGACY_NO_FIELD",
+              "LEGACY_NO_FINDINGS",
+              "FIELDS_BELOW_MINIMUM",
+              "FIELDS_NOT_VERIFIED"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Blockingreason"
+      },
+      "canConfirm": {
+        "title": "Canconfirm",
+        "type": "boolean"
+      },
+      "corrections": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SummaryCorrection"
+        },
+        "title": "Corrections",
+        "type": "array"
+      },
+      "fieldCount": {
+        "title": "Fieldcount",
+        "type": "integer"
+      },
+      "focalFindings": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/FocalFinding"
+        },
+        "title": "Focalfindings",
+        "type": "array"
+      },
+      "minFields": {
+        "title": "Minfields",
+        "type": "integer"
+      },
+      "perClass": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ParticleAggregate"
+        },
+        "title": "Perclass",
+        "type": "object"
+      },
+      "resultId": {
+        "format": "uuid",
+        "title": "Resultid",
+        "type": "string"
+      },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
+      },
+      "smartDiagnosisUnavailable": {
+        "default": false,
+        "title": "Smartdiagnosisunavailable",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "resultId",
+      "fieldCount",
+      "minFields",
+      "perClass",
+      "canConfirm"
+    ],
+    "title": "VerificationSummaryResponse",
+    "type": "object"
+  }
+}

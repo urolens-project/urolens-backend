@@ -1,13 +1,15 @@
 """Unit tests — specimen_service.rejectSpecimen (MedTech "Reject Specimen").
 
-Covers the guard that keeps a rejection from stranding a result that has
-already been confirmed and sent to the supervisor. The receiving-desk
-rejection flow lives in receiveSpecimen and isn't covered here.
+Covers the guard that keeps a rejection from stranding a result that is with
+(or past) the supervisor — while a returned result, back with the MedTech, can
+be rejected (UROLENS-238). The receiving-desk rejection flow lives in
+receiveSpecimen and isn't covered here. Receptionist notifications are patched
+out (see tests/test_reject_assigned_specimen.py).
 """
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -34,6 +36,8 @@ def _makeDb(
 ):
     """`resultStatus=None` means the specimen has no analysis result yet."""
     specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
+    specimen.sampleUid = "SMP-20260930-00051"
     specimen.status = status
     specimen.medtechId = medtechId
     specimen.rejectionReason = None
@@ -46,8 +50,16 @@ def _makeDb(
     db = AsyncMock()
     db.get = AsyncMock(return_value=specimen if exists else None)
     db.execute = AsyncMock(return_value=executeResult)
+    db.add = MagicMock()
     db.commit = AsyncMock()
     return db, specimen
+
+
+@pytest.fixture(autouse=True)
+def _noNotifications():
+    with patch.object(specimen_service, "NotificationService") as notificationService:
+        notificationService.return_value.notifyReceptionistsSpecimenRejected = AsyncMock()
+        yield notificationService
 
 
 @pytest.mark.asyncio
@@ -56,6 +68,7 @@ def _makeDb(
     [
         None,
         ResultStatus.PENDING_CONFIRM,
+        ResultStatus.RETURNED_FOR_CORRECTION,
         ResultStatus.IMAGE_RETAKE_REQUESTED,
         ResultStatus.FAILED,
     ],
@@ -72,7 +85,7 @@ async def test_rejectSucceedsWhileResultIsStillWithTheMedtech(resultStatus):
     assert specimen.rejectionNote == "Only 2 mL"
     assert specimen.rejectedAt is not None
     assert response.status == "REJECTED"
-    db.commit.assert_awaited_once()
+    assert db.commit.await_count == 2  # the rejection, then the notifications
 
 
 @pytest.mark.asyncio
@@ -80,16 +93,15 @@ async def test_rejectSucceedsWhileResultIsStillWithTheMedtech(resultStatus):
     "resultStatus",
     [
         ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-        ResultStatus.RETURNED_FOR_CORRECTION,
         ResultStatus.CRITICAL_ESCALATED,
         ResultStatus.APPROVED,
         ResultStatus.RELEASED,
     ],
 )
 async def test_rejectIsBlockedOnceResultHasBeenSubmittedToTheSupervisor(resultStatus):
-    """After confirmation, return or escalation the result belongs to the
-    supervisor's workflow — rejecting the specimen now would leave it
-    awaiting approval on a REJECTED specimen.
+    """After confirmation or escalation the result belongs to the supervisor's
+    workflow — rejecting the specimen now would leave it awaiting approval on a
+    REJECTED specimen.
     """
     db, specimen = _makeDb(resultStatus=resultStatus)
 

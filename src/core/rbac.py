@@ -5,20 +5,23 @@ inline.
 """
 import logging
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import audit_logger
-from .auth_service import decodeJwt, isSessionActive
+from .auth_service import decodeJwt, isSessionActive, sessionEndReason
 
 securityScheme = HTTPBearer()
 logger = logging.getLogger(__name__)
 
-def _unauthorized() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required.",
-    )
+def _unauthorized(code: str | None = None, message: str = "Authentication required.") -> HTTPException:
+    # Without a code the envelope says UNAUTHORIZED. The specific codes let the
+    # client tell "log in again" cases apart (UROLENS-244).
+    exc = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message)
+    if code:
+        exc.errorCode = code  # type: ignore[attr-defined]
+    return exc
 
 def _forbidden() -> HTTPException:
     return HTTPException(
@@ -31,7 +34,10 @@ async def getCurrentUser(
     credentials: HTTPAuthorizationCredentials = Depends(securityScheme),
 ) -> dict:
     """FastAPI dependency resolving the caller's identity from their Bearer
-    JWT, rejecting it if the token is invalid or its session has been revoked.
+    JWT, rejecting it if the token is invalid or its session has been
+    revoked — including a session `is_session_active` finds idle past its
+    role's inactivity timeout (UROLENS-167), which it revokes as part of
+    that check.
 
     Every rejection is recorded via `audit_logger.log_access_denied` before
     raising.
@@ -41,23 +47,31 @@ async def getCurrentUser(
         `session_id`, ...).
 
     Raises:
-        HTTPException: 401, if the token fails to decode/verify, or if its
-            session is missing/inactive (revoked or logged out).
+        HTTPException: 401 `SESSION_EXPIRED`, if the token has expired;
+            `SESSION_IDLE`, if its session was ended for inactivity
+            (UROLENS-167/245); `SESSION_ENDED`, if it's missing or was logged
+            out or revoked; `UNAUTHORIZED`, if it fails to decode or verify.
     """
     token = credentials.credentials
     ipAddress = request.client.host if request.client else "unknown"
 
     try:
         claims = decodeJwt(token)
+    except jwt.ExpiredSignatureError as err:
+        await audit_logger.logAccessDenied(ipAddress)
+        raise _unauthorized("SESSION_EXPIRED", "Your session has expired. Please log in again.") from err
     except Exception as err:
         logger.warning("JWT decode failed from %s", ipAddress, exc_info=True)
         await audit_logger.logAccessDenied(ipAddress)
         raise _unauthorized() from err
 
     sessionId = claims.get("session_id")
-    if not sessionId or not await isSessionActive(sessionId):
+    if not sessionId or not await isSessionActive(sessionId, ipAddress=ipAddress):
         await audit_logger.logAccessDenied(ipAddress, userId=claims.get("user_id"))
-        raise _unauthorized()
+        # Only a rejection pays for this second read (UROLENS-245).
+        if sessionId and await sessionEndReason(sessionId) == "IDLE":
+            raise _unauthorized("SESSION_IDLE", "You were signed out due to inactivity. Please log in again.")
+        raise _unauthorized("SESSION_ENDED", "Your session has ended. Please log in again.")
 
     return claims
 

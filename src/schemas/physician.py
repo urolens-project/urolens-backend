@@ -5,17 +5,34 @@ listing/detail shapes; see `services/physician_service.py` and
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
+
+from .field import FieldSummary
+from .omit import dropNoneKeys
+
+# Kept identical to schemas.lab_request's constant — both feed the same
+# lab_requests.test_type column (migration 0035).
+_TEST_TYPE_MAX_LENGTH = 255
 
 
 class PhysicianPatientItem(BaseModel):
-    """One patient, for the physician's patient-search results (decrypted)."""
+    """One patient, for the physician's patient-search results.
+
+    Minimized per RA 10173 (UROLENS-152): no firstName/lastName/contact/
+    address/clinicalHistory — only enough for the physician to visually
+    confirm they've found the right person before selecting (the UAC's own
+    stated clinical-safety requirement), on top of the already
+    patient_uid-filtered result set this search returns.
+    """
 
     patientId: UUID
     patientUid: str
-    firstName: str
-    middleName: str | None = None
-    lastName: str
     dateOfBirth: str
     sex: str
 
@@ -23,12 +40,23 @@ class PhysicianPatientItem(BaseModel):
 class LabRequestCreateRequest(BaseModel):
     """Request body for a physician creating a lab request. Unlike
     `schemas.lab_request.LabRequestCreateRequest`, the physician is implicit
-    (from the authenticated caller), so there's no `physician_id` field.
+    (from the authenticated caller), so there's no `physician_id` field —
+    and no physician-identifier validator either, since one is always
+    present.
     """
 
     patientId: UUID
-    testType: str
+    testType: str = Field(max_length=_TEST_TYPE_MAX_LENGTH)
     clinicalNotes: str | None = None
+    specialInstructions: str | None = None
+
+    @field_validator("testType")
+    @classmethod
+    def testTypeNotBlank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 # The response schema for lab-request creation lives in schemas/lab_request.py
@@ -91,4 +119,15 @@ class PhysicianResultDetail(BaseModel):
     smartDiagnosis: SmartDiagnosisDetail | None
     imageUrl: str | None
     status: str
-    annotationNotes: str | None
+    annotationNotes: str | None  # the Supervisor's own entry specifically — see get_result_detail
+    fieldCount: int | None = None
+    """Fields the counts average over (multi-field results only; left out otherwise)."""
+    countsLabel: str | None = None
+    """`average per field (N fields)`, or `single image` for a result from before multi-field."""
+    fieldSummary: FieldSummary | None = None
+    """Per-class statistics over the accepted fields, with `displayValue` (multi-field only).
+    When present, `flaggedAnomalies` is empty."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel", "fieldSummary"))

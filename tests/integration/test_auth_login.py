@@ -17,9 +17,11 @@ run for real.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -27,6 +29,8 @@ from httpx import ASGITransport, AsyncClient
 
 from main import app
 from src.core.auth_service import decodeJwt, hashPassword
+from src.core.auth_service import isSessionActive as _realIsSessionActive
+from src.core.database import getDb
 
 # ── Fake Supabase (in-memory, stateful) ──────────────────────────────────────
 
@@ -101,11 +105,29 @@ def fakeSb():
     return FakeSupabase()
 
 
+@contextmanager
+def standInDb() -> Iterator[AsyncMock]:
+    """A mock database session for the auth routes that use one — logout
+    forgets the user's push token (UROLENS-248).
+    """
+    db = AsyncMock()
+
+    async def _override():
+        yield db
+
+    app.dependency_overrides[getDb] = _override
+    try:
+        yield db
+    finally:
+        app.dependency_overrides.pop(getDb, None)
+
+
 @pytest_asyncio.fixture
 async def client(fakeSb):
     with (
         patch("src.core.auth_service.supabase", fakeSb),
         patch("src.core.audit_logger.supabase", fakeSb),
+        standInDb(),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             yield c, fakeSb
@@ -215,7 +237,8 @@ async def test_login04_accountLocksOn5thFailedAttempt(client):
 @pytest.mark.asyncio
 async def test_login05_lockedAccountRejectedEvenWithCorrectPassword(client):
     c, fakeSb = client
-    seedUser(fakeSb, failed_attempts=5, locked_at="2026-09-08T00:00:00+00:00")
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedMinuteAgo)
 
     resp = await c.post(
         "/api/v1/auth/login",
@@ -224,6 +247,55 @@ async def test_login05_lockedAccountRejectedEvenWithCorrectPassword(client):
 
     assert resp.status_code == 423
     assert resp.json()["error"]["code"] == "ACCOUNT_LOCKED"
+
+
+@pytest.mark.asyncio
+async def test_login05b_lockExpiresAfterLockoutWindow(client):
+    # UROLENS-222 / F-07: a lock no longer needs an administrator, so knowing
+    # a username isn't enough to keep its owner locked out.
+    c, fakeSb = client
+    lockedLongAgo = (datetime.now(UTC) - timedelta(minutes=16)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedLongAgo)
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_login05c_wrongGuessWhileLockedGets423AndDoesNotExtendTheLock(client):
+    # Before the fix a wrong guess re-stamped locked_at (endless lockout) and
+    # got 401 where the right password got 423 (a "your guess was right" oracle).
+    c, fakeSb = client
+    lockedMinuteAgo = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedMinuteAgo)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    assert resp.status_code == 423
+    assert resp.json()["error"]["code"] == "ACCOUNT_LOCKED"
+    user = fakeSb.store["users"][0]
+    assert user["locked_at"] == lockedMinuteAgo
+    assert user["failed_attempts"] == 5
+
+
+@pytest.mark.asyncio
+async def test_login05d_oneWrongGuessAfterExpiryLocksAgainImmediately(client):
+    # The failure count is only reset by a successful login, so an expired
+    # lock gives exactly one guess per window.
+    c, fakeSb = client
+    lockedLongAgo = (datetime.now(UTC) - timedelta(minutes=16)).isoformat()
+    seedUser(fakeSb, failed_attempts=5, locked_at=lockedLongAgo)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    assert resp.status_code == 401
+    user = fakeSb.store["users"][0]
+    assert user["failed_attempts"] == 6
+    assert user["locked_at"] != lockedLongAgo  # re-locked just now
 
 
 @pytest.mark.asyncio
@@ -308,3 +380,178 @@ async def test_login09_expiredJwtRejectedOnSubsequentRequest(client):
     )
 
     assert resp.status_code == 401
+
+
+# ── UROLENS-222: rate limiting and timing (audit F-06/F-07) ───────────────────
+
+@pytest.mark.asyncio
+async def test_login10_sixthAttemptInFiveMinutesIsRefusedWith429AndRetryAfter(client):
+    c, fakeSb = client
+    seedUser(fakeSb)
+    for _ in range(5):
+        await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "wrong"})
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "TOO_MANY_LOGIN_ATTEMPTS"
+    assert int(resp.headers["Retry-After"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_login11_unknownUsernameCostsOneBcryptCheckLikeAWrongPassword(client):
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    with patch("src.api.auth.spendPasswordCheck", AsyncMock()) as spend:
+        resp = await c.post("/api/v1/auth/login", json={"username": "nobody", "password": "guess"})
+
+    assert resp.status_code == 401
+    spend.assert_awaited_once_with("guess")
+
+
+# ── UROLENS-165: blank-field validation + inactive-account message ordering ──
+
+@pytest.mark.asyncio
+async def test_login12_blankUsernameRejectedAtSchemaLevel(client):
+    """Previously an empty username passed straight through to the real
+    login flow (a DB lookup, then the generic 401) instead of being
+    rejected as a validation error naming the field.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "", "password": "irrelevant"})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "username" in resp.json()["error"]["details"]
+
+
+@pytest.mark.asyncio
+async def test_login13_whitespaceOnlyPasswordRejectedAtSchemaLevel(client):
+    """`min_length=1` alone lets a string of spaces through — the
+    not-blank validator is what actually catches this case.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb)
+
+    resp = await c.post("/api/v1/auth/login", json={"username": "medtech1", "password": "   "})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "password" in resp.json()["error"]["details"]
+
+
+@pytest.mark.asyncio
+async def test_login14_inactiveAccountWithWrongPasswordStillGetsInactiveMessage(client):
+    """The bug: the inactive check used to run only after a wrong-password
+    guess had already raised the generic 401, so an inactive account's
+    specific message never surfaced unless the password happened to be
+    right. Now it's checked the same way as the lockout check — regardless
+    of whether the password was also wrong.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, is_active=False)
+
+    resp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "definitely-wrong"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "ACCOUNT_INACTIVE"
+    # A wrong guess against an inactive account still counts against the
+    # failed-attempts counter, same as any other wrong guess (explicit
+    # product decision — not a silent behavior change).
+    updated = fakeSb.store["users"][0]
+    assert updated["failed_attempts"] == 1
+
+
+# ── UROLENS-167: server-side inactivity-based session expiration ────────────
+#
+# tests/integration/conftest.py's `mockSessionActive` fixture (autouse, for
+# every test under tests/integration/) patches `src.core.rbac.isSessionActive`
+# to always return True, so the rest of this file's tests don't need a real
+# `sessions` row for routes that merely require *some* authenticated caller.
+# These three tests are specifically about is_session_active's own inactivity
+# logic, so they restore the real implementation around the request that
+# needs to exercise it.
+
+@pytest.mark.asyncio
+async def test_login15_idleSessionPastItsRoleTimeoutIsRejectedOnNextRequest(client):
+    """The backend half of inactivity enforcement: a session idle past its
+    role's timeout is rejected on the next authenticated request even
+    though its JWT itself hasn't expired yet -- not just a frontend timer a
+    modified/non-UI client could ignore.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="SUPERVISOR")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+
+    # Simulate 31 minutes of inactivity -- SUPERVISOR's timeout is 30.
+    session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        resp = await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert session["is_active"] is False  # revoked by the same check, not left dangling
+
+
+@pytest.mark.asyncio
+async def test_login16_medtechGetsTheLongerSixtyMinuteIdleTimeout(client):
+    """31 minutes idle would already expire SUPERVISOR (above) but must
+    still be well inside MedTech's own, longer window.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="MEDTECH")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+
+    session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        resp = await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 204
+    assert session["is_active"] is False  # the logout itself closed it, not the idle check
+
+
+@pytest.mark.asyncio
+async def test_login17_activityTouchesTheSessionSoARealRequestExtendsIt(client):
+    """A request well within the timeout updates last_activity_at -- the
+    backend side of "activity resets the inactivity timer". Writes happen at
+    most once a minute (UROLENS-245), so the last activity here is 5 minutes old.
+    """
+    c, fakeSb = client
+    seedUser(fakeSb, role="SUPERVISOR")
+
+    loginResp = await c.post(
+        "/api/v1/auth/login",
+        json={"username": "medtech1", "password": "correct-horse-battery-staple"},
+    )
+    token = loginResp.json()["accessToken"]
+    session = fakeSb.store["sessions"][0]
+    session["last_activity_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    originalActivity = session["last_activity_at"]
+
+    with patch("src.core.rbac.isSessionActive", _realIsSessionActive):
+        await c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    assert session["last_activity_at"] != originalActivity
+    assert session["last_activity_at"] is not None

@@ -24,21 +24,27 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger, getAuditLogger
+from ..core.config import settings
 from ..core.database import getDb
 from ..core.enums import UserRole
+from ..core.exceptions import AppUpdateRequiredError
 from ..core.rbac import RequireRole
+from ..schemas.medtech_history import MedtechHistoryCategory, MedtechHistoryListResponse
 from ..schemas.result_review import (
     AnnotationRequest,
     AnnotationResponse,
     ApprovedTodayListResponse,
     ApproveRequest,
     ApproveResponse,
+    ConfirmResultRequest,
     ConfirmResultResponse,
     EscalatedListResponse,
     EscalateRequest,
     EscalateResponse,
     FullResultDetail,
     MedtechPendingListResponse,
+    MedtechQueueSort,
+    MedtechQueueStatus,
     OverrideRequest,
     OverrideResponse,
     PendingResultListResponse,
@@ -47,17 +53,37 @@ from ..schemas.result_review import (
     SmartDiagnosisResponse,
     SupervisorStatsResponse,
 )
+from ..services import medtech_history_service
 from ..services.manual_override_service import ManualOverrideService
 from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
 from ..services.result_review_service import ResultReviewService, getSmartDiagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
+from ..services.specimen_access import isMedtech, requireResultReadable
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
 _REQUIRE_SUPERVISOR = RequireRole([UserRole.SUPERVISOR])
 _REQUIRE_MEDTECH = RequireRole([UserRole.MEDTECH])
 _REQUIRE_BOTH = RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])
+
+async def retireResultOverrideWhenFieldWorkflow(currentUser: dict = Depends(_REQUIRE_BOTH)) -> None:
+    """Dependency: the result-level override is retired while the multi-field flag is on.
+
+    Runs after the role check (403 first) and before the body is validated (410 beats 422).
+    MedTechs correct per field, supervisors return the result; a phone still on the old
+    version is told to update.
+    """
+    if settings.fieldWorkflowEnabled:
+        raise AppUpdateRequiredError()
+
+
+async def retireMedtechAnnotateWhenFieldWorkflow(currentUser: dict = Depends(_REQUIRE_BOTH)) -> None:
+    """Dependency: a MedTech's free-drawn annotation is retired while the multi-field flag is
+    on. The supervisor's annotation is unchanged. Same ordering as the override above."""
+    if settings.fieldWorkflowEnabled and isMedtech(currentUser["role"]):
+        raise AppUpdateRequiredError()
+
 
 # ── Dependency factories (DIP) ────────────────────────────────────────────────
 
@@ -92,16 +118,29 @@ async def getConfirmationService(
 async def getOverrideService(
     db: AsyncSession = Depends(getDb),
     auditLogger: AuditLogger = Depends(getAuditLogger),
+    _notifService: NotificationService = Depends(getNotifService),
 ) -> ManualOverrideService:
-    """FastAPI dependency constructing a request-scoped `ManualOverrideService`."""
-    return ManualOverrideService(db=db, auditLogger=auditLogger)
+    """FastAPI dependency constructing a request-scoped `ManualOverrideService`,
+    wiring up its `SmartDiagnosisService` collaborator so an override
+    re-derives the diagnosis instead of leaving it stale.
+    """
+    _smartDiag = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notifService)
+    return ManualOverrideService(db=db, auditLogger=auditLogger, smartDiagnosisService=_smartDiag)
 
 
 async def getResultReviewService(
     db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+    _notifService: NotificationService = Depends(getNotifService),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
-    return ResultReviewService(db=db)
+    _smartDiag = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notifService)
+    return ResultReviewService(
+        db=db,
+        auditLogger=auditLogger,
+        _notifService=_notifService,
+        _smartDiagnosisService=_smartDiag,
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -110,16 +149,20 @@ async def getResultReviewService(
 async def confirmResult(
     id: uuid.UUID,
     request: Request,
+    body: ConfirmResultRequest | None = None,
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> ConfirmResultResponse:
-    """Confirm an analysis result. Triggers Smart Diagnosis automatically. Requires MEDTECH role."""
-    confirmation = await _service.confirmResult(
+    """Confirm an analysis result. Triggers Smart Diagnosis automatically.
+    Requires MEDTECH role. `interpretationNotes` in the (optional) body is
+    the MedTech's lab notes — see `ResultConfirmationService.confirm_result`.
+    """
+    return await _service.confirmResult(
         resultId=id,
         medtechId=uuid.UUID(currentUser["user_id"]),
         request=request,
+        interpretationNotes=body.interpretationNotes if body else None,
     )
-    return ConfirmResultResponse.model_validate(confirmation)
 
 
 @router.post("/{id}/override", response_model=OverrideResponse, status_code=200)
@@ -128,6 +171,7 @@ async def overrideParameter(
     body: OverrideRequest,
     request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    _retired: None = Depends(retireResultOverrideWhenFieldWorkflow),
     _service: ManualOverrideService = Depends(getOverrideService),
 ) -> OverrideResponse:
     """Override a single AI-generated parameter value.
@@ -143,6 +187,7 @@ async def overrideParameter(
         rationale=body.rationale,
         originalAiValue=body.originalAiValue,
         medtechId=uuid.UUID(currentUser["user_id"]),
+        callerRole=currentUser["role"],
         request=request,
     )
     return OverrideResponse.model_validate(override)
@@ -150,18 +195,26 @@ async def overrideParameter(
 
 @router.get("/medtech/pending", response_model=MedtechPendingListResponse)
 async def listMedtechPending(
+    request: Request,
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
+    status: MedtechQueueStatus | None = Query(None, description="Only this status; both when omitted."),
+    sort: MedtechQueueSort = Query("oldest", description="By specimen received time; returned results first."),
     currentUser: dict = Depends(_REQUIRE_MEDTECH),
     _service: ResultConfirmationService = Depends(getConfirmationService),
 ) -> MedtechPendingListResponse:
     """List results awaiting this MedTech's confirmation (or re-confirmation,
     for ones a supervisor returned); see
-    `ResultConfirmationService.list_pending_for_medtech`.
+    `ResultConfirmationService.listPendingForMedtech`.
     """
     return MedtechPendingListResponse(
         **await _service.listPendingForMedtech(
-            medtechId=uuid.UUID(currentUser["user_id"]), page=page, pageSize=pageSize
+            medtechId=uuid.UUID(currentUser["user_id"]),
+            page=page,
+            pageSize=pageSize,
+            request=request,
+            status=status,
+            sort=sort,
         )
     )
 
@@ -178,6 +231,28 @@ async def getSupervisorStats(
     `ResultReviewService.get_supervisor_stats`.
     """
     return SupervisorStatsResponse(**await _service.getSupervisorStats())
+
+
+@router.get("/medtech/history", response_model=MedtechHistoryListResponse)
+async def listMedtechHistory(
+    request: Request,
+    category: MedtechHistoryCategory = Query(..., description="The Reports category to list."),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+    currentUser: dict = Depends(_REQUIRE_MEDTECH),
+    db: AsyncSession = Depends(getDb),
+) -> MedtechHistoryListResponse:
+    """List the MedTech's own samples in one Reports category, newest first, including
+    those older than the phone's sync window; see `medtech_history_service.listHistory`.
+    """
+    return await medtech_history_service.listHistory(
+        db,
+        medtechId=uuid.UUID(currentUser["user_id"]),
+        category=category,
+        page=page,
+        pageSize=pageSize,
+        request=request,
+    )
 
 
 @router.get("/approved-today", response_model=ApprovedTodayListResponse)
@@ -217,21 +292,26 @@ async def listPendingResults(
 async def annotateResult(
     result_id: uuid.UUID,
     body: AnnotationRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    _retired: None = Depends(retireMedtechAnnotateWhenFieldWorkflow),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
-    """Save an annotation (notes + drawn regions) on a result. Open to
-    MEDTECH too — marking up the image while reviewing/correcting it is
-    just as much their job as the Supervisor's; each user's annotation is
-    stored under their own `reviewed_by`, and `get_full_result` surfaces
-    whichever is most recently updated. See
-    `ResultReviewService.save_annotation`.
+    """Save the caller's annotation on a result; see `ResultReviewService.saveAnnotation`.
+
+    Each user's annotation is stored under their own `reviewed_by`, and
+    `getFullResult` surfaces whichever was most recently updated.
     """
     result = await _service.saveAnnotation(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
+        callerRole=currentUser["role"],
         annotationNotes=body.annotationNotes,
-        spatialAnnotations=body.spatialAnnotations,
+        spatialAnnotations=(
+            [item.model_dump() for item in body.spatialAnnotations]
+            if body.spatialAnnotations is not None else None
+        ),
+        request=request,
     )
     return AnnotationResponse(**result)
 
@@ -240,6 +320,7 @@ async def annotateResult(
 async def approveResult(
     result_id: uuid.UUID,
     body: ApproveRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ApproveResponse:
@@ -248,6 +329,7 @@ async def approveResult(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
         notes=body.notes,
+        request=request,
     )
     return ApproveResponse(**result)
 
@@ -256,6 +338,7 @@ async def approveResult(
 async def returnResult(
     result_id: uuid.UUID,
     body: ReturnRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ReturnResponse:
@@ -264,6 +347,9 @@ async def returnResult(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
         reason=body.reason,
+        request=request,
+        fieldId=body.fieldId,
+        particleType=body.particleType,
     )
     return ReturnResponse(**result)
 
@@ -272,6 +358,7 @@ async def returnResult(
 async def escalateResult(
     result_id: uuid.UUID,
     body: EscalateRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> EscalateResponse:
@@ -281,6 +368,7 @@ async def escalateResult(
         userId=uuid.UUID(currentUser["user_id"]),
         escalationPath=body.escalationPath,
         escalationNote=body.escalationNote,
+        request=request,
     )
     return EscalateResponse(**result)
 
@@ -291,19 +379,24 @@ async def escalateResult(
     summary="Get Smart Diagnosis output for a result",
 )
 async def getSmartDiagnosisRoute(
-    result_id: str,
+    result_id: uuid.UUID,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    db: AsyncSession = Depends(getDb),
 ) -> dict:
     """Fetch a result's Smart Diagnosis output. Open to MEDTECH too — they
     need this while reviewing a result they're about to confirm, not just
     the supervisor. See `result_review_service.get_smart_diagnosis`.
     """
-    return await getSmartDiagnosis(resultId=result_id)
+    await requireResultReadable(
+        db, result_id, uuid.UUID(currentUser["user_id"]), currentUser["role"]
+    )
+    return await getSmartDiagnosis(resultId=str(result_id))
 
 
 @router.get("/{result_id}", response_model=FullResultDetail)
 async def getFullResult(
     result_id: uuid.UUID,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> FullResultDetail:
@@ -312,4 +405,11 @@ async def getFullResult(
     backs both the MedTech's pre-confirmation review and the Supervisor's
     review/approval workspace. See `ResultReviewService.get_full_result`.
     """
-    return FullResultDetail(**await _service.getFullResult(result_id))
+    return FullResultDetail(
+        **await _service.getFullResult(
+            result_id,
+            viewerId=uuid.UUID(currentUser["user_id"]),
+            request=request,
+            viewerRole=currentUser["role"],
+        )
+    )

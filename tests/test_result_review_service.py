@@ -16,10 +16,12 @@ annotation's spatial data was silently dropped. See
 test_annotate_result_persists_and_round_trips_spatial_annotations below —
 this is the test that would have caught it, and does: it fails against
 the pre-fix code (asserting on the object passed to db.add, not just the
-call succeeding) and passes against the fix. The rest of
-ResultReviewService's read-side methods (get_pending, get_approved_today,
-get_escalated, get_supervisor_stats) remain untested — still a gap, not
-attempted here either, out of scope for the regression fix.
+call succeeding) and passes against the fix. Beyond that, get_pending,
+get_approved_today, and get_escalated are only covered for the one field
+UROLENS-148 added (sampleUid) and the rejected-specimen filter above —
+their pagination, ordering, and non-sampleUid fields remain untested.
+get_supervisor_stats itself is covered separately in
+tests/integration/test_supervisor_stats.py.
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.api.results import getResultReviewService
 from src.core.exceptions import (
     ConflictException,
     NotFoundException,
@@ -37,17 +40,22 @@ from src.core.exceptions import (
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.escalation import Escalation
+from src.models.image import ImageStatus
 from src.models.manual_override import ManualOverride
 from src.models.patient import Patient
 from src.models.result_approval import ResultApproval
 from src.models.result_return import ResultReturn
 from src.models.result_review import ResultReview
+from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 from src.models.specimen import Specimen
+from src.models.user import User
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-000000000031")
 SUPERVISOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000032")
+MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000033")
+CONFIRMING_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-000000000034")
 
 
 def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> AnalysisResult:
@@ -55,6 +63,14 @@ def _makeResult(status: str = ResultStatus.PENDING_SUPERVISOR_APPROVAL) -> Analy
     result.resultId = RESULT_ID
     result.specimenId = SPECIMEN_ID
     result.status = status
+    result.smartDiagnosis = None
+    # getFullResult now reads ar.image (eager-loaded), not a separate
+    # db.get(Image, ar.imageId) call — default to "no image attached",
+    # overridden per-test where one is needed. imageId stays None too:
+    # saveAnnotation/overrideParameter's requireNoPendingRetake guard reads
+    # it directly (a second db.get(Image, ...), not the eager-loaded ar.image).
+    result.image = None
+    result.imageId = None
     return result
 
 
@@ -63,16 +79,39 @@ def _makeSpecimen() -> Specimen:
     specimen.specimenId = SPECIMEN_ID
     specimen.status = "ASSIGNED"
     specimen.completedAt = None
+    # getFullResult now reads spec.medtech (eager-loaded), not a separate
+    # db.get(User, spec.medtechId) call — default to "no medtech assigned",
+    # overridden per-test where one is needed.
+    specimen.medtech = None
     return specimen
 
 
 def _makeDbMock(getSideEffect: list) -> AsyncMock:
-    """db.get(Model, id) returns the next item in get_side_effect, in call order."""
+    """db.get(Model, id) returns the next item in get_side_effect, in call
+    order. db.execute defaults to a winning conditional UPDATE (rowcount=1),
+    matching the non-race happy path — a test simulating a lost race
+    overrides db.execute itself.
+    """
     db = AsyncMock()
     db.get = AsyncMock(side_effect=getSideEffect)
     db.add = MagicMock()
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    executeResult = MagicMock()
+    executeResult.rowcount = 1
+    db.execute = AsyncMock(return_value=executeResult)
     return db
+
+
+def _compiledTransitionStatement(db: AsyncMock) -> str:
+    """The compiled SQL of the conditional-UPDATE transition statement
+    approve/return/escalate issue via `_transitionIfPending` — the literal
+    replacement for asserting on a mutated ORM attribute, since the new
+    race-safe implementation no longer sets `.status` directly on the
+    in-memory object.
+    """
+    stmt = db.execute.call_args[0][0]
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
 
 @pytest.mark.asyncio
@@ -88,7 +127,9 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
     _service = ResultReviewService(db=db)
     response = await _service.approveResult(RESULT_ID, SUPERVISOR_ID, notes="Looks good")
 
-    assert result.status == ResultStatus.APPROVED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='APPROVED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert specimen.status == "COMPLETED"
     assert specimen.completedAt is not None
     assert response["resultId"] == RESULT_ID
@@ -105,16 +146,28 @@ async def test_approveResultTransitionsStatusAndCompletesSpecimen():
 
 @pytest.mark.asyncio
 async def test_returnResultTransitionsStatusAndRecordsReason():
-    """Happy path: returning a pending result records the return reason and
-    moves the result to RETURNED_FOR_CORRECTION.
+    """Happy path: returning a pending result records the return reason,
+    moves the result to RETURNED_FOR_CORRECTION, and tells the specimen's
+    MedTech by sample ID — without the reason, which would reach the lock
+    screen (UROLENS-248).
     """
     result = _makeResult()
-    db = _makeDbMock(getSideEffect=[result])
+    specimen = _makeSpecimen()
+    specimen.medtechId = MEDTECH_ID
+    specimen.sampleUid = "SMP-20261002-00042"
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, _notifService=notifService)
     response = await _service.returnResult(RESULT_ID, SUPERVISOR_ID, reason="Blurry image")
 
-    assert result.status == ResultStatus.RETURNED_FOR_CORRECTION
+    notifService.notifyMedtechResultReturned.assert_awaited_once_with(
+        medtechId=MEDTECH_ID, resultId=RESULT_ID, sampleUid="SMP-20261002-00042"
+    )
+
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='RETURNED_FOR_CORRECTION'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
 
@@ -125,6 +178,67 @@ async def test_returnResultTransitionsStatusAndRecordsReason():
     assert added.returnedBy == SUPERVISOR_ID
     assert added.reason == "Blurry image"
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_theRouteGivesTheReviewServiceTheRequestsNotifier():
+    notifService = MagicMock()
+
+    service = await getResultReviewService(db=AsyncMock(), auditLogger=MagicMock(), _notifService=notifService)
+
+    assert service._notifService is notifService
+
+
+@pytest.mark.asyncio
+async def test_returnResultNotifiesWhoConfirmedItWhenTheSpecimenHasNoMedtech():
+    result = _makeResult()
+    result.confirmedBy = CONFIRMING_MEDTECH_ID
+    specimen = _makeSpecimen()
+    specimen.medtechId = None
+    specimen.sampleUid = None
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    await ResultReviewService(db=db, _notifService=notifService).returnResult(
+        RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+    )
+
+    notifService.notifyMedtechResultReturned.assert_awaited_once_with(
+        medtechId=CONFIRMING_MEDTECH_ID, resultId=RESULT_ID, sampleUid=str(SPECIMEN_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_returnResultWithNoMedtechToTellStillReturnsIt():
+    result = _makeResult()
+    result.confirmedBy = None
+    specimen = _makeSpecimen()
+    specimen.medtechId = None
+    db = _makeDbMock(getSideEffect=[result, specimen])
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    response = await ResultReviewService(db=db, _notifService=notifService).returnResult(
+        RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+    )
+
+    notifService.notifyMedtechResultReturned.assert_not_awaited()
+    assert response["status"] == ResultStatus.RETURNED_FOR_CORRECTION.value
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aRaceLostReturnNotifiesNobody():
+    result = _makeResult()
+    db = _makeDbMock(getSideEffect=[result])
+    db.execute.return_value.rowcount = 0
+    notifService = MagicMock(notifyMedtechResultReturned=AsyncMock())
+
+    with pytest.raises(ConflictException):
+        await ResultReviewService(db=db, _notifService=notifService).returnResult(
+            RESULT_ID, SUPERVISOR_ID, reason="Blurry image"
+        )
+
+    notifService.notifyMedtechResultReturned.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -140,7 +254,9 @@ async def test_escalateResultTransitionsStatusAndRecordsPath():
         RESULT_ID, SUPERVISOR_ID, escalationPath="MARK_CRITICAL", escalationNote="Urgent"
     )
 
-    assert result.status == ResultStatus.CRITICAL_ESCALATED
+    updateSql = _compiledTransitionStatement(db)
+    assert "SET status='CRITICAL_ESCALATED'" in updateSql
+    assert "analysis_results.status = 'PENDING_SUPERVISOR_APPROVAL'" in updateSql
     assert response["resultId"] == RESULT_ID
     assert response["status"] == ResultStatus.CRITICAL_ESCALATED.value
     assert response["escalationPath"] == "MARK_CRITICAL"
@@ -247,9 +363,13 @@ def _makeScalarsResult(items: list) -> MagicMock:
 
 
 def _makeScalarOneResult(item) -> MagicMock:
-    """A db.execute() return value shaped for `.scalar_one_or_none()`."""
+    """A db.execute() return value shaped for `.scalar_one_or_none()` —
+    and, since getFullResult's main AnalysisResult query now carries
+    to-one joinedload options, also for `.unique().scalar_one_or_none()`.
+    """
     executeResult = MagicMock()
     executeResult.scalar_one_or_none.return_value = item
+    executeResult.unique.return_value = executeResult
     return executeResult
 
 
@@ -273,15 +393,17 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     # ── Write path: no existing review row for this result/supervisor pair ──
     arForWrite = _makeResult()
     writeDb = AsyncMock()
-    writeDb.get = AsyncMock(return_value=arForWrite)
-    writeDb.execute = AsyncMock(return_value=_makeScalarOneResult(None))
+    writeDb.execute = AsyncMock(
+        side_effect=[_makeScalarOneResult(arForWrite), _makeScalarOneResult(None)]  # result, existing review
+    )
     writeDb.add = MagicMock()
     writeDb.commit = AsyncMock()
 
-    _writeService = ResultReviewService(db=writeDb)
+    _writeService = ResultReviewService(db=writeDb, auditLogger=MagicMock(record=AsyncMock()))
     writeResponse = await _writeService.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
+        callerRole="SUPERVISOR",
         annotationNotes="Possible cast cluster, upper-left quadrant",
         spatialAnnotations=payload,
     )
@@ -297,13 +419,13 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     savedReview.updatedAt = datetime.now(UTC)
 
     arForRead = _makeResult()
-    arForRead.imageId = None
+    arForRead.specimen = None
     readDb = AsyncMock()
-    readDb.get = AsyncMock(side_effect=[arForRead, None])  # AnalysisResult, then Specimen (none)
     readDb.execute = AsyncMock(
         side_effect=[
+            _makeScalarOneResult(arForRead),  # AnalysisResult (specimen: none)
             _makeScalarsResult([]),  # manual_overrides
-            _makeScalarOneResult(savedReview),  # latest ResultReview
+            _makeScalarsResult([savedReview]),  # reviews (one, by the supervisor)
             _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
@@ -311,8 +433,10 @@ async def test_annotateResultPersistsAndRoundTripsSpatialAnnotations():
     _readService = ResultReviewService(db=readDb)
     detail = await _readService.getFullResult(RESULT_ID)
 
-    assert detail["spatialAnnotations"] == payload
-    assert detail["annotationNotes"] == "Possible cast cluster, upper-left quadrant"
+    [annotation] = detail["annotations"]
+    assert annotation["spatialAnnotations"] == payload
+    assert annotation["annotationNotes"] == "Possible cast cluster, upper-left quadrant"
+    assert annotation["reviewedBy"] == SUPERVISOR_ID
 
 
 @pytest.mark.asyncio
@@ -327,14 +451,16 @@ async def test_annotateResultOmittingSpatialAnnotationsPreservesExistingValue():
     existingReview.annotationNotes = "old notes"
 
     db = AsyncMock()
-    db.get = AsyncMock(return_value=ar)
-    db.execute = AsyncMock(return_value=_makeScalarOneResult(existingReview))
+    db.execute = AsyncMock(
+        side_effect=[_makeScalarOneResult(ar), _makeScalarOneResult(existingReview)]  # result, existing review
+    )
     db.commit = AsyncMock()
 
-    _service = ResultReviewService(db=db)
+    _service = ResultReviewService(db=db, auditLogger=MagicMock(record=AsyncMock()))
     await _service.saveAnnotation(
         resultId=RESULT_ID,
         userId=SUPERVISOR_ID,
+        callerRole="SUPERVISOR",
         annotationNotes="updated notes only",
         spatialAnnotations=None,
     )
@@ -361,7 +487,7 @@ def _makeOverride(paramName: str, overriddenAt: datetime) -> MagicMock:
 @pytest.mark.asyncio
 async def test_getFullResultRaisesNotFoundForMissingResult():
     db = AsyncMock()
-    db.get = AsyncMock(return_value=None)
+    db.execute = AsyncMock(return_value=_makeScalarOneResult(None))
 
     _service = ResultReviewService(db=db)
     with pytest.raises(NotFoundException) as excInfo:
@@ -377,7 +503,6 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
     smart diagnosis output.
     """
     ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
-    ar.imageId = None
     ar.confirmedAt = None
     ar.aiFindings = {"RBC": 12}
     ar.flaggedAnomalies = {}
@@ -387,16 +512,16 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
 
     specimen = _makeSpecimen()
     specimen.patientUid = None
-    specimen.medtechId = None
     specimen.patientName = None
+    ar.specimen = specimen
 
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[ar, specimen])  # AnalysisResult, then Specimen
     db.execute = AsyncMock(
         side_effect=[
-            _makeScalarsResult([]),       # manual_overrides
-            _makeScalarOneResult(None),   # latest ResultReview
-            _makeScalarOneResult(None),   # smart_diagnosis_output
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
         ]
     )
 
@@ -405,10 +530,174 @@ async def test_getFullResultAssemblesDetailWithoutPatientOrOverrides():
 
     assert detail["resultId"] == RESULT_ID
     assert detail["manualOverrides"] == []
+    assert detail["annotations"] == []
     assert detail["medtechName"] == ""
     assert detail["imageUrl"] is None
-    assert detail["smartDiagnosisUnavailable"] is True  # no attached output
+    assert detail["smartDiagnosis"] is None
+    assert detail["smartDiagnosisUnavailable"] is False  # absence is not an engine failure
     assert detail["confirmationNotes"] is None  # documented schema-drift field
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hasFormalOutput,isFailed", [(False, False), (True, False), (False, True)])
+async def test_getFullResultPreservesPreviewAndPrefersFormalDiagnosis(
+    hasFormalOutput: bool, isFailed: bool
+) -> None:
+    ar = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    ar.aiFindings = {"crystals": 60}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = isFailed
+    ar.smartDiagnosis = {
+        "gout": {"level": "HIGH", "evidence": [{"particle_name": "crystals", "detected_count": 60}]},
+        "glomerulonephritis": {"level": "LOW", "evidence": []},
+        "nephrolithiasis": {"level": "MODERATE", "evidence": []},
+        "no_significant_indicators": False,
+    }
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+    output = None
+    if hasFormalOutput:
+        output = MagicMock(spec=SmartDiagnosisOutput)
+        output.status = "ATTACHED"
+        output.goutScore = "LOW"
+        output.gnScore = "LOW"
+        output.nephroScore = "LOW"
+        output.noSignificantIndicators = True
+        output.evidenceMap = {}
+        output.engineVersion = "test-v1"
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _makeScalarOneResult(ar), _makeScalarsResult([]), _makeScalarsResult([]), _makeScalarOneResult(output)
+    ])
+    detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["smartDiagnosisUnavailable"] is isFailed
+    if isFailed:
+        assert detail["smartDiagnosis"] is None
+    elif hasFormalOutput:
+        assert detail["smartDiagnosis"]["goutScore"] == "LOW"
+        assert detail["smartDiagnosis"]["noSignificantIndicators"] is True
+    else:
+        assert detail["smartDiagnosis"]["goutScore"] == "HIGH"
+        assert detail["smartDiagnosis"]["evidenceMap"]["gout"]["evidence"][0]["detected_count"] == 60
+
+
+@pytest.mark.asyncio
+async def test_getFullResultGivesTheImageAsAShortLivedSignedUrlNotAPublicOne():
+    """SEC-0b: the microscopy bucket is private, so the supervisor's image
+    link must be a signed URL — a permanent /object/public/ link would 400
+    against a private bucket and, while the bucket was public, exposed the
+    image to anyone holding the link.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+
+    storageKey = f"specimens/{specimen.specimenId}/images/{uuid.uuid4()}.jpg"
+    ar.image = SimpleNamespace(storageKey=storageKey, status=ImageStatus.ACTIVE)
+    signedUrl = f"https://example.supabase.co/storage/v1/object/sign/microscopy/{storageKey}?token=t"
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+    bucket = MagicMock()
+    bucket.create_signed_url = AsyncMock(return_value={"signedURL": signedUrl, "signedUrl": signedUrl})
+    fakeSb = MagicMock()
+    fakeSb.storage.from_.return_value = bucket
+
+    with patch("src.core.storage.supabase", fakeSb):
+        detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["isRetakePending"] is False
+
+    assert detail["imageUrl"] == signedUrl
+    assert "/object/public/" not in detail["imageUrl"]
+    bucket.create_signed_url.assert_awaited_once()
+    assert bucket.create_signed_url.await_args.args[0] == storageKey
+
+
+@pytest.mark.asyncio
+async def test_getFullResultIsRetakePendingWhenImageIsDiscarded():
+    """UROLENS-230: surfaced so the frontend can warn before a write is
+    attempted, not just after confirm/annotate/override 422s."""
+    ar = _makeResult(status=ResultStatus.PENDING_CONFIRM)
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+    ar.image = SimpleNamespace(storageKey="irrelevant.jpg", status=ImageStatus.DISCARDED)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),
+            _makeScalarsResult([]),
+            _makeScalarsResult([]),
+            _makeScalarOneResult(None),
+        ]
+    )
+
+    with patch("src.services.result_review_service.signedImageUrl", AsyncMock(return_value=None)):
+        detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["isRetakePending"] is True
+
+
+@pytest.mark.asyncio
+async def test_getFullResultIsRetakePendingWhenStatusIsImageRetakeRequested():
+    """A result explicitly marked IMAGE_RETAKE_REQUESTED counts as pending
+    even before any image is attached at all."""
+    ar = _makeResult(status=ResultStatus.IMAGE_RETAKE_REQUESTED)
+    ar.confirmedAt = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+    ar.image = None
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),
+            _makeScalarsResult([]),
+            _makeScalarsResult([]),
+            _makeScalarOneResult(None),
+        ]
+    )
+
+    detail = await ResultReviewService(db=db).getFullResult(RESULT_ID)
+
+    assert detail["isRetakePending"] is True
 
 
 @pytest.mark.asyncio
@@ -419,7 +708,6 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
     override history could render out of sequence.
     """
     ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
-    ar.imageId = None
     ar.aiFindings = {}
     ar.flaggedAnomalies = {}
     ar.particleClasses = {}
@@ -428,7 +716,8 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
 
     specimen = _makeSpecimen()
     specimen.patientUid = None
-    specimen.medtechId = None
+    specimen.patientName = None
+    ar.specimen = specimen
 
     overrides = [
         _makeOverride("RBC", datetime(2026, 1, 1, tzinfo=UTC)),
@@ -439,52 +728,253 @@ async def test_getFullResultOrdersManualOverridesByOverriddenAt():
 
     async def _executeSideEffect(stmt):
         capturedStatements.append(stmt)
-        if len(capturedStatements) == 1:
+        n = len(capturedStatements)
+        if n == 1:
+            return _makeScalarOneResult(ar)
+        if n == 2:
             return _makeScalarsResult(overrides)
-        return _makeScalarOneResult(None)
+        if n == 3:
+            return _makeScalarsResult([])  # reviews
+        return _makeScalarOneResult(None)  # smart_diagnosis_output
 
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[ar, specimen])
     db.execute = AsyncMock(side_effect=_executeSideEffect)
 
     _service = ResultReviewService(db=db)
     detail = await _service.getFullResult(RESULT_ID)
 
     assert [o["parameterName"] for o in detail["manualOverrides"]] == ["RBC", "WBC"]
-    overridesStmt = capturedStatements[0]
+    overridesStmt = capturedStatements[1]
     assert "ORDER BY manual_overrides.overridden_at" in str(overridesStmt)
 
 
 @pytest.mark.asyncio
-async def test_getFullResultPatientSexRaisesAttributeErrorKnownGap():
-    """Documents a known, already-flagged gap (changelog.md, "Pyright scan"
-    entry: "Patient model has no sex column, but it's read as .sex in 4
-    places... deciding whether to add the column or remove the reads is a
-    product call, not something to guess at here") — not fixed in this
-    change, per that same standing policy. This test locks in the *current*
-    (broken) behavior so a silent, accidental fix doesn't go unnoticed
-    either: if this starts failing, someone made the product decision and
-    this test should be updated to assert the real value instead.
+async def test_getFullResultResolvesWhoMadeEachOverride() -> None:
+    """UROLENS-149: the override-history list must say who made each
+    correction, not just what/when — resolved via ManualOverride.medtech,
+    eager-loaded alongside the override row itself. An override whose
+    medtech relationship doesn't resolve falls back to `""`, mirroring
+    `medtechName`'s fallback for the same situation.
     """
     ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
-    ar.imageId = None
+    ar.aiFindings = {}
+    ar.flaggedAnomalies = {}
+    ar.particleClasses = {}
+    ar.modelVersion = "mvp-v1.0"
+    ar.smartDiagnosisUnavailable = False
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+
+    knownUserId = uuid.uuid4()
+    unknownUserId = uuid.uuid4()
+
+    knownUser = MagicMock(spec=User)
+    knownUser.userId = knownUserId
+    knownUser.username = "jdelacruz"
+
+    overrideByKnownUser = _makeOverride("RBC", datetime(2026, 1, 1, tzinfo=UTC))
+    overrideByKnownUser.overriddenBy = knownUserId
+    overrideByKnownUser.medtech = knownUser
+    overrideByUnknownUser = _makeOverride("WBC", datetime(2026, 1, 2, tzinfo=UTC))
+    overrideByUnknownUser.overriddenBy = unknownUserId
+    overrideByUnknownUser.medtech = None  # no matching row for this user id
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),
+            _makeScalarsResult([overrideByKnownUser, overrideByUnknownUser]),
+            _makeScalarsResult([]),  # reviews
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    overridesById = {o["overriddenBy"]: o for o in detail["manualOverrides"]}
+    assert overridesById[knownUserId]["overriddenByName"] == "jdelacruz"
+    assert overridesById[unknownUserId]["overriddenByName"] == ""
+
+
+@pytest.mark.asyncio
+async def test_getFullResultReturnsPatientSex() -> None:
+    """`Patient.sex` is a real column (src/models/patient.py) and
+    `getFullResult` reads it correctly.
+
+    This test used to assert the opposite — that reading `.sex` raised
+    `AttributeError` as a "documented, known gap". That was never actually
+    about `.sex`: the test stubbed `db.execute` with one fixed return value
+    standing in for four different queries `getFullResult` makes (Patient,
+    ManualOverride, ResultReview, SmartDiagnosisOutput), so the ResultReview
+    query wrongly got the Patient mock back, and `review.annotationNotes`
+    (not `.sex`) was what actually raised. Fixed here with a proper
+    side_effect per query, matching the real call order.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
 
     specimen = _makeSpecimen()
     specimen.patientUid = "PT-001"
-    specimen.medtechId = None
+    specimen.patientName = None
+    ar.specimen = specimen
 
     patient = MagicMock(spec=Patient)  # spec= enforces the real model's attribute set
     patient.firstName = None
     patient.lastName = None
     patient.dateOfBirth = None
+    patient.sex = "FEMALE"
 
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[ar, specimen])
-    db.execute = AsyncMock(return_value=_makeScalarOneResult(patient))  # Patient lookup
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarOneResult(patient),  # Patient lookup
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
 
     _service = ResultReviewService(db=db)
-    with pytest.raises(AttributeError):
-        await _service.getFullResult(RESULT_ID)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert detail["patientSex"] == "FEMALE"
+
+
+@pytest.mark.asyncio
+async def test_getFullResultIncludesSampleUidFromSpecimen() -> None:
+    """UROLENS-150: the detail view must surface the specimen's human-facing
+    sampleUid (e.g. SMP-...), not just its internal UUID — same fix as
+    UROLENS-148's queue-list endpoints, applied here to getFullResult.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+
+    specimen = _makeSpecimen()
+    specimen.sampleUid = "SMP-20260928-12345"
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([]),  # reviews (none)
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    assert detail["sampleUid"] == "SMP-20260928-12345"
+    assert detail["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getFullResultSurfacesEachReviewersAnnotationSeparately() -> None:
+    """A MedTech's and a Supervisor's annotations on the same result are
+    independent `ResultReview` rows (keyed by resultId + reviewedBy) — both
+    must be surfaced, attributed by role, not collapsed to whichever was
+    saved most recently.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+
+    medtechId = uuid.uuid4()
+    medtechUser = MagicMock(spec=User)
+    medtechUser.userId = medtechId
+    medtechUser.role = "MEDTECH"
+    supervisorUser = MagicMock(spec=User)
+    supervisorUser.userId = SUPERVISOR_ID
+    supervisorUser.role = "SUPERVISOR"
+
+    medtechReview = MagicMock(spec=ResultReview)
+    medtechReview.reviewedBy = medtechId
+    medtechReview.reviewer = medtechUser
+    medtechReview.annotationNotes = "Looks like a cast cluster"
+    medtechReview.spatialAnnotations = None
+    medtechReview.updatedAt = datetime(2026, 1, 1, tzinfo=UTC)
+
+    supervisorReview = MagicMock(spec=ResultReview)
+    supervisorReview.reviewedBy = SUPERVISOR_ID
+    supervisorReview.reviewer = supervisorUser
+    supervisorReview.annotationNotes = "Confirmed, escalating"
+    supervisorReview.spatialAnnotations = [{"id": "a1", "x": 1, "y": 2, "particleType": "urinary_casts"}]
+    supervisorReview.updatedAt = datetime(2026, 1, 2, tzinfo=UTC)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([medtechReview, supervisorReview]),  # reviews, oldest first
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    annotationsByReviewer = {a["reviewedBy"]: a for a in detail["annotations"]}
+    assert len(annotationsByReviewer) == 2
+
+    medtechAnnotation = annotationsByReviewer[medtechId]
+    assert medtechAnnotation["reviewerRole"] == "MEDTECH"
+    assert medtechAnnotation["annotationNotes"] == "Looks like a cast cluster"
+    assert medtechAnnotation["spatialAnnotations"] is None
+
+    supervisorAnnotation = annotationsByReviewer[SUPERVISOR_ID]
+    assert supervisorAnnotation["reviewerRole"] == "SUPERVISOR"
+    assert supervisorAnnotation["annotationNotes"] == "Confirmed, escalating"
+    assert supervisorAnnotation["spatialAnnotations"] == [
+        {"id": "a1", "x": 1, "y": 2, "particleType": "urinary_casts"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_getFullResultUnknownReviewerFallsBackToEmptyRole() -> None:
+    """A `reviewedBy` id with no matching `User` row falls back to `""`,
+    mirroring `overriddenByName`'s fallback for the same situation.
+    """
+    ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
+
+    specimen = _makeSpecimen()
+    specimen.patientUid = None
+    specimen.patientName = None
+    ar.specimen = specimen
+
+    unknownReviewerId = uuid.uuid4()
+    review = MagicMock(spec=ResultReview)
+    review.reviewedBy = unknownReviewerId
+    review.reviewer = None  # no matching row for this user id
+    review.annotationNotes = "Notes from a deleted account"
+    review.spatialAnnotations = None
+    review.updatedAt = datetime(2026, 1, 1, tzinfo=UTC)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeScalarOneResult(ar),  # AnalysisResult (+ specimen/medtech/image eager-loaded)
+            _makeScalarsResult([]),  # manual_overrides
+            _makeScalarsResult([review]),
+            _makeScalarOneResult(None),  # smart_diagnosis_output
+        ]
+    )
+
+    _service = ResultReviewService(db=db)
+    detail = await _service.getFullResult(RESULT_ID)
+
+    [annotation] = detail["annotations"]
+    assert annotation["reviewerRole"] == ""
 
 
 # ── getSmartDiagnosis (module-level function; Supabase-backed, not SQLAlchemy) ──
@@ -588,3 +1078,102 @@ async def test_getSmartDiagnosisNoDataReturnsFlaggedUnavailable():
         result = await getSmartDiagnosis(str(RESULT_ID))
 
     assert result == {"resultId": str(RESULT_ID), "status": "FLAGGED_UNAVAILABLE"}
+
+
+# ── UROLENS-148: sampleUid on the three supervisor queue endpoints ─────────
+
+
+def _makeQueueSpecimen(sampleUid: str = "SMP-20260928-12345") -> Specimen:
+    """A specimen with no patient/medtech linkage, so `_batchPatientContext`
+    skips the patient and user lookups — isolates these tests to the one
+    thing they check.
+    """
+    specimen = MagicMock(spec=Specimen)
+    specimen.specimenId = SPECIMEN_ID
+    specimen.sampleUid = sampleUid
+    specimen.patientUid = None
+    specimen.patientName = None
+    specimen.medtechId = None
+    specimen.status = "ASSIGNED"
+    return specimen
+
+
+def _makeCountResult(n: int) -> MagicMock:
+    executeResult = MagicMock()
+    executeResult.scalar_one.return_value = n
+    return executeResult
+
+
+@pytest.mark.asyncio
+async def test_getPendingIncludesSampleUidFromSpecimen():
+    """UROLENS-148: the pending list must surface the specimen's human-facing
+    sampleUid (e.g. SMP-...), not the specimen's raw UUID.
+    """
+    ar = _makeResult()
+    ar.confirmedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getPending(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getApprovedTodayIncludesSampleUidFromSpecimen():
+    """UROLENS-148: same guarantee for the approved-today list."""
+    ar = _makeResult(status=ResultStatus.APPROVED)
+    approval = MagicMock(spec=ResultApproval)
+    approval.resultId = RESULT_ID
+    approval.approvedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([approval]),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getApprovedToday(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
+
+
+@pytest.mark.asyncio
+async def test_getEscalatedIncludesSampleUidFromSpecimen():
+    """UROLENS-148: same guarantee for the escalated list."""
+    ar = _makeResult(status=ResultStatus.CRITICAL_ESCALATED)
+    ar.updatedAt = datetime(2026, 9, 28, tzinfo=UTC)
+    specimen = _makeQueueSpecimen()
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _makeCountResult(1),
+            _makeScalarsResult([ar]),
+            _makeScalarsResult([]),  # no Escalation row needed for this assertion
+            _makeScalarsResult([specimen]),
+        ]
+    )
+    _service = ResultReviewService(db=db)
+
+    response = await _service.getEscalated(page=1, pageSize=10)
+
+    assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
+    assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)

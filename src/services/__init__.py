@@ -39,9 +39,18 @@ from .result_review_service import (  # noqa: F401
     getSmartDiagnosis,
 )
 from .smart_diagnosis_service import SmartDiagnosisService  # noqa: F401
+from .specimen_access import getAssignedSpecimen, requireSpecimenAssigned  # noqa: F401
 from .specimen_service import (  # noqa: F401
     listSpecimens,
     receiveSpecimen,
     rejectSpecimen,
 )
 from .sync_service import pull  # noqa: F401
+from .user_notifications_service import (  # noqa: F401
+    countUnreadNotifications,
+    forgetPushToken,
+    listNotifications,
+    markAllNotificationsRead,
+    markNotificationRead,
+    registerPushToken,
+)

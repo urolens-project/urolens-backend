@@ -7,6 +7,7 @@ from .base import Base  # noqa: F401
 from .consent import Consent  # noqa: F401
 from .engine_error_log import EngineErrorLog  # noqa: F401
 from .escalation import Escalation  # noqa: F401
+from .field_annotation_edit import FieldAnnotationEdit  # noqa: F401
 from .image import Image  # noqa: F401
 from .lab_request import LabRequest  # noqa: F401
 from .manual_override import ManualOverride  # noqa: F401
@@ -16,6 +17,7 @@ from .print_job import PrintJob  # noqa: F401
 from .queue_assignment import QueueAssignment  # noqa: F401
 from .result_approval import ResultApproval  # noqa: F401
 from .result_confirmation import ResultConfirmation  # noqa: F401
+from .result_field import ResultField  # noqa: F401
 from .result_release import ResultRelease  # noqa: F401
 from .result_retrieval import ResultRetrieval  # noqa: F401
 from .result_return import ResultReturn  # noqa: F401

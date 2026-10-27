@@ -4,10 +4,12 @@ from sqlalchemy import engine_from_config, pool
 
 import src.models.analysis_result  # noqa: F401
 import src.models.audit_log  # noqa: F401
+import src.models.field_annotation_edit  # noqa: F401
 import src.models.image  # noqa: F401 — register tables with Base
 import src.models.manual_override  # noqa: F401
 import src.models.patient  # noqa: F401
 import src.models.result_confirmation  # noqa: F401
+import src.models.result_field  # noqa: F401
 import src.models.result_view  # noqa: F401
 import src.models.smart_diagnosis_output  # noqa: F401
 from alembic import context
@@ -37,7 +39,12 @@ def runMigrationsOffline() -> None:
 
 def runMigrationsOnline() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.databaseUrl
+    # An explicit `alembic -x dbUrl=...` wins. DATABASE_URL in the environment
+    # cannot redirect a run: config.py reloads `.env` with override=True, so
+    # settings always name the database in `.env` (live, on a dev machine).
+    configuration["sqlalchemy.url"] = (
+        context.get_x_argument(as_dictionary=True).get("dbUrl") or settings.databaseUrl
+    )
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
