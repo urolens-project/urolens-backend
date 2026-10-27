@@ -52,6 +52,14 @@
   `smartDiagnosisPreview`; `docs/contract/field-shapes.json` regenerated. With the flag
   off the response, its JSON (no `resultFields` key, not even `null`) and the audit row
   are exactly as before, and no field query runs.
+- **With `FIELD_WORKFLOW_ENABLED` on, the old single-image discard tells outdated apps
+  to update.** `POST /api/v1/images/{image_id}/discard` answers 410
+  `APP_UPDATE_REQUIRED` ("Update UroLens to continue") and discards nothing, the same
+  way `POST /api/v1/images/upload` already does. An app that predates multi-field,
+  including a `DISCARD_IMAGE` it queued offline and replays after the flag is turned
+  on, can no longer discard an image the new workflow keeps as a field; fields are
+  discarded through `POST /api/v1/fields/{field_id}/discard`. The role check still runs
+  first (another role gets 403). With the flag off the route is unchanged.
 
 ### Fixed
 - **The startup check passed AI engine weights that were only Git LFS pointers, so
