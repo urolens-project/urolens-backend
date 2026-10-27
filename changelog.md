@@ -105,6 +105,30 @@
     result's image pointer (first accepted field) up to date, as the website discard
     already did. No migration, no new route, no setting.
 
+### Changed
+- **The AI engine is now v0.2.0, and the server refuses to start the multi-field workflow
+  on anything else.** `requirements.txt` pins `urolens-ai-engine` to `c1b2d11` (tag
+  `v0.2.0`): its install ships the weights (no more Git LFS pointers), the rules config and
+  the thresholds, and `infer()` returns the boxes, the upright image size and Smart
+  Diagnosis on decimal counts. The startup check (`engineFileProblems`) now also reports an
+  engine older than 0.2.0 (or none), and any of `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`,
+  `RULE_ENGINE_CONFIG_PATH`, `CLASS_THRESHOLDS_PATH` that points anywhere but the installed
+  engine's own file: typically a hand-copied `weights.pt` from before 0.2.0, which a
+  reinstall leaves in place and which would otherwise keep the old model running with no
+  warning. A leftover `weights.pt` is no longer used as a fallback for `best.pt`. With
+  `FIELD_WORKFLOW_ENABLED` on, any engine problem stops the server at startup
+  (`RuntimeError`); with it off the problems are logged as before and the server starts.
+  - **Smart Diagnosis on averaged counts now works.** Multi-field confirm and the
+    verification summary send the exact per-field means; the old engine refused them, so the
+    diagnosis was marked unavailable. With v0.2.0 it is produced. The decimal test now fails
+    instead of skipping if the pin ever goes back to an engine without that support.
+  - **Boxes checked with the real engine:** on the engine's sample slide, a photo taken
+    sideways (EXIF orientation 6) stores the same 7 boxes as the upright photo, within 0.07%
+    of the image, on the image as stored.
+  - **Deploy (every server upgrading from the old engine):** remove the four path variables,
+    reinstall the engine at the pin (`--reinstall`, since the package name is unchanged),
+    restart, and check the log has no `AI engine:` lines before turning the flag on.
+
 ### Fixed
 - **The startup check passed AI engine weights that were only Git LFS pointers, so
   every upload then failed with 503 `AI_ANALYSIS_FAILED`.** The engine stores

@@ -104,8 +104,10 @@ _GATE_ERRORS: dict[str, type[ImageNotMicroscopyError] | type[ImageExposureError]
 class EngineInference(Protocol):
     """What every engine version's `InferenceResult` carries: the counts.
 
-    Its other attributes (confidence, image size, and `detections` on newer
-    engines) are read with `getattr` and a default, since they vary by version.
+    Engine v0.2.0, the minimum the startup check accepts, also returns the
+    confidence scores, `detections` and the upright image size. They are still read
+    with `getattr` and a default, because with `FIELD_WORKFLOW_ENABLED` off an older
+    engine is only logged at startup, not refused.
     """
 
     particles: dict[str, int]

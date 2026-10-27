@@ -29,6 +29,7 @@ runtime. Collapsing these into one would break one or the other.
 """
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import os
 from pathlib import Path
@@ -81,9 +82,9 @@ class Settings(BaseModel):
     aiModelVersion: str = "mvp-v1.0"
     modelWeightsPath: str = ""
     """YOLOv8 detector weights the AI engine loads (env `MODEL_WEIGHTS_PATH`).
-    Falls back to `urolens_ai/models/yolov8/best.pt` (or the older `weights.pt`)
-    inside the installed package. The engine's install currently ships no data
-    files, so production must set this. Empty means every upload fails with
+    Falls back to `urolens_ai/models/yolov8/best.pt` inside the installed package,
+    which ships it since engine v0.2.0; leave the variable unset (the startup check
+    reports one pointing anywhere else). Empty means every upload fails with
     `AI_ANALYSIS_FAILED`."""
     gateWeightsPath: str = ""
     """Input-gate (slide / not-slide) classifier weights (env `GATE_WEIGHTS_PATH`).
@@ -144,12 +145,9 @@ def _bundledEngineFile(*parts: str) -> str:
 
 
 def _bundledModelWeightsPath() -> str:
-    # The engine renamed its weights from weights.pt to best.pt; installs that
-    # still carry the old file keep working.
-    return (
-        _bundledEngineFile("models", "yolov8", "best.pt")
-        or _bundledEngineFile("models", "yolov8", "weights.pt")
-    )
+    # Only best.pt: a weights.pt beside it is a copy from before the engine
+    # shipped its weights (pre-0.2.0), never the pinned model.
+    return _bundledEngineFile("models", "yolov8", "best.pt")
 
 
 def _bundledGateWeightsPath() -> str:
@@ -199,24 +197,96 @@ def _isGitLfsPointer(path: str) -> bool:
         return False
 
 
+# The oldest engine this backend works with. v0.2.0 ships its weights and configs
+# inside the package and returns boxes, the upright image size and Smart Diagnosis
+# on decimal counts, all of which the multi-field workflow needs. Keep it in step
+# with the pin in requirements.txt.
+_MIN_ENGINE_VERSION = (0, 2, 0)
+
+# Every engine file the backend hands over: (env var, setting, bundled-file finder).
+_ENGINE_FILES = (
+    ("MODEL_WEIGHTS_PATH", "modelWeightsPath", _bundledModelWeightsPath),
+    ("GATE_WEIGHTS_PATH", "gateWeightsPath", _bundledGateWeightsPath),
+    ("RULE_ENGINE_CONFIG_PATH", "ruleEngineConfigPath", _bundledRuleEngineConfigPath),
+    ("CLASS_THRESHOLDS_PATH", "classThresholdsPath", _bundledClassThresholdsPath),
+)
+
+
+def _installedEngineVersion() -> str | None:
+    # The engine's installed version, or None when it isn't installed.
+    try:
+        return importlib.metadata.version("urolens-ai-engine")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _versionTuple(version: str) -> tuple[int, ...]:
+    # "0.2.0" -> (0, 2, 0); stops at the first part that isn't a plain number.
+    parts: list[int] = []
+    for part in version.split("."):
+        if not part.isdigit():
+            break
+        parts.append(int(part))
+    return tuple(parts)
+
+
+def _sameFile(first: str, second: str) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return Path(first).resolve() == Path(second).resolve()
+
+
+def _engineVersionProblems() -> list[str]:
+    # The installed engine must be at least the minimum the backend relies on.
+    wanted = ".".join(str(n) for n in _MIN_ENGINE_VERSION)
+    installed = _installedEngineVersion()
+    if installed is None:
+        return [f"The AI engine (urolens-ai-engine) is not installed; install {wanted} or newer."]
+    if _versionTuple(installed) < _MIN_ENGINE_VERSION:
+        return [
+            f"The installed AI engine is {installed}; this backend needs {wanted} or newer. "
+            "Reinstall it at the version pinned in requirements.txt."
+        ]
+    return []
+
+
+def _overrideProblems(current: Settings) -> list[str]:
+    # A path variable pointing anywhere but the installed engine's own file means
+    # the pinned engine is not what runs: typically a hand-copied file left over
+    # from before the engine shipped its files, which a reinstall does not remove.
+    problems = []
+    for envName, attribute, findBundled in _ENGINE_FILES:
+        path, bundled = getattr(current, attribute), findBundled()
+        if path and bundled and not _sameFile(path, bundled):
+            problems.append(
+                f"{envName} points to {path}, not the installed engine's own file "
+                f"({bundled}). Remove the variable so the pinned engine's file is used."
+            )
+    return problems
+
+
 def engineFileProblems(current: Settings) -> list[str]:
-    """List the AI engine files that are missing or unusable, one sentence each.
+    """List what keeps the AI engine from running as pinned, one sentence each.
 
-    Run at startup (see `main.py`), which logs each problem as an error. It
-    does not stop the app: the engine is only needed for image uploads and
-    Smart Diagnosis, and development or CI may run without its files.
+    Run at startup (see `main.py`), which logs each problem as an error and,
+    while `FIELD_WORKFLOW_ENABLED` is on, refuses to start. With the flag off the
+    app still starts: the engine is only needed for image uploads and Smart
+    Diagnosis, and development or CI may run without its files.
 
-    A required file is a problem when its path is unset, when nothing exists
-    there, or when what exists is a Git LFS pointer instead of the real file:
-    that last case passes an existence check but fails every upload.
+    Problems, in order: the installed engine is missing or older than the minimum
+    (`_MIN_ENGINE_VERSION`); a path variable overrides the engine's own file with
+    another one; a required file's path is unset, names nothing, or names a Git
+    LFS pointer instead of the real file (which passes an existence check but
+    fails every upload).
 
     Args:
         current: the settings to check, normally the module's `settings`.
 
     Returns:
-        An empty list when every required file exists and is real.
+        An empty list when the pinned engine and every required file are in place.
     """
-    problems = []
+    problems = _engineVersionProblems() + _overrideProblems(current)
     for envName, attribute in _REQUIRED_ENGINE_FILES:
         path = getattr(current, attribute)
         if not path:
