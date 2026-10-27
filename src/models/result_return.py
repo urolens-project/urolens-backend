@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -34,6 +34,15 @@ class ResultReturn(Base):
         nullable=False,
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    fieldId: Mapped[uuid.UUID | None] = mapped_column("field_id",
+        UUID(as_uuid=True),
+        ForeignKey("result_fields.field_id", name="fk_result_returns_field", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    """The field the supervisor asked the MedTech to look at again (multi-field only)."""
+    particleType: Mapped[str | None] = mapped_column("particle_type", String(60), nullable=True)
+    """The particle class the return is about; only set together with `fieldId`."""
     returnedAt: Mapped[datetime] = mapped_column("returned_at", 
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

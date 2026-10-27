@@ -17,6 +17,8 @@ from pydantic import (
     model_serializer,
 )
 
+from .field import FieldSummary, FieldSummaryItem
+from .omit import dropNoneKeys
 from .patient_portal import PARTICLE_LABELS
 
 # The largest particle count an override may set (UROLENS-227). The AI engine
@@ -177,14 +179,18 @@ class MedtechPendingResultItem(BaseModel):
     """Accepted fields a MedTech has marked as checked (same omission rule)."""
     flaggedFieldCount: int | None = None
     """Accepted fields with at least one review flag (same omission rule)."""
+    returnFieldId: UUID | None = None
+    """The field the supervisor's latest return points at, only while the result is
+    RETURNED_FOR_CORRECTION and only when the return named one (same omission rule)."""
+    returnParticleType: str | None = None
+    """The particle class that return is about (same omission rule)."""
 
     @model_serializer(mode="wrap")
-    def _omitUnsetFieldCounts(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
-        data = handler(self)
-        for key in ("fieldCount", "verifiedFieldCount", "flaggedFieldCount"):
-            if data.get(key) is None:
-                data.pop(key, None)
-        return data
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), (
+            "fieldCount", "verifiedFieldCount", "flaggedFieldCount",
+            "returnFieldId", "returnParticleType",
+        ))
 
 
 class MedtechPendingListResponse(BaseModel):
@@ -429,6 +435,28 @@ class FullResultDetail(BaseModel):
     """Every reviewer's annotation, attributed. Previously flattened to a
     single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer
     had saved most recently, with no way to tell whose notes were showing."""
+    fields: list[FieldSummaryItem] | None = None
+    """Multi-field workflow only (left out of the JSON otherwise): every field with its
+    counts, flags and a signed image URL, no detections. `imageUrl` then points at the
+    first accepted field's image."""
+    fieldCount: int | None = None
+    """Accepted fields at confirmation."""
+    fieldSummary: FieldSummary | None = None
+    """Stored per-class statistics over the accepted fields; null before confirmation and
+    for results from before multi-field. When present, `flaggedAnomalies` is empty and
+    the field flags and focal findings replace it."""
+    isLegacySingleField: bool | None = None
+    """True for a single-image result from before multi-field."""
+    returnFieldId: UUID | None = None
+    """The field the supervisor's latest return points at, while RETURNED_FOR_CORRECTION."""
+    returnParticleType: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), (
+            "fields", "fieldCount", "fieldSummary", "isLegacySingleField",
+            "returnFieldId", "returnParticleType",
+        ))
 
 
 class AnnotationRequest(BaseModel):
@@ -466,6 +494,12 @@ class ReturnRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=2000)
     """Required: every return must say why. Blank or whitespace-only is
     rejected; surrounding whitespace is stripped (UROLENS-151)."""
+    fieldId: UUID | None = None
+    """Multi-field workflow: the field the MedTech should look at again. Must belong to
+    this result. Ignored (not stored) while `fieldWorkflowEnabled` is off."""
+    particleType: str | None = None
+    """Multi-field workflow: the particle class the return is about; needs `fieldId` and
+    must be in `PARTICLE_LABELS`. Ignored while the flag is off."""
 
     @field_validator("reason")
     @classmethod
@@ -482,6 +516,13 @@ class ReturnResponse(BaseModel):
     resultId: UUID
     status: str
     returnedAt: datetime
+    fieldId: UUID | None = None
+    """The field the return points at (multi-field workflow only; left out otherwise)."""
+    particleType: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldId", "particleType"))
 
 
 EscalationPath = Literal["NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"]

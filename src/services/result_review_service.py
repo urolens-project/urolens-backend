@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from ..core.audit_logger import AuditLogger
+from ..core.config import settings
 from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
@@ -37,6 +38,7 @@ from ..core.exceptions import (
     NotFoundException,
     UnprocessableException,
 )
+from ..core.particle_counts import toWholeCount
 from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
@@ -45,13 +47,17 @@ from ..models.image import ImageStatus
 from ..models.manual_override import ManualOverride
 from ..models.patient import Patient
 from ..models.result_approval import ResultApproval
+from ..models.result_field import FieldStatus, ResultField
 from ..models.result_return import ResultReturn
 from ..models.result_review import ResultReview
 from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
+from ..schemas.patient_portal import PARTICLE_LABELS
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .field_aggregation_service import toContractFieldSummary
 from .notification_service import NotificationService
+from .result_field_service import buildFieldSummaries
 from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import (
     getAssignedSpecimen,
@@ -591,18 +597,31 @@ class ResultReviewService:
 
         medtechName = spec.medtech.username if spec and spec.medtech else ""
 
+        # Multi-field workflow: every field of the result, and `imageUrl` is the first
+        # accepted field's image. Otherwise (flag off, or no accepted field yet) the
+        # single image, exactly as before.
+        fieldMode = settings.fieldWorkflowEnabled
+        fieldItems = await buildFieldSummaries(self.db, resultId) if fieldMode else None
+        firstAccepted = next(
+            (item for item in fieldItems or [] if item.status == FieldStatus.ACCEPTED), None
+        )
         imageUrl: str | None = None
-        if ar.image:
+        if firstAccepted is not None:
+            imageUrl = firstAccepted.imageUrl
+        elif ar.image:
             imageUrl = await signedImageUrl(ar.image.storageKey)
 
-        overridesRows = (
-            await self.db.execute(
-                select(ManualOverride)
-                .where(ManualOverride.resultId == resultId)
-                .options(joinedload(ManualOverride.medtech))
-                .order_by(ManualOverride.overriddenAt)
-            )
-        ).scalars().all()
+        overridesStmt = (
+            select(ManualOverride)
+            .where(ManualOverride.resultId == resultId)
+            .options(joinedload(ManualOverride.medtech))
+            .order_by(ManualOverride.overriddenAt)
+        )
+        if fieldMode:
+            # Per-field overrides and reverts belong to their field (GET /fields/{id});
+            # this list stays the result-level history it always was.
+            overridesStmt = overridesStmt.where(ManualOverride.fieldId.is_(None))
+        overridesRows = (await self.db.execute(overridesStmt)).scalars().all()
 
         overrides = [
             {
@@ -681,15 +700,29 @@ class ResultReviewService:
             ) or ""
 
         returnReason: str | None = None
+        returnFieldId: uuid.UUID | None = None
+        returnParticleType: str | None = None
         if ar.status == ResultStatus.RETURNED_FOR_CORRECTION:
-            returnReason = (
-                await self.db.execute(
-                    select(ResultReturn.reason)
-                    .where(ResultReturn.resultId == resultId)
-                    .order_by(ResultReturn.returnedAt.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
+            if fieldMode:
+                latest = (
+                    await self.db.execute(
+                        select(ResultReturn.reason, ResultReturn.fieldId, ResultReturn.particleType)
+                        .where(ResultReturn.resultId == resultId)
+                        .order_by(ResultReturn.returnedAt.desc())
+                        .limit(1)
+                    )
+                ).first()
+                if latest is not None:
+                    returnReason, returnFieldId, returnParticleType = latest
+            else:
+                returnReason = (
+                    await self.db.execute(
+                        select(ResultReturn.reason)
+                        .where(ResultReturn.resultId == resultId)
+                        .order_by(ResultReturn.returnedAt.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
 
         # Reuses the already-eager-loaded ar.image (see the combined query
         # above) rather than calling specimen_access.isRetakePending, which
@@ -725,6 +758,19 @@ class ResultReviewService:
             "isRetakePending": isRetakePending,
             "annotations": annotations,
         }
+        if fieldMode:
+            fieldSummary = toContractFieldSummary(ar.fieldSummary)
+            detail.update({
+                "fields": fieldItems,
+                "fieldCount": ar.fieldCount,
+                "fieldSummary": fieldSummary,
+                "isLegacySingleField": bool(ar.isLegacySingleField),
+                "returnFieldId": returnFieldId,
+                "returnParticleType": returnParticleType,
+            })
+            if fieldSummary is not None:
+                # Field flags and focal findings replace the single-image anomalies.
+                detail["flaggedAnomalies"] = {}
         if viewerId is not None and self.auditLogger is not None:
             # RA 10173: record who viewed which patient's result.
             await self.auditLogger.record(
@@ -909,7 +955,7 @@ class ResultReviewService:
             if change == 0:
                 continue
             current = particleClasses.get(parameter, aiFindings.get(parameter, 0))
-            correctedValue = max(0, int(current) + change)
+            correctedValue = max(0, toWholeCount(current) + change)
             if correctedValue == current:
                 continue
 
@@ -1001,41 +1047,104 @@ class ResultReviewService:
         userId: uuid.UUID,
         reason: str,
         request: Request | None = None,
+        fieldId: uuid.UUID | None = None,
+        particleType: str | None = None,
     ) -> dict[str, Any]:
         """Return a pending result to the MedTech for correction, and tell them.
 
         The specimen's assigned MedTech is notified (`RESULT_RETURNED`) in the
         same transaction; the push goes out after the commit (UROLENS-248).
 
+        With the multi-field workflow on, the return also clears the verified mark on
+        every field of the result, so the MedTech looks at each one again, and it may
+        point at one field (and one particle class) with `fieldId` and `particleType`;
+        the reason text is stored as written. With the flag off both are ignored.
+
         Args:
             userId: the authenticated supervisor recorded as `returned_by`.
             reason: required free-text explanation for the return. Not put in
                 the notification, which reaches the lock screen.
+            fieldId: multi-field only; the field the return is about. Must belong
+                to this result.
+            particleType: multi-field only; needs `fieldId` and a known class.
 
         Returns:
-            A dict confirming the new status and `returned_at` timestamp.
+            A dict confirming the new status and `returned_at` timestamp (and the
+            `fieldId` / `particleType` given, with the flag on).
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
             ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
                 `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
                 return, or escalate) won a race for it first.
+            UnprocessableException: (flag on) `FIELD_NOT_IN_RESULT`, `FIELD_REQUIRED_FOR_PARTICLE`
+                or `INVALID_PARTICLE_TYPE`.
         """
         result = await self._requirePending(resultId)
 
+        fieldMode = settings.fieldWorkflowEnabled
+        if fieldMode:
+            await self._requireValidReturnPointer(resultId, fieldId, particleType)
+        else:
+            fieldId = particleType = None
+
         now = datetime.now(_PHT)
-        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
+        self.db.add(ResultReturn(
+            resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now,
+            fieldId=fieldId, particleType=particleType,
+        ))
         await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
+        unverified = 0
+        if fieldMode:
+            unverified = (
+                await self.db.execute(
+                    update(ResultField)
+                    .where(ResultField.resultId == resultId, ResultField.verifiedBy.is_not(None))
+                    .values(verifiedBy=None, verifiedAt=None)
+                    .execution_options(synchronize_session=False)
+                )
+            ).rowcount
         await self._notifyMedtechOfReturn(resultId, result)
 
-        await self._auditAction("RESULT_RETURNED", resultId, userId, result.specimenId, request)
+        extra: dict[str, Any] | None = None
+        if fieldMode:
+            extra = {"fields_unverified": unverified}
+            if fieldId is not None:
+                extra["field_id"] = str(fieldId)
+        await self._auditAction("RESULT_RETURNED", resultId, userId, result.specimenId, request, extra=extra)
         await self.db.commit()
 
-        return {
+        response: dict[str, Any] = {
             "resultId": resultId,
             "status": ResultStatus.RETURNED_FOR_CORRECTION.value,
             "returnedAt": now,
         }
+        if fieldMode:
+            response["fieldId"] = fieldId
+            response["particleType"] = particleType
+        return response
+
+    async def _requireValidReturnPointer(
+        self, resultId: uuid.UUID, fieldId: uuid.UUID | None, particleType: str | None
+    ) -> None:
+        # A return may point at one field of this result and one particle class.
+        if particleType is not None and fieldId is None:
+            raise UnprocessableException(
+                code="FIELD_REQUIRED_FOR_PARTICLE",
+                message="Name the field when a particle class is given.",
+            )
+        if particleType is not None and particleType not in PARTICLE_LABELS:
+            raise UnprocessableException(
+                code="INVALID_PARTICLE_TYPE", message="Unknown particle class."
+            )
+        if fieldId is not None:
+            owner = (
+                await self.db.execute(select(ResultField.resultId).where(ResultField.fieldId == fieldId))
+            ).scalar_one_or_none()
+            if owner != resultId:
+                raise UnprocessableException(
+                    code="FIELD_NOT_IN_RESULT", message="That field does not belong to this result."
+                )
 
     async def _notifyMedtechOfReturn(self, resultId: uuid.UUID, result: AnalysisResult) -> None:
         # The specimen's assigned MedTech has to correct it; whoever confirmed

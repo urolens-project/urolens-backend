@@ -5,7 +5,16 @@ listing/detail shapes; see `services/physician_service.py` and
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
+
+from .field import FieldSummary
+from .omit import dropNoneKeys
 
 # Kept identical to schemas.lab_request's constant — both feed the same
 # lab_requests.test_type column (migration 0035).
@@ -111,3 +120,14 @@ class PhysicianResultDetail(BaseModel):
     imageUrl: str | None
     status: str
     annotationNotes: str | None  # the Supervisor's own entry specifically — see get_result_detail
+    fieldCount: int | None = None
+    """Fields the counts average over (multi-field results only; left out otherwise)."""
+    countsLabel: str | None = None
+    """`average per field (N fields)`, or `single image` for a result from before multi-field."""
+    fieldSummary: FieldSummary | None = None
+    """Per-class statistics over the accepted fields, with `displayValue` (multi-field only).
+    When present, `flaggedAnomalies` is empty."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel", "fieldSummary"))

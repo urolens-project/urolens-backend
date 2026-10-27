@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Added
+- **Multi-field web lane: review, return and reader changes (all behind `FIELD_WORKFLOW_ENABLED`, off
+  by default; with it off every response is unchanged).** `GET /results/{id}` gains the result's
+  fields, the field count, the stored per-class summary (exact means with a `displayValue`, and focal
+  findings), `isLegacySingleField` and the latest return's field and particle; its `imageUrl` is the
+  first accepted field's image and `flaggedAnomalies` is empty once a summary exists. A supervisor
+  return may point at a field and particle (`fieldId`, `particleType`, stored by migration `0049`;
+  the reason text is unchanged) and clears every field's verified mark; the MedTech queue shows the
+  pointer. The result-level override and a MedTech's free-drawn annotation now answer 410
+  `APP_UPDATE_REQUIRED`. Patient and physician results and the PDF show the average per field with
+  its label, "<1" for a rare particle and never 0 for a seen one; a single-image result is labelled
+  "single image". Run `0049` before turning the flag on.
 - **Multi-field foundation (no behavior change while `FIELD_WORKFLOW_ENABLED` is off).**
   Migration `0047` adds the `result_fields` and `field_annotation_edits` tables (RLS
   enabled), `manual_overrides.field_id`/`kind`, and `analysis_results.field_count`,
