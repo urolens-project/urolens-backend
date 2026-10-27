@@ -299,6 +299,7 @@ async def getVerificationSummary(
     id: uuid.UUID,
     claims: dict = Depends(_medtechOrSupervisor),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> VerificationSummaryResponse:
     """Per-class averages, corrections, focal findings and the diagnosis preview."""
-    raise NotImplementedYetError()
+    return await _service.getVerificationSummary(id, claims)
