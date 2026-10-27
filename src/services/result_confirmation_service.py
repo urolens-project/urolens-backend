@@ -18,8 +18,13 @@ from ..core.config import settings
 from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
+    FieldsBelowMinimumError,
+    FieldsNotVerifiedError,
+    LegacyNoFieldError,
+    LegacyNoFindingsError,
     NotFoundException,
 )
+from ..core.rule_thresholds import loadNormalMax
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
@@ -32,9 +37,21 @@ from ..schemas.result_review import (
     MedtechQueueStatus,
 )
 from .consent_check import requireProcessingConsent
-from .field_aggregation_service import FieldCounts, classMeans, flagsFor
+from .field_access import LEGACY_CONFIRMABLE_RESULT_STATUSES
+from .field_aggregation_service import (
+    AcceptedField,
+    FieldCounts,
+    aggregate,
+    classMeans,
+    exactAiMeans,
+    exactMeans,
+    fieldBlockingReason,
+    flagsFor,
+    settledParticleClasses,
+    storedFieldSummary,
+)
 from .notification_service import NotificationService
-from .result_field_service import flagThresholds
+from .result_field_service import flagThresholds, legacyCounts, loadAcceptedFields
 from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import getAssignedSpecimen, requireNoPendingRetake
 
@@ -149,16 +166,26 @@ class ResultConfirmationService:
         # result since.
         result = await self._getResult(resultId, fresh=True)
 
+        # Multi-field workflow (flag on): the result's fields decide what can be
+        # confirmed. A result from before multi-field (`is_legacy_single_field`)
+        # with at most one accepted field keeps the single-image rules.
+        fieldMode = settings.fieldWorkflowEnabled
+        accepted = await loadAcceptedFields(self.db, resultId) if fieldMode else []
+        legacy = fieldMode and bool(result.isLegacySingleField) and len(accepted) <= 1
+
         # Guard: pending retake blocks confirmation (checked first so this
         # specific message wins over the generic one below) — shared with
-        # saveAnnotation/overrideParameter, see specimen_access.py.
-        await requireNoPendingRetake(self.db, result, action="confirm")
+        # saveAnnotation/overrideParameter, see specimen_access.py. Not with the
+        # multi-field workflow: a discarded field's image is not a pending retake.
+        if not fieldMode:
+            await requireNoPendingRetake(self.db, result, action="confirm")
 
         # Guard: only PENDING_CONFIRM or a supervisor-returned result can be
         # confirmed. A positive allow-list (rather than enumerating "already
         # confirmed" statuses) so a status this doesn't recognise — e.g.
         # FAILED — is rejected by default instead of silently allowed through.
-        if result.status not in _CONFIRMABLE_STATUSES:
+        confirmable = LEGACY_CONFIRMABLE_RESULT_STATUSES if legacy else _CONFIRMABLE_STATUSES
+        if result.status not in confirmable:
             # Mobile treats RESULT_ALREADY_CONFIRMED as success (double tap /
             # replayed offline confirm), so it must only mean what it says.
             if result.status in _ALREADY_CONFIRMED_STATUSES:
@@ -187,6 +214,9 @@ class ResultConfirmationService:
             self.db, specimen, medtechId, self.auditLogger, action="RESULT_CONFIRM", request=request
         )
 
+        if fieldMode:
+            self._requireFieldsConfirmable(result, accepted, legacy)
+
         wasReturned = result.status == ResultStatus.RETURNED_FOR_CORRECTION
 
         # Create (or, if one already exists — the normal case on
@@ -200,6 +230,13 @@ class ResultConfirmationService:
             select(ResultConfirmation).where(ResultConfirmation.resultId == resultId)
         )
         confirmation = existing.scalar_one_or_none()
+
+        if fieldMode:
+            # After a reopen the status no longer says "returned", so ask the
+            # returns: was there one after the confirmation being replaced?
+            wasReturned = await self._returnedSince(
+                resultId, confirmation.confirmedAt if confirmation is not None else None
+            )
 
         if confirmation is not None:
             confirmation.medtechId = medtechId
@@ -229,8 +266,36 @@ class ResultConfirmationService:
         # If no overrides exist this is a straight copy of ai_findings.
         # `manualOverrides` is ordered oldest first, so a parameter corrected
         # more than once ends up with its latest value.
-        overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
-        result.particleClasses = {**result.aiFindings, **overrides}
+        decimalCounts: dict[str, float] | None = None
+        if fieldMode and not legacy:
+            # Final values come from the accepted fields: exact means. The AI means go in
+            # `ai_findings`, whole numbers (never 0 for a seen class) in `particle_classes`,
+            # and the diagnosis below runs on the exact means.
+            totals = aggregate(
+                [
+                    AcceptedField(
+                        fieldNo=f.fieldNo, aiFindings=f.aiFindings or {},
+                        effectiveCounts=f.effectiveCounts or {},
+                    )
+                    for f in accepted
+                ],
+                loadNormalMax(),
+            )
+            result.fieldCount = totals.fieldCount
+            result.fieldSummary = storedFieldSummary(totals)
+            result.aiFindings = exactAiMeans(totals)
+            result.particleClasses = settledParticleClasses(totals)
+            result.imageId = accepted[0].imageId
+            decimalCounts = exactMeans(totals)
+        elif legacy:
+            # A single-image result settles as it always did: AI counts with its
+            # result-level overrides, whole numbers.
+            result.particleClasses = legacyCounts(result.aiFindings, result.manualOverrides)
+            result.fieldCount = len(accepted)
+            result.fieldSummary = None
+        else:
+            overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
+            result.particleClasses = {**result.aiFindings, **overrides}
 
         # Transition result status
         result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
@@ -242,10 +307,20 @@ class ResultConfirmationService:
         # attributes, and async SQLAlchemy cannot lazy-reload them outside a
         # greenlet context (raises MissingGreenlet).
         specimenId = result.specimenId
+        auditDetail: dict = {"specimen_id": str(specimenId)}
+        if fieldMode:
+            auditDetail["field_count"] = len(accepted)
+            if legacy:
+                auditDetail["legacy_single_field"] = True
 
         # Trigger Smart Diagnosis — failure MUST NOT break confirmation (ISP)
         # smart_diagnosis_service.run() catches all exceptions internally
-        await self._smartDiagnosis.run(resultId=resultId, db=self.db)
+        if decimalCounts is not None:
+            await self._smartDiagnosis.run(
+                resultId=resultId, db=self.db, counts=decimalCounts, allowDecimal=True
+            )
+        else:
+            await self._smartDiagnosis.run(resultId=resultId, db=self.db)
 
         # Notify the Supervisor — best-effort, same as Smart Diagnosis above:
         # a transient notification failure (e.g. push/email provider down)
@@ -267,7 +342,7 @@ class ResultConfirmationService:
             entityType="analysis_result",
             entityId=resultId,
             userId=medtechId,
-            detailJson={"specimen_id": str(specimenId)},
+            detailJson=auditDetail,
             db=self.db,
             request=request,
         )
@@ -480,6 +555,46 @@ class ResultConfirmationService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _requireFieldsConfirmable(
+        self, result: AnalysisResult, accepted: list[ResultField], legacy: bool
+    ) -> None:
+        # The multi-field guards, decided by the same function the verification
+        # summary uses. A legacy result needs its one field and findings (the AI's, or
+        # a result-level override); anything else needs the minimum, all verified.
+        legacyHasFindings = bool(accepted and accepted[0].aiFindings) or any(
+            o.fieldId is None for o in result.manualOverrides
+        )
+        reason = fieldBlockingReason(
+            legacy=legacy,
+            acceptedCount=len(accepted),
+            verifiedCount=sum(f.verifiedBy is not None for f in accepted),
+            legacyHasFindings=legacyHasFindings,
+            minFields=settings.minFieldsPerSpecimen,
+        )
+        if reason == "LEGACY_NO_FIELD":
+            raise LegacyNoFieldError()
+        if reason == "LEGACY_NO_FINDINGS":
+            raise LegacyNoFindingsError()
+        if reason == "FIELDS_BELOW_MINIMUM":
+            raise FieldsBelowMinimumError(len(accepted), settings.minFieldsPerSpecimen)
+        if reason == "FIELDS_NOT_VERIFIED":
+            raise FieldsNotVerifiedError()
+
+    async def _returnedSince(self, resultId: uuid.UUID, confirmedAt: datetime | None) -> bool:
+        # A resubmission is a confirmation after a supervisor return: there is a
+        # return later than the confirmation this one replaces. Without an earlier
+        # confirmation this is a first confirmation.
+        if confirmedAt is None:
+            return False
+        count = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(ResultReturn)
+                .where(ResultReturn.resultId == resultId, ResultReturn.returnedAt > confirmedAt)
+            )
+        ).scalar_one()
+        return count > 0
 
     async def _getResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # Loads the result with manual_overrides eagerly, or raises
