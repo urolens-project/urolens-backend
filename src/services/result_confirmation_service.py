@@ -18,7 +18,6 @@ from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
-    UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.patient import Patient
