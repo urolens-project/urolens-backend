@@ -14,16 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..core.audit_logger import AuditLogger
+from ..core.config import settings
 from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
     NotFoundException,
-    UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.image import Image, ImageStatus
 from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
+from ..models.result_field import FieldStatus, ResultField
 from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
 from ..schemas.result_review import (
@@ -32,7 +33,9 @@ from ..schemas.result_review import (
     MedtechQueueStatus,
 )
 from .consent_check import requireProcessingConsent
+from .field_aggregation_service import FieldCounts, classMeans, flagsFor
 from .notification_service import NotificationService
+from .result_field_service import flagThresholds
 from .smart_diagnosis_service import SmartDiagnosisService
 from .specimen_access import getAssignedSpecimen
 
@@ -386,6 +389,12 @@ class ResultConfirmationService:
             for ret in retRows:
                 reasonMap.setdefault(ret.resultId, ret.reason)
 
+        fieldCounts = (
+            await self._fieldCountsFor([ar.resultId for ar, _ in rows])
+            if settings.fieldWorkflowEnabled
+            else {}
+        )
+
         patientUids = list({s.patientUid for _, s in rows if s.patientUid})
         patMap: dict[str, Patient] = {}
         if patientUids:
@@ -412,10 +421,61 @@ class ResultConfirmationService:
                     "patientSex": sex,
                     "status": ar.status,
                     "returnReason": reasonMap.get(ar.resultId),
+                    **fieldCounts.get(ar.resultId, {}),
                 }
             )
 
         return {"items": items, "total": total, "page": page, "pageSize": pageSize}
+
+    async def _fieldCountsFor(self, resultIds: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
+        """Accepted, verified and flagged field counts for a page of results.
+
+        One query for the whole page (the accepted fields' counts and verification,
+        never their detections); flags are computed in Python against each
+        result's own field means. A result with no fields gets zeros.
+        """
+        fieldRows = (
+            await self.db.execute(
+                select(
+                    ResultField.resultId,
+                    ResultField.verifiedBy,
+                    ResultField.aiFindings,
+                    ResultField.effectiveCounts,
+                    ResultField.confidenceScores,
+                ).where(
+                    ResultField.resultId.in_(resultIds),
+                    ResultField.status == FieldStatus.ACCEPTED,
+                )
+            )
+        ).all()
+        byResult: dict[uuid.UUID, list] = {}
+        for row in fieldRows:
+            byResult.setdefault(row.resultId, []).append(row)
+
+        thresholds = flagThresholds()
+        counts: dict[uuid.UUID, dict[str, int]] = {}
+        for resultId in resultIds:
+            fields = byResult.get(resultId, [])
+            means = classMeans([f.effectiveCounts or {} for f in fields])
+            counts[resultId] = {
+                "fieldCount": len(fields),
+                "verifiedFieldCount": sum(f.verifiedBy is not None for f in fields),
+                "flaggedFieldCount": sum(
+                    bool(
+                        flagsFor(
+                            FieldCounts(
+                                aiFindings=f.aiFindings or {},
+                                effectiveCounts=f.effectiveCounts or {},
+                                confidenceScores=f.confidenceScores or {},
+                            ),
+                            means,
+                            thresholds,
+                        )
+                    )
+                    for f in fields
+                ),
+            }
+        return counts
 
     # ------------------------------------------------------------------
     # Private helpers

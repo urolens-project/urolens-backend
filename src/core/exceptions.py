@@ -254,6 +254,18 @@ class FieldVersionConflictError(ConflictException):
         super().__init__(code="FIELD_VERSION_CONFLICT", message=message)
 
 
+class OverrideInForceError(ConflictException):
+    """409 `OVERRIDE_IN_FORCE` — box edits to a class that has a numeric override in
+    force; revert the override first."""
+
+    def __init__(
+        self,
+        message: str = "This class has a manual count in force. Remove the override to edit its boxes.",
+    ) -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="OVERRIDE_IN_FORCE", message=message)
+
+
 class FieldsUndecidedError(ConflictException):
     """409 `FIELDS_UNDECIDED` — fields are still waiting for Proceed or Discard."""
 
