@@ -32,6 +32,7 @@ def _makeDetail(confirmationNotes: str | None) -> PatientResultDetail:
         confirmedAt=None,
         confirmationNotes=confirmationNotes,
         analyzedBy=None,
+        requestingPhysician=None,
         particleCounts=[ParticleCount(label=label, count=0) for label in PARTICLE_LABELS],
         particleClasses=[],
         smartDiagnosisUnavailable=True,

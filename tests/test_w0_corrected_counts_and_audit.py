@@ -94,6 +94,7 @@ async def _patientDetail(row) -> PatientResultDetail:
     spec = MagicMock(spec=Specimen)
     spec.specimenId = SPECIMEN_ID
     spec.medtechId = None
+    spec.labRequestId = None
     resolved = MagicMock()
     resolved.scalar_one_or_none.return_value = PATIENT_ID
     db = AsyncMock()

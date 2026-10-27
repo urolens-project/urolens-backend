@@ -2,6 +2,7 @@
 
 Routes
 ------
+POST /api/v1/fields                               — Capture a field (mobile lane)
 POST /api/v1/fields/{field_id}/accept             — Proceed (mobile lane)
 POST /api/v1/fields/{field_id}/discard            — Discard or exclude (shared)
 POST /api/v1/results/{id}/fields/submit           — Submit for Verification (mobile lane)
@@ -16,16 +17,17 @@ GET  /api/v1/results/{id}/summary                 — Verification summary (web 
 
 Every route is registered with its final role and response model, and answers
 404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. With it on, a route whose
-handler is not written yet answers 501 NOT_IMPLEMENTED. Web lane so far: list,
-detail, annotations, override, revert, verify, discard (web path) and reopen-capture.
-Still stubs: accept and submit (mobile lane) and the summary (web, later phase). The
-flag check is a dependency so it also wins over a body-validation 422.
+handler is not written yet answers 501 NOT_IMPLEMENTED. Built so far: field capture
+(mobile lane), and in the web lane list, detail, annotations, override, revert,
+verify, discard and reopen-capture. Still stubs: accept and submit (mobile lane) and
+the summary (web, later phase). The flag check is a dependency so it also wins over a
+body-validation 422.
 """
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger, getAuditLogger
@@ -34,9 +36,11 @@ from ..core.database import getDb
 from ..core.enums import UserRole
 from ..core.exceptions import FeatureDisabledError, NotImplementedYetError
 from ..core.rbac import RequireRole
+from ..models.result_field import Magnification
 from ..schemas.field import (
     DiscardFieldRequest,
     FieldActionResponse,
+    FieldAnalysisResponse,
     FieldDetail,
     FieldListResponse,
     FieldOverrideRequest,
@@ -45,6 +49,7 @@ from ..schemas.field import (
     SaveAnnotationsRequest,
     VerificationSummaryResponse,
 )
+from ..services.field_capture_service import FieldCaptureService
 from ..services.field_correction_service import FieldCorrectionService
 from ..services.manual_override_service import ManualOverrideService
 from ..services.result_field_service import ResultFieldService
@@ -82,6 +87,36 @@ def requireFieldWorkflow() -> None:
     """Dependency: 404 `FEATURE_DISABLED` while the multi-field flag is off."""
     if not settings.fieldWorkflowEnabled:
         raise FeatureDisabledError()
+
+
+# ── Dependency factories ──
+
+async def getFieldCaptureService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> FieldCaptureService:
+    """FastAPI dependency constructing a request-scoped `FieldCaptureService`."""
+    return FieldCaptureService(db=db, auditLogger=auditLogger)
+
+
+@router.post(
+    "/api/v1/fields",
+    response_model=FieldAnalysisResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Capture a field: upload one image and analyse it (mobile lane)",
+)
+async def captureField(
+    request: Request,
+    specimenId: uuid.UUID = Form(..., alias="specimen_id"),
+    file: UploadFile = File(..., description="JPEG or PNG, minimum 640×480"),
+    magnification: Magnification = Form(Magnification.HPF, description="Objective of the field"),
+    claims: dict = Depends(_medtech),
+    _enabled: None = Depends(requireFieldWorkflow),
+    _service: FieldCaptureService = Depends(getFieldCaptureService),
+) -> FieldAnalysisResponse:
+    """Add one analysed field to a specimen; see `FieldCaptureService.handleFieldUpload`."""
+    uploaderId = uuid.UUID(claims["user_id"])
+    return await _service.handleFieldUpload(specimenId, uploaderId, file, magnification, request)
 
 
 @router.post(

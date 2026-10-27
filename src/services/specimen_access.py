@@ -21,6 +21,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.image import Image, ImageStatus
 from src.models.specimen import Specimen
 
 # The only statuses in which a MedTech may still change a result (override a
@@ -135,6 +136,40 @@ def requireResultEditable(result: AnalysisResult, isSupervisor: bool) -> None:
         raise ConflictException(
             code="RESULT_NOT_EDITABLE",
             message="This result can't be changed in its current status.",
+        )
+
+
+async def isRetakePending(db: AsyncSession, result: AnalysisResult) -> bool:
+    """Whether a result's attached image is mid-retake: marked
+    IMAGE_RETAKE_REQUESTED, or pointing at an image that's been discarded
+    without a replacement uploaded yet (UROLENS-230). In either case the
+    result's current findings don't match any real, currently-attached
+    image.
+    """
+    if result.status == ResultStatus.IMAGE_RETAKE_REQUESTED:
+        return True
+    if result.imageId is None:
+        return False
+    image = await db.get(Image, result.imageId)
+    return image is not None and image.status != ImageStatus.ACTIVE
+
+
+async def requireNoPendingRetake(db: AsyncSession, result: AnalysisResult, action: str) -> None:
+    """Refuse a write that would build on a result whose image is mid-retake.
+
+    Shared by confirm, annotate and override — none of them should let a
+    MedTech or Supervisor act on findings anchored to an image that's about
+    to be replaced; `confirmResult` is the only one of the three that
+    checked this before (UROLENS-230), which let annotations and overrides
+    silently go stale the moment a new image reset the result's findings.
+
+    Raises:
+        UnprocessableException: `PENDING_RETAKE`, if a retake is pending.
+    """
+    if await isRetakePending(db, result):
+        raise UnprocessableException(
+            code="PENDING_RETAKE",
+            message=f"Cannot {action} while an image retake is pending.",
         )
 
 

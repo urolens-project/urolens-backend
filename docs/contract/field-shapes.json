@@ -311,7 +311,7 @@
         "type": "string"
       }
     },
-    "description": "`POST /images/upload` (201) once it adds a field instead of replacing the image.",
+    "description": "`POST /fields` (201): the field one image upload added to a specimen.",
     "properties": {
       "acceptedFieldCount": {
         "title": "Acceptedfieldcount",
@@ -1654,6 +1654,19 @@
         "format": "uuid",
         "title": "Resultid",
         "type": "string"
+      },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
       },
       "smartDiagnosisUnavailable": {
         "default": false,

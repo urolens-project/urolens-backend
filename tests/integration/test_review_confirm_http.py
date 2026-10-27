@@ -60,6 +60,7 @@ def _result(status: str) -> AnalysisResult:
     result.specimenId = SPECIMEN_ID
     result.status = status
     result.imageId = None
+    result.image = None
     result.confirmedAt = None
     result.aiFindings = {"RBC": 12}
     result.flaggedAnomalies = {}
@@ -84,6 +85,12 @@ def _db(result: AnalysisResult, specimen: Specimen) -> AsyncMock:
     patient = SimpleNamespace(
         firstName=encryptPii("Juan"), lastName=encryptPii("Dela Cruz"), dateOfBirth=None, sex="M"
     )
+    # getFullResult reads specimen/medtech/image via eager-loaded
+    # relationships on the AnalysisResult row (joinedload), not separate
+    # db.get() calls — wired directly here since a mocked session doesn't
+    # actually perform the join.
+    specimen.medtech = SimpleNamespace(username="medtech1")
+    result.specimen = specimen
     byModel = {AnalysisResult: result, Specimen: specimen}
     byEntity = {AnalysisResult: result, Patient: patient, ResultReturn: "Recount the casts"}
 
@@ -92,6 +99,7 @@ def _db(result: AnalysisResult, specimen: Specimen) -> AsyncMock:
 
     def _execute(stmt: Select) -> MagicMock:
         executeResult = MagicMock()
+        executeResult.unique.return_value = executeResult
         executeResult.scalars.return_value.all.return_value = []
         executeResult.scalar_one_or_none.return_value = byEntity.get(stmt.column_descriptions[0].get("entity"))
         return executeResult

@@ -18,8 +18,111 @@
   `FEATURE_DISABLED` (flag off) or 501 `NOT_IMPLEMENTED` (flag on) until the mobile and
   web lanes fill them in. Client-facing shapes: `docs/contract/field-shapes.json`.
   Needs the B1 baseline migrations (`0000`, `0046`) first.
+- **With `FIELD_WORKFLOW_ENABLED` on, the phone captures fields through a new
+  `POST /api/v1/fields`, and the single-image upload tells old apps to update.** The
+  new route takes the same multipart form as the upload (`specimen_id`, `file`) plus an
+  optional `magnification` (`HPF` default, or `LPF`), and answers 201 with
+  `FieldAnalysisResponse`: the field's number, AI counts, boxes (percent of the image,
+  ids assigned by the backend; empty until the engine returns detections), confidence,
+  image size, its own Smart Diagnosis preview, and the accepted-field count against
+  `MIN_FIELDS_PER_SPECIMEN`. The first field creates the result in `CAPTURING` and
+  starts the specimen; each field gets the next number (never reused) and starts
+  `ANALYZED`. Earlier images, fields and corrections are never touched. A result in any
+  other status, including a single-image result still waiting for confirmation, takes
+  no fields (409 `RESULT_NOT_EDITABLE`) until capture is reopened on the web. A box the
+  engine returns that is not finite or covers no part of the image is dropped and
+  counted in the audit row (`dropped_boxes`); the AI counts stay as the engine reported
+  them, so the web shows a class with fewer boxes than its count. With the flag on,
+  `POST /api/v1/images/upload` answers 410 `APP_UPDATE_REQUIRED` and stores nothing;
+  with it off, that route is unchanged and `POST /api/v1/fields` answers 404
+  `FEATURE_DISABLED`. New `src/services/field_capture_service.py`;
+  `AIIntegrationService` gained small shared helpers and no behaviour change. Routes
+  64 → 65; `docs/contract/field-shapes.json` regenerated.
+- **With `FIELD_WORKFLOW_ENABLED` on, `GET /api/v1/sync/pull` also sends the captured
+  fields.** A new `resultFields` table carries every field of the MedTech's results in
+  the sync window, in capture order and in the published `SyncResultField` shape
+  (camelCase, unlike the other tables' DB-column rows): number, magnification, status,
+  AI and effective counts, confidence, image size, the field's Smart Diagnosis preview,
+  version and timestamps. Every status is sent, so a discarded field arrives as a
+  status change; a delta sends the fields changed since the last sync, and a sample
+  that leaves the window or is reassigned takes its fields with it (`deleted`). The AI
+  boxes are never sent nor loaded (a field can hold up to 1,000; the phone keeps those
+  of the fields it captured). The `SYNC_PULLED` audit row also lists the field IDs sent,
+  including when only fields changed. `SyncResultField` gains an optional
+  `smartDiagnosisPreview`; `docs/contract/field-shapes.json` regenerated. With the flag
+  off the response, its JSON (no `resultFields` key, not even `null`) and the audit row
+  are exactly as before, and no field query runs.
+- **With `FIELD_WORKFLOW_ENABLED` on, the old single-image discard tells outdated apps
+  to update.** `POST /api/v1/images/{image_id}/discard` answers 410
+  `APP_UPDATE_REQUIRED` ("Update UroLens to continue") and discards nothing, the same
+  way `POST /api/v1/images/upload` already does. An app that predates multi-field,
+  including a `DISCARD_IMAGE` it queued offline and replays after the flag is turned
+  on, can no longer discard an image the new workflow keeps as a field; fields are
+  discarded through `POST /api/v1/fields/{field_id}/discard`. The role check still runs
+  first (another role gets 403). With the flag off the route is unchanged.
 
 ### Fixed
+- **The startup check passed AI engine weights that were only Git LFS pointers, so
+  every upload then failed with 503 `AI_ANALYSIS_FAILED`.** The engine stores
+  `best.pt` and `gate.pt` with Git LFS; a checkout without `git lfs pull`, and a pip
+  install of the engine from GitHub, leave a ~130-byte text pointer in place of each.
+  That file exists, so the check added for the engine paths reported nothing.
+  `engineFileProblems` (`src/core/config.py`) now also reads the start of each required
+  file (`MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`, `RULE_ENGINE_CONFIG_PATH`) and logs
+  an `AI engine:` error at startup when it is a Git LFS pointer, naming the variable and
+  path and how to fix it (`git lfs pull` in the engine repo, or point the variable at
+  the downloaded file). It still never stops the app. No route, response or error code
+  changes.
+- **A picture the AI engine's input gate rejects was reported as a server failure
+  (503 `AI_ANALYSIS_FAILED`), and a sideways photo was stored sideways.** Both upload
+  routes (`POST /api/v1/images/upload` and `POST /api/v1/fields`) now answer 422
+  `IMAGE_NOT_MICROSCOPY` ("This does not look like a microscope image. Retake it.") when
+  the gate says the picture isn't a urine microscopy image, and 422 `IMAGE_EXPOSURE` when
+  it is too dark, blown out or mostly black. Nothing is stored. The app can tell the
+  MedTech to retake instead of retrying the same picture, which would always fail again.
+  Every other engine failure is still 503 `AI_ANALYSIS_FAILED`. Not behind
+  `FIELD_WORKFLOW_ENABLED`.
+  A photo whose EXIF orientation isn't upright is now turned into upright pixels before
+  it is stored, and the tag dropped. Before, the tag was dropped without turning the
+  pixels, so the image was stored sideways while the engine analyses it upright, and AI
+  boxes would not line up with it. A JPEG that needs turning is re-compressed at quality
+  95; any other JPEG keeps its original quality as before. The validated width and height
+  (stored on `images`, used for field boxes) are now the upright ones, and so is the
+  640x480 minimum. A tagged sideways photo whose upright width is under 640 is therefore
+  refused with `INVALID_IMAGE_RESOLUTION` up front instead of being analysed sideways.
+  Photos from the app are unaffected: it already uploads upright pixels without the tag.
+- **A database built from migrations had no `analysis_results.ai_detections`, so every
+  query loading a result failed there.** The model maps the column (AI boxes for the
+  result review screens), but only the closed `feat/review-image-annotation` branch's
+  `0046` ever created it, by hand on live. Migration `0048` adds it with
+  `ADD COLUMN IF NOT EXISTS`: a no-op on live (which has it), created everywhere else.
+  Its downgrade refuses while any result still has boxes in the column. Live's
+  `alembic_version` (`0046`) needs no stamp: this chain's `0046` only adds two foreign
+  keys live already has. **Also fixed:** `tests/test_fresh_db_build.py` passed
+  `FRESH_DB_URL` to Alembic as `DATABASE_URL`, which `.env` (reloaded with
+  `override=True`) silently replaced, so running it would have migrated the database
+  in `.env` (live on a dev machine) instead of the scratch one. `alembic/env.py` now
+  takes an explicit `-x dbUrl=...`, the test passes it and refuses a URL naming the
+  `.env` database. **Known, not fixed here:** a fresh build still stops at `0021`
+  (`relation "notifications" does not exist`); the B1 baseline does not yet cover it.
+- **A fresh install of the AI engine made every image upload fail with
+  `AI_ANALYSIS_FAILED`, and nothing said why until the first upload.** The engine's
+  `develop` branch renamed its detector weights to `best.pt` and added an input gate
+  with its own weights (`gate.pt`), while the backend only looked for `weights.pt` and
+  never set `GATE_WEIGHTS_PATH`; the engine's own defaults are relative paths that only
+  exist inside its repo. `src/core/config.py` now resolves four engine files the same
+  way: an explicit env var wins, otherwise the file inside the installed `urolens_ai`
+  package (`models/yolov8/best.pt`, falling back to the old `weights.pt`;
+  `models/gate/gate.pt`; `smart_diagnosis/config.yaml`; the optional
+  `models/yolov8/thresholds.yaml`), and the result is handed to the engine through
+  `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`, `RULE_ENGINE_CONFIG_PATH` and
+  `CLASS_THRESHOLDS_PATH`. At startup the server logs one `AI engine:` error for each
+  required file that is unset or missing; it does not stop the app. The engine is now
+  pinned to commit `50aa94e` instead of the moving `develop` branch, so a deploy can no
+  longer pick up an untested engine. **Deploy note:** the engine's install currently
+  ships no data files (no weights, gate or rule config), so every environment must set
+  `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH` and `RULE_ENGINE_CONFIG_PATH` until the
+  engine packages them. No route, response or error code changes.
 - **Backend CI failed the real-engine Smart Diagnosis override test without a
   developer's local `.env`.** The AI package defaults to a config path inside its
   source repository and does not bundle the clinical YAML. The integration test

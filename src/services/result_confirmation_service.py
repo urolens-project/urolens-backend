@@ -21,7 +21,6 @@ from ..core.exceptions import (
     NotFoundException,
 )
 from ..models.analysis_result import AnalysisResult, ResultStatus
-from ..models.image import Image, ImageStatus
 from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
 from ..models.result_field import FieldStatus, ResultField
@@ -37,7 +36,7 @@ from .field_aggregation_service import FieldCounts, classMeans, flagsFor
 from .notification_service import NotificationService
 from .result_field_service import flagThresholds
 from .smart_diagnosis_service import SmartDiagnosisService
-from .specimen_access import getAssignedSpecimen
+from .specimen_access import getAssignedSpecimen, requireNoPendingRetake
 
 logger = logging.getLogger(__name__)
 
@@ -151,8 +150,9 @@ class ResultConfirmationService:
         result = await self._getResult(resultId, fresh=True)
 
         # Guard: pending retake blocks confirmation (checked first so this
-        # specific message wins over the generic one below).
-        await self._validateNoPendingRetake(result)
+        # specific message wins over the generic one below) — shared with
+        # saveAnnotation/overrideParameter, see specimen_access.py.
+        await requireNoPendingRetake(self.db, result, action="confirm")
 
         # Guard: only PENDING_CONFIRM or a supervisor-returned result can be
         # confirmed. A positive allow-list (rather than enumerating "already
@@ -499,19 +499,3 @@ class ResultConfirmationService:
             )
         return result
 
-    async def _validateNoPendingRetake(self, result: AnalysisResult) -> None:
-        """Refuse to confirm while a retake is pending.
-
-        That's a result marked IMAGE_RETAKE_REQUESTED, or one whose image was
-        discarded (UROLENS-230): discarding keeps the old findings until a new
-        image is uploaded, and they must not reach the supervisor.
-        """
-        retakePending = result.status == ResultStatus.IMAGE_RETAKE_REQUESTED
-        if not retakePending and result.imageId is not None:
-            image = await self.db.get(Image, result.imageId)
-            retakePending = image is not None and image.status != ImageStatus.ACTIVE
-        if retakePending:
-            raise UnprocessableException(
-                code="PENDING_RETAKE",
-                message="Cannot confirm a result while an image retake is pending.",
-            )

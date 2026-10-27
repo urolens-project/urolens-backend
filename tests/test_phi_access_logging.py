@@ -41,7 +41,6 @@ def _makeAuditLogger() -> MagicMock:
 
 def _makeDetailDb() -> AsyncMock:
     ar = _makeResult(status=ResultStatus.PENDING_SUPERVISOR_APPROVAL)
-    ar.imageId = None
     ar.confirmedAt = None
     ar.aiFindings = {}
     ar.flaggedAnomalies = {}
@@ -50,12 +49,11 @@ def _makeDetailDb() -> AsyncMock:
     ar.smartDiagnosisUnavailable = False
     specimen = _makeSpecimen()
     specimen.patientUid = None
-    specimen.medtechId = None
     specimen.patientName = None
+    ar.specimen = specimen
     db = AsyncMock()
-    db.get = AsyncMock(side_effect=[ar, specimen])
     db.execute = AsyncMock(side_effect=[
-        _makeScalarsResult([]), _makeScalarOneResult(None), _makeScalarOneResult(None),
+        _makeScalarOneResult(ar), _makeScalarsResult([]), _makeScalarsResult([]), _makeScalarOneResult(None),
     ])
     return db
 
