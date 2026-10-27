@@ -158,24 +158,19 @@ def test_aNegativeCountIsUnavailable():
 
 # ── the real engine ──────────────────────────────────────────────────────────
 
-def test_theRealEngineAcceptsDecimalCountsOnceP1Lands(monkeypatch):
-    """Switches itself on when the engine takes decimal counts (P-1); skips until then.
+def test_theRealEngineAcceptsDecimalCounts(monkeypatch):
+    """The pinned engine (v0.2.0 and later) takes decimal counts (P-1).
 
-    The installed engine rejects non-integers with INVALID_CLASSIFICATION, and has no
-    rules config of its own, so the synthetic test config is pointed at.
+    Fails if the pin ever goes back to an engine that refuses them. The synthetic
+    test config is pointed at so the outcome does not depend on the shipped rules.
     """
     pytest.importorskip("urolens_ai")
     from urolens_ai import generate_smart_diagnosis
     from urolens_ai.smart_diagnosis import rule_engine
-    from urolens_ai.utils.exceptions import RuleEngineError
 
     monkeypatch.setattr(rule_engine, "_CONFIG_PATH", str(FIXTURE))
-    try:
-        generate_smart_diagnosis({"crystals": 1.5})
-    except RuleEngineError as exc:
-        if exc.code in ("INVALID_CLASSIFICATION", "CONFIG_ERROR"):
-            pytest.skip(f"the installed engine does not take decimal counts yet ({exc.code})")
-        raise
+    output = generate_smart_diagnosis({"crystals": 1.5})
+    assert output is not None
 
     preview, unavailable = SmartDiagnosisService.previewDiagnosis({"crystals": 1.5})
     assert unavailable is False and preview is not None

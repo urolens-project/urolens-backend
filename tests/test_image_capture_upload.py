@@ -465,7 +465,8 @@ async def test_aResultWithNoImageIsNotLookedUp() -> None:
 
 def test_modelWeightsDefaultToThoseBundledInTheAiPackage() -> None:
     with tempfile.TemporaryDirectory() as packageDir:
-        weights = Path(packageDir) / "models" / "yolov8" / "weights.pt"
+        # best.pt since engine v0.2.0; a leftover weights.pt is not used (test_engine_paths.py).
+        weights = Path(packageDir) / "models" / "yolov8" / "best.pt"
         weights.parent.mkdir(parents=True)
         weights.write_bytes(b"weights")
         spec = MagicMock(submodule_search_locations=[packageDir])

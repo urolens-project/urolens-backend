@@ -42,14 +42,25 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """Report missing AI engine files once, when the server starts.
+    """Check the AI engine once, when the server starts.
 
-    Logged as errors instead of stopping the app: without these files only image
-    uploads and Smart Diagnosis fail, and they would otherwise fail on the first
-    upload with nothing in the logs at startup to say why.
+    Each problem is logged as an error, so a broken upload has a cause in the logs
+    from the start. With `FIELD_WORKFLOW_ENABLED` off the app still starts: only
+    uploads and Smart Diagnosis need the engine. With it on, the server refuses to
+    start, because the multi-field workflow relies on the pinned engine (its boxes,
+    upright size and decimal Smart Diagnosis) and must not run on an old one.
+
+    Raises:
+        RuntimeError: if the flag is on and any engine problem was found.
     """
-    for problem in engineFileProblems(settings):
+    problems = engineFileProblems(settings)
+    for problem in problems:
         logger.error("AI engine: %s", problem)
+    if problems and settings.fieldWorkflowEnabled:
+        raise RuntimeError(
+            "FIELD_WORKFLOW_ENABLED is on but the AI engine is not ready; fix the "
+            "'AI engine:' errors above (or turn the flag off) and restart."
+        )
     yield
 
 
