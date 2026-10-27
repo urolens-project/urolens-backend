@@ -21,6 +21,7 @@ from src.models.analysis_result import AnalysisResult
 from src.models.manual_override import ManualOverride
 from src.models.queue_assignment import QueueAssignment
 from src.models.result_approval import ResultApproval
+from src.models.result_field import ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
 
@@ -68,13 +69,17 @@ def makeSyncDb(
     removed: list[tuple] | None = None,
     removedAssignmentIds: list[uuid.UUID] | None = None,
     removedOverrideIds: list[uuid.UUID] | None = None,
+    fields: list[ResultField] | None = None,
+    removedFieldIds: list[uuid.UUID] | None = None,
 ) -> AsyncMock:
     """A session answering each of `sync_service.pull`'s queries.
 
     `rows`: (specimen, result) pairs from the window query. `reasons` /
     `approvals`: (resultId, value) rows. `removed`: (specimenId, resultId)
     rows from the removals query, with the assignment and override IDs of
-    those samples. Statements are kept in `db.execute.await_args_list`.
+    those samples. `fields` / `removedFieldIds`: the multi-field queries, only
+    run while `FIELD_WORKFLOW_ENABLED` is on. Statements are kept in
+    `db.execute.await_args_list`.
     """
 
     def _execute(stmt: Select) -> MagicMock:
@@ -89,6 +94,8 @@ def makeSyncDb(
             (ResultApproval, "resultId"): ("all", approvals or []),
             (ManualOverride, "ManualOverride"): ("scalars", overrides or []),
             (ManualOverride, "overrideId"): ("scalars", removedOverrideIds or []),
+            (ResultField, "ResultField"): ("scalars", fields or []),
+            (ResultField, "fieldId"): ("scalars", removedFieldIds or []),
         }
         kind, data = answers[(entity, name)]
         executeResult = MagicMock()

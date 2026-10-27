@@ -38,6 +38,20 @@
   `FEATURE_DISABLED`. New `src/services/field_capture_service.py`;
   `AIIntegrationService` gained small shared helpers and no behaviour change. Routes
   64 → 65; `docs/contract/field-shapes.json` regenerated.
+- **With `FIELD_WORKFLOW_ENABLED` on, `GET /api/v1/sync/pull` also sends the captured
+  fields.** A new `resultFields` table carries every field of the MedTech's results in
+  the sync window, in capture order and in the published `SyncResultField` shape
+  (camelCase, unlike the other tables' DB-column rows): number, magnification, status,
+  AI and effective counts, confidence, image size, the field's Smart Diagnosis preview,
+  version and timestamps. Every status is sent, so a discarded field arrives as a
+  status change; a delta sends the fields changed since the last sync, and a sample
+  that leaves the window or is reassigned takes its fields with it (`deleted`). The AI
+  boxes are never sent nor loaded (a field can hold up to 1,000; the phone keeps those
+  of the fields it captured). The `SYNC_PULLED` audit row also lists the field IDs sent,
+  including when only fields changed. `SyncResultField` gains an optional
+  `smartDiagnosisPreview`; `docs/contract/field-shapes.json` regenerated. With the flag
+  off the response, its JSON (no `resultFields` key, not even `null`) and the audit row
+  are exactly as before, and no field query runs.
 
 ### Fixed
 - **The startup check passed AI engine weights that were only Git LFS pointers, so

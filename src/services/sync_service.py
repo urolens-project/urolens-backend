@@ -19,6 +19,13 @@ Manual overrides (UROLENS-227) are sent so the phone shows every correction on
 the MedTech's results — including a supervisor's on a returned result — not
 only the ones made on that device.
 
+While `FIELD_WORKFLOW_ENABLED` is on, the results' captured fields are sent too
+(`resultFields`, in the published `SyncResultField` shape): every status, so a
+discarded field arrives as a status change, and never the AI boxes, which a
+field can hold up to 1,000 of; the phone keeps the boxes of the fields it
+captured and fetches others one field at a time. With the flag off the payload
+is exactly as before.
+
 Read with SQLAlchemy. The previous Supabase REST version downloaded every
 specimen the MedTech ever had on every sync and put every specimen ID in the
 results request's URL, which fails once history grows (UROLENS-236).
@@ -37,12 +44,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from src.core.audit_logger import AuditLogger
+from src.core.config import settings
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.manual_override import ManualOverride
 from src.models.queue_assignment import QueueAssignment
 from src.models.result_approval import ResultApproval
+from src.models.result_field import ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
+from src.schemas.field import SyncResultField
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +189,30 @@ def _overrideRow(o: ManualOverride) -> dict[str, Any] | None:
     }
 
 
+def _fieldRow(f: ResultField) -> dict[str, Any]:
+    # The published contract shape (docs/contract/field-shapes.json): camelCase,
+    # unlike the other tables' DB-column rows, and never the AI boxes.
+    return SyncResultField(
+        fieldId=f.fieldId,
+        resultId=f.resultId,
+        specimenId=f.specimenId,
+        imageId=f.imageId,
+        fieldNo=f.fieldNo,
+        magnification=f.magnification,
+        status=f.status,
+        aiFindings=f.aiFindings or {},
+        effectiveCounts=f.effectiveCounts or {},
+        confidenceScores=f.confidenceScores or {},
+        imageWidth=f.imageWidth,
+        imageHeight=f.imageHeight,
+        smartDiagnosisPreview=f.smartDiagnosis,
+        smartDiagnosisUnavailable=f.smartDiagnosisUnavailable,
+        version=f.version,
+        createdAt=f.createdAt,
+        updatedAt=f.updatedAt,
+    ).model_dump(mode="json")
+
+
 async def _specimensAndResults(
     db: AsyncSession, medtechId: uuid.UUID, cutoff: datetime, since: datetime | None
 ) -> tuple[list[Specimen], list[AnalysisResult]]:
@@ -279,8 +313,26 @@ async def _manualOverrides(
     return list((await db.execute(stmt)).scalars().all())
 
 
+async def _resultFields(
+    db: AsyncSession, medtechId: uuid.UUID, cutoff: datetime, since: datetime | None
+) -> list[ResultField]:
+    # Fields of the window's specimens, in capture order; on a delta, those
+    # changed since the last sync. A field changes in place (accepted,
+    # discarded, corrected), and `updated_at` moves with every change. The
+    # boxes are never loaded: touching them here raises instead.
+    stmt = (
+        select(ResultField)
+        .where(ResultField.specimenId.in_(_windowSpecimenIds(medtechId, cutoff)))
+        .options(defer(ResultField.detections, raiseload=True))
+        .order_by(ResultField.resultId, ResultField.fieldNo)
+    )
+    if since is not None:
+        stmt = stmt.where(ResultField.updatedAt > since)
+    return list((await db.execute(stmt)).scalars().all())
+
+
 async def _removals(
-    db: AsyncSession, medtechId: uuid.UUID, cutoff: datetime, since: datetime
+    db: AsyncSession, medtechId: uuid.UUID, cutoff: datetime, since: datetime, includeFields: bool = False
 ) -> dict[str, list[str]]:
     """IDs the phone should delete, per sync table.
 
@@ -288,7 +340,8 @@ async def _removals(
     between `since - window` and `cutoff`), and specimens the MedTech had an
     assignment for that are now assigned to someone else (or nobody) and
     changed since the last sync — with their results, the MedTech's
-    assignments and the overrides on those results.
+    assignments and the overrides on those results, and, when
+    `includeFields`, those results' fields (under `resultFields`).
     """
     agedOut = and_(
         Specimen.medtechId == medtechId,
@@ -323,15 +376,21 @@ async def _removals(
                 QueueAssignment.medtechId == medtechId, QueueAssignment.specimenId.in_(specimenIds)
             )
         )).scalars().all())
+    fieldIds: list[uuid.UUID] = []
     if resultIds:
         overrideIds = list((await db.execute(
             select(ManualOverride.overrideId).where(ManualOverride.resultId.in_(resultIds))
         )).scalars().all())
+        if includeFields:
+            fieldIds = list((await db.execute(
+                select(ResultField.fieldId).where(ResultField.resultId.in_(resultIds))
+            )).scalars().all())
     return {
         "specimens": [str(i) for i in specimenIds],
         "queueAssignments": [str(i) for i in assignmentIds],
         "analysisResults": [str(i) for i in resultIds],
         "manualOverrides": [str(i) for i in overrideIds],
+        "resultFields": [str(i) for i in fieldIds],
     }
 
 
@@ -365,10 +424,14 @@ async def pull(
         `particle_classes` (the confirmed counts); overrides carry numbers,
         with `original_ai_value` null when the stored one isn't a number, and
         an override whose corrected value isn't a number is left out.
-        `deleted` is only filled on a delta.
+        `deleted` is only filled on a delta. While `FIELD_WORKFLOW_ENABLED` is
+        on, `changes` also has `resultFields`: `SyncResultField` rows
+        (camelCase, every status, no AI boxes), deleted with their sample; the
+        audit row then lists the field IDs sent.
     """
     medtechId = uuid.UUID(userId)
     isDelta = lastSyncedAt is not None
+    fieldsOn = settings.fieldWorkflowEnabled
     # Taken before any read: the client stores it as its next lastSyncedAt,
     # so a row updated while this pull runs is still picked up next time.
     now = datetime.now(UTC)
@@ -383,10 +446,21 @@ async def pull(
         for o in await _manualOverrides(db, medtechId, cutoff, lastSyncedAt)
         if (row := _overrideRow(o)) is not None
     ]
+    fieldRows = (
+        [_fieldRow(f) for f in await _resultFields(db, medtechId, cutoff, lastSyncedAt)]
+        if fieldsOn
+        else []
+    )
     removed = (
-        await _removals(db, medtechId, cutoff, lastSyncedAt)
+        await _removals(db, medtechId, cutoff, lastSyncedAt, includeFields=fieldsOn)
         if lastSyncedAt is not None
-        else {"specimens": [], "queueAssignments": [], "analysisResults": [], "manualOverrides": []}
+        else {
+            "specimens": [],
+            "queueAssignments": [],
+            "analysisResults": [],
+            "manualOverrides": [],
+            "resultFields": [],
+        }
     )
 
     def makeChanges(records: list, table: str) -> dict:
@@ -397,32 +471,35 @@ async def pull(
             "deleted": removed[table],
         }
 
-    if specimenRows or resultRows or overrideRows:
+    if specimenRows or resultRows or overrideRows or fieldRows:
         # RA 10173: record which patients' samples and results this device
         # received, in the request's transaction.
+        detail: dict[str, Any] = {
+            "delta": isDelta,
+            "specimen_ids": [s["id"] for s in specimenRows],
+            "result_ids": [r["id"] for r in resultRows],
+            "override_ids": [o["id"] for o in overrideRows],
+            "removed_specimen_ids": removed["specimens"],
+        }
+        if fieldsOn:
+            detail["field_ids"] = [f["fieldId"] for f in fieldRows]
         await AuditLogger().record(
             eventType="SYNC_PULLED",
             entityType="user",
             entityId=userId,
             userId=userId,
             db=db,
-            detailJson={
-                "delta": isDelta,
-                "specimen_ids": [s["id"] for s in specimenRows],
-                "result_ids": [r["id"] for r in resultRows],
-                "override_ids": [o["id"] for o in overrideRows],
-                "removed_specimen_ids": removed["specimens"],
-            },
+            detailJson=detail,
             request=request,
         )
         await db.commit()
 
-    return {
-        "timestamp": now.isoformat(),
-        "changes": {
-            "specimens":        makeChanges(specimenRows, "specimens"),
-            "queueAssignments": makeChanges(assignmentRows, "queueAssignments"),
-            "analysisResults":  makeChanges(resultRows, "analysisResults"),
-            "manualOverrides":  makeChanges(overrideRows, "manualOverrides"),
-        },
+    changes = {
+        "specimens":        makeChanges(specimenRows, "specimens"),
+        "queueAssignments": makeChanges(assignmentRows, "queueAssignments"),
+        "analysisResults":  makeChanges(resultRows, "analysisResults"),
+        "manualOverrides":  makeChanges(overrideRows, "manualOverrides"),
     }
+    if fieldsOn:
+        changes["resultFields"] = makeChanges(fieldRows, "resultFields")
+    return {"timestamp": now.isoformat(), "changes": changes}
