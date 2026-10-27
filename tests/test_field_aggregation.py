@@ -392,3 +392,80 @@ def test_aLegacyResultNeedsItsFieldThenItsFindings():
 def test_theMinimumComesFromTheArgument():
     assert _block(acceptedCount=3, verifiedCount=3, minFields=3) is None
     assert _block(acceptedCount=3, verifiedCount=3, minFields=4) == "FIELDS_BELOW_MINIMUM"
+
+
+# ══ The one mapper from the stored field_summary to the contract shape (W4) ══
+
+from src.services.field_aggregation_service import (  # noqa: E402
+    SINGLE_IMAGE_LABEL,
+    countsLabelFor,
+    toContractFieldSummary,
+)
+
+
+def _stored():
+    return storedFieldSummary(aggregate(_accepted(AI_RBC, EFFECTIVE_RBC), {}))
+
+
+def test_theMapperGivesTheContractShapeWithADisplayValuePerClass():
+    contract = toContractFieldSummary(_stored())
+    assert contract["fieldCount"] == 10
+    rbc = contract["perClass"]["erythrocytes"]
+    assert rbc == {
+        "mean": 3.8, "min": 1, "max": 6, "total": 38, "fieldsSeen": 10, "aiMean": 4.1,
+        "displayValue": "4", "fieldsAboveNormal": [],
+    }
+    assert contract["focalFindings"] == []
+
+
+def test_theMapperShowsALessThanOneAndNeverZeroForASeenParticle():
+    counts = [1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+    contract = toContractFieldSummary(storedFieldSummary(aggregate(_accepted(counts, counts, "urinary_casts"), {})))
+    assert contract["perClass"]["urinary_casts"]["displayValue"] == "<1"
+    assert contract["perClass"]["urinary_casts"]["mean"] == 0.3
+
+
+def test_theMapperCarriesFocalFindingsAndTheFieldsAboveNormal():
+    counts = [0] * 9 + [7]
+    contract = toContractFieldSummary(
+        storedFieldSummary(aggregate(_accepted(counts, counts, "crystals"), {"crystals": 5})))
+    assert contract["focalFindings"] == [{"particleType": "crystals", "fieldNos": [10]}]
+    assert contract["perClass"]["crystals"]["fieldsAboveNormal"] == [10]
+
+
+@pytest.mark.parametrize("stored", [None, {}, [], "x", 5, {"fieldCount": 3}, {"perClass": {}},
+                                    {"perClass": "nope"}, {"perClass": {"yeast": "nope"}}])
+def test_aMissingOrMalformedSummaryMapsToNone(stored):
+    assert toContractFieldSummary(stored) is None
+
+
+def test_theMapperToleratesMissingKeysInsideTheSummary():
+    contract = toContractFieldSummary({"perClass": {"yeast": {"mean": 2.5}}})
+    assert contract["fieldCount"] == 0
+    assert contract["perClass"]["yeast"]["displayValue"] == "3"
+    assert contract["perClass"]["yeast"]["fieldsSeen"] == 0 and contract["focalFindings"] == []
+
+
+def test_theMapperIgnoresMalformedFocalEntries():
+    stored = _stored() | {"focalFindings": ["x", {"particleType": 5}, {"particleType": "crystals", "fieldNos": [3, "a"]}]}
+    assert toContractFieldSummary(stored)["focalFindings"] == [{"particleType": "crystals", "fieldNos": [3]}]
+
+
+def test_theMapperDoesNotChangeTheStoredSummary():
+    stored = _stored()
+    before = str(stored)
+    toContractFieldSummary(stored)
+    assert str(stored) == before
+
+
+def test_theContractShapeValidatesAgainstTheSchema():
+    from src.schemas.field import FieldSummary
+    assert FieldSummary(**toContractFieldSummary(_stored())).perClass["erythrocytes"].displayValue == "4"
+
+
+@pytest.mark.parametrize(("count", "label"), [
+    (10, "average per field (10 fields)"), (12, "average per field (12 fields)"),
+    (1, "average per field (1 field)")])
+def test_theCountsLabel(count, label):
+    assert countsLabelFor(count) == label
+    assert SINGLE_IMAGE_LABEL == "single image"

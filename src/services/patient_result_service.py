@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
+from src.core.config import settings
 from src.core.particle_counts import settledCounts, toWholeCount
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
@@ -22,6 +23,11 @@ from src.schemas.patient_portal import (
     ParticleCount,
     PatientResultDetailResponse,
     PatientResultItem,
+)
+from src.services.field_aggregation_service import (
+    SINGLE_IMAGE_LABEL,
+    countsLabelFor,
+    toContractFieldSummary,
 )
 
 # Status shown to a patient for a result that hasn't reached RELEASED yet —
@@ -165,6 +171,27 @@ class PatientResultService:
             for label in PARTICLE_LABELS
         ]
 
+        # Multi-field results: show the average per field, with how it was averaged. A
+        # particle seen but averaging under 0.5 reads "<1", never 0. A result from before
+        # multi-field is labelled as one image; everything else is shown as before.
+        fieldCount: int | None = None
+        countsLabel: str | None = None
+        if settings.fieldWorkflowEnabled:
+            contract = toContractFieldSummary(row.fieldSummary)
+            if contract is not None:
+                shown = contract["perClass"]
+                particleCounts = [
+                    ParticleCount(
+                        label=pc.label, count=pc.count,
+                        displayValue=shown.get(pc.label, {}).get("displayValue", "0"),
+                    )
+                    for pc in particleCounts
+                ]
+                fieldCount = contract["fieldCount"]
+                countsLabel = countsLabelFor(fieldCount)
+            elif row.isLegacySingleField:
+                fieldCount, countsLabel = 1, SINGLE_IMAGE_LABEL
+
         # Extract particle_classes — stored as JSONB (dict or list)
         rawClasses = row.particleClasses or {}
         if isinstance(rawClasses, list):
@@ -203,4 +230,6 @@ class PatientResultService:
             smartDiagnosisUnavailable=bool(row.smartDiagnosisUnavailable),
             testType="Urinalysis",
             releasedAt=row.releasedAt,
+            fieldCount=fieldCount,
+            countsLabel=countsLabel,
         )

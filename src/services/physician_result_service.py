@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
+from src.core.config import settings
 from src.core.encryption import decryptPii
 from src.core.enums import UserRole
 from src.core.exceptions import NotFoundException
@@ -31,6 +32,11 @@ from src.schemas.physician import (
     PhysicianResultListResponse,
     PhysicianResultSummary,
     SmartDiagnosisDetail,
+)
+from src.services.field_aggregation_service import (
+    SINGLE_IMAGE_LABEL,
+    countsLabelFor,
+    toContractFieldSummary,
 )
 
 _PHT = timezone(timedelta(hours=8))
@@ -334,6 +340,23 @@ class PhysicianResultService:
 
         await self.db.commit()
 
+        # Multi-field results carry the averages with how they were taken, and their field
+        # flags replace the single-image anomalies. A result from before multi-field is
+        # labelled as one image. Without a field summary the response is what it was.
+        flaggedAnomalies = ar.flaggedAnomalies or {}
+        fieldExtras: dict = {}
+        if settings.fieldWorkflowEnabled:
+            contract = toContractFieldSummary(ar.fieldSummary)
+            if contract is not None:
+                flaggedAnomalies = {}
+                fieldExtras = {
+                    "fieldCount": contract["fieldCount"],
+                    "countsLabel": countsLabelFor(contract["fieldCount"]),
+                    "fieldSummary": contract,
+                }
+            elif ar.isLegacySingleField:
+                fieldExtras = {"fieldCount": 1, "countsLabel": SINGLE_IMAGE_LABEL}
+
         return PhysicianResultDetail(
             resultId=str(ar.resultId),
             specimenId=str(ar.specimenId) if ar.specimenId else "",
@@ -346,11 +369,12 @@ class PhysicianResultService:
             medtechName=medtechName,
             confirmedAt=ar.confirmedAt.isoformat() if ar.confirmedAt else None,
             aiFindings=ar.aiFindings or {},
-            flaggedAnomalies=ar.flaggedAnomalies or {},
+            flaggedAnomalies=flaggedAnomalies,
             particleClasses=ar.particleClasses or {},
             modelVersion=ar.modelVersion or "",
             smartDiagnosis=smartDiagnosis,
             imageUrl=imageUrl,
             status=ar.status,
             annotationNotes=annotationNotes,
+            **fieldExtras,
         )

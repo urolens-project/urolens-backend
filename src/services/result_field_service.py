@@ -151,6 +151,79 @@ def summaryItem(
     )
 
 
+async def fieldIdsWithCurrentEdits(
+    db: AsyncSession, fieldIds: Sequence[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Which of `fieldIds` have box edits that have not been superseded."""
+    if not fieldIds:
+        return set()
+    rows = await db.execute(
+        select(FieldAnnotationEdit.fieldId)
+        .where(
+            FieldAnnotationEdit.fieldId.in_(fieldIds),
+            FieldAnnotationEdit.supersededAt.is_(None),
+        )
+        .distinct()
+    )
+    return set(rows.scalars().all())
+
+
+async def overrideRowsByField(
+    db: AsyncSession, fieldIds: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[ManualOverride]]:
+    """Every override and revert row of the given fields, oldest first, grouped by field."""
+    if not fieldIds:
+        return {}
+    rows = (
+        await db.execute(
+            select(ManualOverride)
+            .where(ManualOverride.fieldId.in_(fieldIds))
+            .order_by(ManualOverride.overriddenAt)
+        )
+    ).scalars().all()
+    grouped: dict[uuid.UUID, list[ManualOverride]] = {}
+    for row in rows:
+        if row.fieldId is not None:
+            grouped.setdefault(row.fieldId, []).append(row)
+    return grouped
+
+
+async def buildFieldSummaries(db: AsyncSession, resultId: uuid.UUID) -> list[FieldSummaryItem]:
+    """Every field of a result as list items, in capture order, without detections.
+
+    Three queries (the fields with their image keys, the edits, the overrides) and one
+    batched image-sign call, whatever the field count. Flags are computed against the
+    means of the ACCEPTED fields. No access check: the callers do their own.
+    """
+    rows = (
+        await db.execute(
+            select(ResultField, Image.storageKey)
+            .join(Image, Image.imageId == ResultField.imageId)
+            .where(ResultField.resultId == resultId)
+            .order_by(ResultField.fieldNo)
+        )
+    ).all()
+    fields = [field for field, _ in rows]
+    fieldIds = [field.fieldId for field in fields]
+
+    urls = await signedImageUrls([key for _, key in rows])
+    editedIds = await fieldIdsWithCurrentEdits(db, fieldIds)
+    overridesByField = await overrideRowsByField(db, fieldIds)
+
+    means = acceptedMeans(fields)
+    thresholds = flagThresholds()
+    return [
+        summaryItem(
+            field,
+            urls.get(key) if key else None,
+            flagModels(field, means, thresholds),
+            field.fieldId in editedIds,
+            activeOverrideRows(overridesByField.get(field.fieldId, [])),
+        )
+        for field, key in rows
+    ]
+
+
 async def loadAcceptedFields(db: AsyncSession, resultId: uuid.UUID) -> list[ResultField]:
     """The result's ACCEPTED fields in capture order (detections are not loaded)."""
     return list(
@@ -356,42 +429,16 @@ class ResultFieldService:
             self.db, result.specimenId, uuid.UUID(claims["user_id"]), claims["role"]
         )
 
-        rows = (
-            await self.db.execute(
-                select(ResultField, Image.storageKey)
-                .join(Image, Image.imageId == ResultField.imageId)
-                .where(ResultField.resultId == resultId)
-                .order_by(ResultField.fieldNo)
-            )
-        ).all()
-        fields = [field for field, _ in rows]
-        fieldIds = [field.fieldId for field in fields]
-
-        urls = await signedImageUrls([key for _, key in rows])
-        editedIds = await self._fieldIdsWithCurrentEdits(fieldIds)
-        overridesByField = await self._overrideRowsByField(fieldIds)
-
-        means = acceptedMeans(fields)
-        thresholds = flagThresholds()
-        items = [
-            summaryItem(
-                field,
-                urls.get(key) if key else None,
-                flagModels(field, means, thresholds),
-                field.fieldId in editedIds,
-                activeOverrideRows(overridesByField.get(field.fieldId, [])),
-            )
-            for field, key in rows
-        ]
+        items = await buildFieldSummaries(self.db, resultId)
         return FieldListResponse(
             resultId=resultId,
             resultStatus=result.status,  # type: ignore[arg-type]
             minFields=settings.minFieldsPerSpecimen,
-            acceptedFieldCount=sum(f.status == FieldStatus.ACCEPTED for f in fields),
+            acceptedFieldCount=sum(i.status == FieldStatus.ACCEPTED for i in items),
             verifiedFieldCount=sum(
-                f.status == FieldStatus.ACCEPTED and f.verifiedBy is not None for f in fields
+                i.status == FieldStatus.ACCEPTED and i.verifiedBy is not None for i in items
             ),
-            undecidedFieldCount=sum(f.status == FieldStatus.ANALYZED for f in fields),
+            undecidedFieldCount=sum(i.status == FieldStatus.ANALYZED for i in items),
             items=items,
         )
 
@@ -691,32 +738,9 @@ class ResultFieldService:
     # ── Queries ──────────────────────────────────────────────────────────────
 
     async def _fieldIdsWithCurrentEdits(self, fieldIds: Sequence[uuid.UUID]) -> set[uuid.UUID]:
-        if not fieldIds:
-            return set()
-        rows = await self.db.execute(
-            select(FieldAnnotationEdit.fieldId)
-            .where(
-                FieldAnnotationEdit.fieldId.in_(fieldIds),
-                FieldAnnotationEdit.supersededAt.is_(None),
-            )
-            .distinct()
-        )
-        return set(rows.scalars().all())
+        return await fieldIdsWithCurrentEdits(self.db, fieldIds)
 
     async def _overrideRowsByField(
         self, fieldIds: Sequence[uuid.UUID]
     ) -> dict[uuid.UUID, list[ManualOverride]]:
-        if not fieldIds:
-            return {}
-        rows = (
-            await self.db.execute(
-                select(ManualOverride)
-                .where(ManualOverride.fieldId.in_(fieldIds))
-                .order_by(ManualOverride.overriddenAt)
-            )
-        ).scalars().all()
-        grouped: dict[uuid.UUID, list[ManualOverride]] = {}
-        for row in rows:
-            if row.fieldId is not None:
-                grouped.setdefault(row.fieldId, []).append(row)
-        return grouped
+        return await overrideRowsByField(self.db, fieldIds)

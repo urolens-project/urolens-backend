@@ -1168,6 +1168,36 @@
         "title": "FieldStatus",
         "type": "string"
       },
+      "FieldSummary": {
+        "description": "A result's stored field summary as the contract shows it: per-class statistics over\nthe accepted fields (exact means, plus `displayValue`) and the focal findings.",
+        "properties": {
+          "fieldCount": {
+            "title": "Fieldcount",
+            "type": "integer"
+          },
+          "focalFindings": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FocalFinding"
+            },
+            "title": "Focalfindings",
+            "type": "array"
+          },
+          "perClass": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ParticleAggregate"
+            },
+            "title": "Perclass",
+            "type": "object"
+          }
+        },
+        "required": [
+          "fieldCount",
+          "perClass"
+        ],
+        "title": "FieldSummary",
+        "type": "object"
+      },
       "FieldSummaryItem": {
         "description": "One row of `GET /results/{id}/fields`. Never carries detections.",
         "properties": {
@@ -1314,6 +1344,28 @@
         "title": "FieldSummaryItem",
         "type": "object"
       },
+      "FocalFinding": {
+        "description": "A class that is above its normal maximum in one or more fields even though\nthe average may look normal.",
+        "properties": {
+          "fieldNos": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fieldnos",
+            "type": "array"
+          },
+          "particleType": {
+            "title": "Particletype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "particleType",
+          "fieldNos"
+        ],
+        "title": "FocalFinding",
+        "type": "object"
+      },
       "Magnification": {
         "description": "Objective used for a field. Recorded now, not yet used in the averages.",
         "enum": [
@@ -1385,17 +1437,13 @@
       "fieldSummary": {
         "anyOf": [
           {
-            "additionalProperties": {
-              "$ref": "#/$defs/ParticleAggregate"
-            },
-            "type": "object"
+            "$ref": "#/$defs/FieldSummary"
           },
           {
             "type": "null"
           }
         ],
-        "default": null,
-        "title": "Fieldsummary"
+        "default": null
       },
       "fields": {
         "items": {
