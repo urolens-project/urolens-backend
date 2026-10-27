@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.audit_logger import AuditLogger
 from src.core.particle_counts import settledCounts, toWholeCount
 from src.models.analysis_result import AnalysisResult
+from src.models.lab_request import LabRequest
 from src.models.patient import Patient
 from src.models.result_view import ResultView
 from src.models.specimen import Specimen
@@ -183,11 +184,20 @@ class PatientResultService:
             medtech = await self.db.get(User, spec.medtechId)
             analyzedBy = medtech.username if medtech else None
 
+        # LabRequest.physicianName is set at creation time (see
+        # lab_request_service.createLabRequest) — unlike medtechName above,
+        # it's not a dead column, so no User fallback lookup is needed here.
+        requestingPhysician: str | None = None
+        if spec is not None and spec.labRequestId:
+            labRequest = await self.db.get(LabRequest, spec.labRequestId)
+            requestingPhysician = labRequest.physicianName if labRequest else None
+
         return PatientResultDetailResponse(
             status=row.status,
             confirmedAt=row.confirmedAt,
             confirmationNotes=row.interpretation,
             analyzedBy=analyzedBy,
+            requestingPhysician=requestingPhysician,
             particleCounts=particleCounts,
             particleClasses=particleClasses,
             smartDiagnosisUnavailable=bool(row.smartDiagnosisUnavailable),

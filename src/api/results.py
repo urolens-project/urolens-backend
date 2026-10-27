@@ -98,9 +98,14 @@ async def getConfirmationService(
 async def getOverrideService(
     db: AsyncSession = Depends(getDb),
     auditLogger: AuditLogger = Depends(getAuditLogger),
+    _notifService: NotificationService = Depends(getNotifService),
 ) -> ManualOverrideService:
-    """FastAPI dependency constructing a request-scoped `ManualOverrideService`."""
-    return ManualOverrideService(db=db, auditLogger=auditLogger)
+    """FastAPI dependency constructing a request-scoped `ManualOverrideService`,
+    wiring up its `SmartDiagnosisService` collaborator so an override
+    re-derives the diagnosis instead of leaving it stale.
+    """
+    _smartDiag = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notifService)
+    return ManualOverrideService(db=db, auditLogger=auditLogger, smartDiagnosisService=_smartDiag)
 
 
 async def getResultReviewService(
@@ -109,7 +114,13 @@ async def getResultReviewService(
     _notifService: NotificationService = Depends(getNotifService),
 ) -> ResultReviewService:
     """FastAPI dependency constructing a request-scoped `ResultReviewService`."""
-    return ResultReviewService(db=db, auditLogger=auditLogger, _notifService=_notifService)
+    _smartDiag = SmartDiagnosisService(auditLogger=auditLogger, _notifService=_notifService)
+    return ResultReviewService(
+        db=db,
+        auditLogger=auditLogger,
+        _notifService=_notifService,
+        _smartDiagnosisService=_smartDiag,
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
