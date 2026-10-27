@@ -42,6 +42,7 @@ from typing import Any, Protocol
 
 from fastapi import Request, UploadFile
 from PIL import Image as PILImage
+from PIL import ImageOps
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +51,9 @@ from ..core.config import settings
 from ..core.exceptions import (
     AIAnalysisError,
     ConflictException,
+    ImageExposureError,
     ImageFormatError,
+    ImageNotMicroscopyError,
     ImageResolutionError,
     ImageTooLargeError,
     StorageError,
@@ -80,6 +83,22 @@ MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 # spare; the AI model downsizes to ~640 px anyway, so bigger buys nothing.
 # Migration 0043 sets the same limit on the storage bucket — keep them equal.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+# EXIF Orientation (tag 0x0112): 1 is upright; 2-8 mean the pixels must be
+# flipped and/or rotated to display upright, and 5-8 also swap width and height.
+_EXIF_ORIENTATION = 0x0112
+_TRANSPOSED_ORIENTATIONS = frozenset(range(2, 9))
+_SIDEWAYS_ORIENTATIONS = frozenset({5, 6, 7, 8})
+# A rotated JPEG has to be re-compressed (its original quantization can't be
+# kept once the pixels move); 95 is visually lossless for microscopy fields.
+_ROTATED_JPEG_QUALITY = 95
+
+# Engine input-gate codes (urolens_ai ImageValidationError.code) that mean the
+# picture itself is unusable: the MedTech must retake it, not retry it.
+_GATE_ERRORS: dict[str, type[ImageNotMicroscopyError] | type[ImageExposureError]] = {
+    "NOT_MICROSCOPY": ImageNotMicroscopyError,
+    "IMAGE_EXPOSURE": ImageExposureError,
+}
 
 
 class EngineInference(Protocol):
@@ -155,6 +174,10 @@ class AIIntegrationService:
                 been submitted, approved or released; `CONSENT_REFUSED`, if
                 the patient refused consent to processing.
             ImageResolutionError: `INVALID_IMAGE_RESOLUTION`, if below 640x480.
+            ImageNotMicroscopyError: `IMAGE_NOT_MICROSCOPY` (422), if the AI
+                engine's input gate says it isn't a microscope image.
+            ImageExposureError: `IMAGE_EXPOSURE` (422), if the gate says it is
+                too dark, blown out, or mostly black.
             AIAnalysisError: `AI_ANALYSIS_FAILED` (503), if AI inference failed.
             StorageError: `STORAGE_ERROR` (503), if the image couldn't be stored.
         """
@@ -276,17 +299,24 @@ class AIIntegrationService:
         return specimen
 
     async def _validateImage(self, rawBytes: bytes, contentType: str) -> tuple[int, int]:
-        """Return (width, height) of a genuine JPEG/PNG matching `contentType`.
+        """Return the upright (width, height) of a genuine JPEG/PNG matching `contentType`.
 
         Pillow is limited to the JPEG and PNG decoders: without `formats=`
         it sniffs the bytes and runs whichever parser matches (EPS, GD,
         JPEG2000, ...), whatever `Content-Type` claimed (security audit
         F-05). Synchronous — runs in a thread so it can't stall the loop.
+
+        The size is the one the image has once turned upright, which is how
+        `_stripMetadata` stores it and how the AI engine sees it: a photo whose
+        EXIF orientation says "rotate 90°" has its width and height swapped.
         """
 
         def _readHeader() -> tuple[str | None, tuple[int, int]]:
             img = PILImage.open(io.BytesIO(rawBytes), formats=list(MIME_TO_FORMAT.values()))
-            return img.format, img.size
+            width, height = img.size
+            if img.getexif().get(_EXIF_ORIENTATION, 1) in _SIDEWAYS_ORIENTATIONS:
+                width, height = height, width
+            return img.format, (width, height)
 
         try:
             actualFormat, (width, height) = await asyncio.to_thread(_readHeader)
@@ -315,14 +345,21 @@ class AIIntegrationService:
         return f"specimens/{specimenId}/images/{imageId}.{ext}"
 
     async def _stripMetadata(self, rawBytes: bytes, contentType: str) -> bytes:
-        """Return the image re-encoded without metadata (EXIF, PNG text chunks).
+        """Return the image upright and re-encoded without metadata (EXIF, PNG text chunks).
 
         The app strips location and device details before uploading, but the
         server can't rely on that (an old app version, a direct API call), and
         a MedTech's phone location has no place in a patient's record
-        (RA 10173). JPEGs keep their original quantization (`quality="keep"`),
-        so the pixels don't lose quality; the colour profile is kept. Runs in a
-        thread — decoding is CPU-bound.
+        (RA 10173). The colour profile is kept. Runs in a thread — decoding is
+        CPU-bound.
+
+        An image whose EXIF orientation isn't upright is rotated or flipped
+        into its upright pixels first. Dropping the tag without doing so would
+        store it sideways, and the AI engine (which applies the tag itself)
+        would then report boxes that don't line up with the stored image. Such
+        a JPEG is re-compressed at `_ROTATED_JPEG_QUALITY`; any other JPEG keeps
+        its original quantization (`quality="keep"`), so its pixels don't lose
+        quality.
 
         Raises:
             ImageFormatError: `INVALID_IMAGE_FORMAT`, if the image can't be decoded.
@@ -335,10 +372,16 @@ class AIIntegrationService:
             with PILImage.open(io.BytesIO(rawBytes), formats=[fmt]) as img:
                 img.load()
                 options: dict[str, Any] = {"icc_profile": img.info.get("icc_profile")}
-                if fmt == "JPEG":
-                    options.update(quality="keep", subsampling="keep")
+                if img.getexif().get(_EXIF_ORIENTATION, 1) in _TRANSPOSED_ORIENTATIONS:
+                    toSave = ImageOps.exif_transpose(img)
+                    if fmt == "JPEG":
+                        options.update(quality=_ROTATED_JPEG_QUALITY)
+                else:
+                    toSave = img
+                    if fmt == "JPEG":
+                        options.update(quality="keep", subsampling="keep")
                 out = io.BytesIO()
-                img.save(out, format=fmt, **options)
+                toSave.save(out, format=fmt, **options)
                 return out.getvalue()
 
         try:
@@ -475,14 +518,24 @@ class AIIntegrationService:
         """Run YOLOv8 inference and return the engine's `InferenceResult` as is.
 
         Raises:
-            AIAnalysisError: `AI_ANALYSIS_FAILED`, if inference didn't run (the
-                engine erroring, its weights missing, the package absent).
+            ImageNotMicroscopyError: `IMAGE_NOT_MICROSCOPY` (422), if the engine's
+                input gate says the picture isn't a urine microscopy image.
+            ImageExposureError: `IMAGE_EXPOSURE` (422), if the gate says it is too
+                dark, blown out, or mostly black (phone too far from the eyepiece).
+                Both mean the same picture will never pass: retake, don't retry.
+            AIAnalysisError: `AI_ANALYSIS_FAILED` (503), if inference didn't run
+                for any other reason (the engine erroring, its weights missing,
+                the package absent).
         """
         try:
             from urolens_ai import infer  # type: ignore[import]
 
             return await asyncio.to_thread(infer, imageBytes)
         except Exception as exc:
+            gateError = _GATE_ERRORS.get(getattr(exc, "code", None))
+            if gateError is not None:
+                log.info("AI input gate rejected the image for specimen %s: %s", specimenId, exc)
+                raise gateError() from exc
             log.warning("AI inference failed for specimen %s: %s", specimenId, exc, exc_info=True)
             raise AIAnalysisError() from exc
 
