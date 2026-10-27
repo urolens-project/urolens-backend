@@ -23,7 +23,13 @@ ParticleCounts = dict[str, float]
 """Class name to count. Integers per field; averages can be decimals."""
 
 FieldFlagReason = Literal["LOW_CONFIDENCE", "OUTLIER_COUNT", "ABOVE_NORMAL_MAX"]
-BlockingReason = Literal["FIELDS_BELOW_MINIMUM", "FIELDS_NOT_VERIFIED"]
+BlockingReason = Literal[
+    "RESULT_NOT_CONFIRMABLE",
+    "LEGACY_NO_FIELD",
+    "LEGACY_NO_FINDINGS",
+    "FIELDS_BELOW_MINIMUM",
+    "FIELDS_NOT_VERIFIED",
+]
 
 
 def _checkParticleType(value: str) -> str:

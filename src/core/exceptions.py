@@ -266,6 +266,28 @@ class OverrideInForceError(ConflictException):
         super().__init__(code="OVERRIDE_IN_FORCE", message=message)
 
 
+class LegacyNoFieldError(ConflictException):
+    """409 `LEGACY_NO_FIELD` — a single-image result from before multi-field has no
+    accepted field to confirm. The only way forward is to reject the specimen."""
+
+    def __init__(
+        self, message: str = "This result has no image to confirm. Reject the specimen instead."
+    ) -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="LEGACY_NO_FIELD", message=message)
+
+
+class LegacyNoFindingsError(ConflictException):
+    """409 `LEGACY_NO_FINDINGS` — a single-image result has no AI findings and no
+    manual count, so confirming it would report nothing. Reject the specimen instead."""
+
+    def __init__(
+        self, message: str = "This result has no findings to confirm. Reject the specimen instead."
+    ) -> None:
+        """Build the 409 with `message` as the client-facing detail."""
+        super().__init__(code="LEGACY_NO_FINDINGS", message=message)
+
+
 class FieldsUndecidedError(ConflictException):
     """409 `FIELDS_UNDECIDED` — fields are still waiting for Proceed or Discard."""
 
