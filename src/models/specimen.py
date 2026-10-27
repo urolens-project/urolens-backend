@@ -16,6 +16,7 @@ from .base import Base
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
     from .image import Image
+    from .user import User
 
 # specimens.status is a native Postgres enum (type specimen_status), not a
 # plain VARCHAR — mapping it as String(30) let SQLAlchemy send status
@@ -99,6 +100,11 @@ class Specimen(Base):
     analysisResult: Mapped[AnalysisResult | None] = relationship(
         back_populates="specimen", uselist=False
     )
+    # One-directional (no back_populates — User has no relationships back to
+    # any of its FK referrers). Added so getFullResult can eager-load the
+    # assigned MedTech's username in the same query as the specimen itself,
+    # instead of a separate db.get(User, ...) round trip.
+    medtech: Mapped[User | None] = relationship(foreign_keys=[medtechId])
 
     @property
     def id(self) -> uuid.UUID:

@@ -48,6 +48,7 @@ class PatientResultDetailResponse(BaseModel):
     confirmedAt: datetime | None
     confirmationNotes: str | None
     analyzedBy: str | None
+    requestingPhysician: str | None
     particleCounts: list[ParticleCount]
     particleClasses: list[str]
     smartDiagnosisUnavailable: bool

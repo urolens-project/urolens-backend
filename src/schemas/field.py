@@ -289,7 +289,7 @@ class VerificationSummaryResponse(BaseModel):
 # ── Shapes for routes the lanes will change (schema-only for now) ────────────
 
 class FieldAnalysisResponse(BaseModel):
-    """`POST /images/upload` (201) once it adds a field instead of replacing the image."""
+    """`POST /fields` (201): the field one image upload added to a specimen."""
 
     fieldId: uuid.UUID
     fieldNo: int
@@ -340,6 +340,9 @@ class SyncResultField(BaseModel):
     confidenceScores: dict[str, float]
     imageWidth: int
     imageHeight: int
+    smartDiagnosisPreview: dict | None = None
+    """The field's own Smart Diagnosis preview, so a field captured on another
+    phone (or before a reinstall) still shows it."""
     smartDiagnosisUnavailable: bool = False
     version: int
     createdAt: datetime
