@@ -40,6 +40,24 @@
   64 → 65; `docs/contract/field-shapes.json` regenerated.
 
 ### Fixed
+- **A picture the AI engine's input gate rejects was reported as a server failure
+  (503 `AI_ANALYSIS_FAILED`), and a sideways photo was stored sideways.** Both upload
+  routes (`POST /api/v1/images/upload` and `POST /api/v1/fields`) now answer 422
+  `IMAGE_NOT_MICROSCOPY` ("This does not look like a microscope image. Retake it.") when
+  the gate says the picture isn't a urine microscopy image, and 422 `IMAGE_EXPOSURE` when
+  it is too dark, blown out or mostly black. Nothing is stored. The app can tell the
+  MedTech to retake instead of retrying the same picture, which would always fail again.
+  Every other engine failure is still 503 `AI_ANALYSIS_FAILED`. Not behind
+  `FIELD_WORKFLOW_ENABLED`.
+  A photo whose EXIF orientation isn't upright is now turned into upright pixels before
+  it is stored, and the tag dropped. Before, the tag was dropped without turning the
+  pixels, so the image was stored sideways while the engine analyses it upright, and AI
+  boxes would not line up with it. A JPEG that needs turning is re-compressed at quality
+  95; any other JPEG keeps its original quality as before. The validated width and height
+  (stored on `images`, used for field boxes) are now the upright ones, and so is the
+  640x480 minimum. A tagged sideways photo whose upright width is under 640 is therefore
+  refused with `INVALID_IMAGE_RESOLUTION` up front instead of being analysed sideways.
+  Photos from the app are unaffected: it already uploads upright pixels without the tag.
 - **A database built from migrations had no `analysis_results.ai_detections`, so every
   query loading a result failed there.** The model maps the column (AI boxes for the
   result review screens), but only the closed `feat/review-image-annotation` branch's
