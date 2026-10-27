@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
+from src.core.particle_counts import settledCounts, toWholeCount
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
 from src.models.patient import Patient
@@ -155,10 +156,12 @@ class PatientResultService:
 
         await self.db.commit()
 
-        # Normalise ai_findings → exactly 10 ParticleCount rows
-        rawFindings: dict = row.aiFindings or {}
+        # Normalise the settled counts → exactly 10 ParticleCount rows. Settled =
+        # ai_findings overlaid with particle_classes, so a MedTech correction
+        # reaches the patient (ai_findings alone ignored every override).
+        rawFindings = settledCounts(row.aiFindings, row.particleClasses)
         particleCounts = [
-            ParticleCount(label=label, count=int(rawFindings.get(label, 0)))
+            ParticleCount(label=label, count=toWholeCount(rawFindings.get(label, 0)))
             for label in PARTICLE_LABELS
         ]
 
