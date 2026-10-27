@@ -3,8 +3,10 @@ result's findings and persists the output — or, on any failure, logs the
 error and marks the result diagnosis-unavailable without propagating (T3.1).
 """
 import logging
+import math
 import traceback
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -47,8 +49,17 @@ class SmartDiagnosisService:
         self,
         resultId: uuid.UUID,
         db: AsyncSession,
+        counts: Mapping[str, int | float] | None = None,
+        allowDecimal: bool = False,
     ) -> SmartDiagnosisOutput | None:
         """Runs Smart Diagnosis for the given result.
+
+        `counts`, when given, is the input to the engine instead of the result's
+        stored findings: multi-field confirmation passes the exact mean counts, which
+        are decimals, with `allowDecimal=True`. Without `allowDecimal` a fractional
+        count is refused as it always was. The pinned engine itself rejects decimals
+        until it ships support for them; that failure takes the normal path below
+        (the diagnosis is marked unavailable and confirmation still succeeds).
 
         Runs inside a SAVEPOINT nested in the caller's transaction (`db`), so
         an engine failure rolls back only the diagnosis work, not the
@@ -69,8 +80,11 @@ class SmartDiagnosisService:
             # without aborting the parent transaction.
             async with db.begin_nested():
                 result = await self._loadResult(resultId, db)
-                effectiveCounts = {**(result.aiFindings or {}), **(result.particleClasses or {})}
-                classification = _normalizeCounts(effectiveCounts)
+                if counts is not None:
+                    classification = _normalizeCounts(counts, allowDecimal=allowDecimal)
+                else:
+                    effectiveCounts = {**(result.aiFindings or {}), **(result.particleClasses or {})}
+                    classification = _normalizeCounts(effectiveCounts)
 
                 # Call the AI Engineer's function — owned by urolens_ai package
                 from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
@@ -102,6 +116,28 @@ class SmartDiagnosisService:
             return None
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def previewDiagnosis(counts: Mapping[str, int | float]) -> tuple[dict | None, bool]:
+        """The diagnosis for `counts`, without saving anything, and whether it is unavailable.
+
+        Used by the verification summary to preview the final diagnosis on the exact
+        mean counts. Any engine failure (including the pinned engine refusing decimals)
+        gives `(None, True)`; empty counts give `(None, False)`: nothing to diagnose.
+        """
+        if not counts:
+            return None, False
+        try:
+            from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
+
+            engineOutput = generate_smart_diagnosis(_normalizeCounts(counts, allowDecimal=True))
+            return {
+                **_buildEvidenceMap(engineOutput),
+                "no_significant_indicators": engineOutput.no_significant_indicators,
+            }, False
+        except Exception as exc:
+            logger.warning("Smart Diagnosis preview failed: %s", exc)
+            return None, True
 
     async def _loadResult(
         self, resultId: uuid.UUID, db: AsyncSession
@@ -221,12 +257,33 @@ def _classifyError(exc: Exception) -> str:
     return "RULE_EVALUATION_FAILED"
 
 
-def _normalizeCounts(counts: dict[str, int | float]) -> dict[str, int]:
+def _normalizeCounts(
+    counts: Mapping[str, int | float], allowDecimal: bool = False
+) -> dict[str, int | float]:
     # Overrides are stored as integral floats; never truncate fractional counts.
+    # `allowDecimal` (multi-field mean counts) lets a finite, non-negative float
+    # through exactly as given; the default stays integers only.
     from urolens_ai.utils.exceptions import RuleEngineError
 
-    classification: dict[str, int] = {}
+    classification: dict[str, int | float] = {}
     for particle, count in counts.items():
+        if allowDecimal:
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, (int, float))
+                or count < 0
+                or (isinstance(count, float) and not math.isfinite(count))
+            ):
+                raise RuleEngineError(
+                    code="INVALID_CLASSIFICATION",
+                    message="Particle counts must be finite, non-negative numbers.",
+                )
+            # A whole-number float goes to the engine as an int (the same value); only
+            # genuinely fractional means stay floats.
+            classification[particle] = (
+                int(count) if isinstance(count, float) and count.is_integer() else count
+            )
+            continue
         if (
             isinstance(count, bool)
             or not isinstance(count, (int, float))
