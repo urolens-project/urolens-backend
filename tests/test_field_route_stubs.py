@@ -1,7 +1,9 @@
 """Unit tests — multi-field route stubs (`api/fields.py`).
 
 Flag off: 404 FEATURE_DISABLED. Flag on: 501 NOT_IMPLEMENTED. Role checks come
-first, and the flag check beats a body-validation 422.
+first, and the flag check beats a body-validation 422. Routes a lane has built
+(`BUILT_ROUTES`) keep the role and flag checks; their behaviour is tested
+with their feature.
 """
 from __future__ import annotations
 
@@ -39,6 +41,11 @@ ROUTES = [
 ]
 BODY_ROUTES = [r for r in ROUTES if r[3] is not None]
 
+# Built by a lane: no longer a stub, still behind the role and flag checks.
+BUILT_ROUTES = [
+    ("POST", "/api/v1/fields", MEDTECH, None),  # capture a field (multipart)
+]
+
 
 def _loginAs(role: str) -> None:
     app.dependency_overrides[getCurrentUser] = lambda: {"user_id": str(ID), "role": role}
@@ -54,7 +61,7 @@ def _call(client: TestClient, method: str, path: str, body):
     return client.request(method, path, json=body)
 
 
-@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES)
+@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES + BUILT_ROUTES)
 def test_flagOffAnswers404(client, monkeypatch, method, path, roles, body):
     monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
     _loginAs(roles[0])
@@ -73,7 +80,7 @@ def test_flagOnAnswers501(client, monkeypatch, method, path, roles, body):
         assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
 
 
-@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES)
+@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES + BUILT_ROUTES)
 def test_wrongRoleIsForbiddenBeforeTheFlagCheck(client, monkeypatch, method, path, roles, body):
     monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
     _loginAs("PATIENT")
@@ -83,13 +90,13 @@ def test_wrongRoleIsForbiddenBeforeTheFlagCheck(client, monkeypatch, method, pat
 def test_supervisorCannotUseMedtechOnlyRoutes(client, monkeypatch):
     monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
     _loginAs("SUPERVISOR")
-    medtechOnly = [r for r in ROUTES if r[2] == MEDTECH]
+    medtechOnly = [r for r in ROUTES + BUILT_ROUTES if r[2] == MEDTECH]
     assert medtechOnly
     for method, path, _roles, body in medtechOnly:
         assert _call(client, method, path, body).status_code == 403, path
 
 
-@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES)
+@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES + BUILT_ROUTES)
 def test_noTokenIsUnauthorized(client, method, path, roles, body):
     response = _call(client, method, path, body)
     assert response.status_code in (401, 403)
@@ -115,7 +122,7 @@ def test_everyFieldRouteHasARoleCheckAndAResponseModel():
         r for r in app.routes
         if isinstance(r, APIRoute) and "fields" in (r.tags or [])
     ]
-    assert len(fieldRoutes) == len(ROUTES)
+    assert len(fieldRoutes) == len(ROUTES) + len(BUILT_ROUTES)
     for route in fieldRoutes:
         assert route.response_model is not None, route.path
         calls = [d.call for d in route.dependant.dependencies]

@@ -38,7 +38,7 @@ import asyncio
 import io
 import logging
 import uuid
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import Request, UploadFile
 from PIL import Image as PILImage
@@ -80,6 +80,25 @@ MIME_TO_EXT = {"image/jpeg": "jpg", "image/png": "png"}
 # spare; the AI model downsizes to ~640 px anyway, so bigger buys nothing.
 # Migration 0043 sets the same limit on the storage bucket — keep them equal.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+class EngineInference(Protocol):
+    """What every engine version's `InferenceResult` carries: the counts.
+
+    Its other attributes (confidence, image size, and `detections` on newer
+    engines) are read with `getattr` and a default, since they vary by version.
+    """
+
+    particles: dict[str, int]
+
+
+def normalizeClassNames(perClass: dict[str, Any]) -> dict[str, Any]:
+    """Return `perClass` with the engine's class names in the backend's form.
+
+    The model emits dashes (`epithelial-cells`); `config.yaml`, Smart Diagnosis
+    and every stored count use underscores (`epithelial_cells`).
+    """
+    return {name.replace("-", "_"): value for name, value in perClass.items()}
 
 
 class AIIntegrationService:
@@ -379,12 +398,7 @@ class AIIntegrationService:
         PENDING_CONFIRM.
         """
         specimenId = specimen.specimenId
-        patientId = None
-        if specimen.labRequestId:
-            lrStmt = select(LabRequest.patientId).where(
-                LabRequest.labRequestId == specimen.labRequestId
-            )
-            patientId = (await self.db.execute(lrStmt)).scalar_one_or_none()
+        patientId = await self._patientIdFor(specimen)
 
         stmt = select(AnalysisResult).where(AnalysisResult.specimenId == specimenId)
         result = (await self.db.execute(stmt)).scalar_one_or_none()
@@ -420,6 +434,13 @@ class AIIntegrationService:
 
         return result
 
+    async def _patientIdFor(self, specimen: Specimen) -> uuid.UUID | None:
+        # The patient a new result is filed under: the specimen's lab request's.
+        if not specimen.labRequestId:
+            return None
+        stmt = select(LabRequest.patientId).where(LabRequest.labRequestId == specimen.labRequestId)
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
     async def _clearManualOverrides(self, resultId: uuid.UUID) -> int:
         """Delete the result's manual overrides; return how many were removed.
 
@@ -443,13 +464,24 @@ class AIIntegrationService:
         Raises:
             AIAnalysisError: `AI_ANALYSIS_FAILED`, if inference didn't run.
         """
+        inferenceResult = await self._runInference(specimenId, imageBytes)
+        try:
+            return normalizeClassNames(inferenceResult.particles)
+        except Exception as exc:
+            log.warning("AI inference returned no counts for specimen %s", specimenId, exc_info=True)
+            raise AIAnalysisError() from exc
+
+    async def _runInference(self, specimenId: uuid.UUID, imageBytes: bytes) -> EngineInference:
+        """Run YOLOv8 inference and return the engine's `InferenceResult` as is.
+
+        Raises:
+            AIAnalysisError: `AI_ANALYSIS_FAILED`, if inference didn't run (the
+                engine erroring, its weights missing, the package absent).
+        """
         try:
             from urolens_ai import infer  # type: ignore[import]
 
-            inferenceResult = await asyncio.to_thread(infer, imageBytes)
-            # Model emits dashes (epithelial-cells); config.yaml and Smart
-            # Diagnosis expect underscores (epithelial_cells).
-            return {k.replace("-", "_"): v for k, v in inferenceResult.particles.items()}
+            return await asyncio.to_thread(infer, imageBytes)
         except Exception as exc:
             log.warning("AI inference failed for specimen %s: %s", specimenId, exc, exc_info=True)
             raise AIAnalysisError() from exc
@@ -469,16 +501,7 @@ class AIIntegrationService:
         confirmation runs it again and clears the flag if it succeeds.
         """
         try:
-            from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
-
-            from .smart_diagnosis_service import _buildEvidenceMap
-
-            engineOutput = generate_smart_diagnosis(findings)
-            evidenceMap = _buildEvidenceMap(engineOutput)
-            smartDiagnosis = {
-                **evidenceMap,
-                "no_significant_indicators": engineOutput.no_significant_indicators,
-            }
+            smartDiagnosis = self._computeSmartDiagnosis(findings)
             result.smartDiagnosis = smartDiagnosis
             await self.db.flush([result])
             return smartDiagnosis
@@ -488,3 +511,21 @@ class AIIntegrationService:
             )
             result.smartDiagnosisUnavailable = True
             return None
+
+    @staticmethod
+    def _computeSmartDiagnosis(findings: dict) -> dict:
+        """Run the rule engine on `findings` and return the stored diagnosis shape.
+
+        Raises:
+            Exception: whatever the engine raises; callers decide whether that is
+                fatal (it never is at upload time).
+        """
+        from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
+
+        from .smart_diagnosis_service import _buildEvidenceMap
+
+        engineOutput = generate_smart_diagnosis(findings)
+        return {
+            **_buildEvidenceMap(engineOutput),
+            "no_significant_indicators": engineOutput.no_significant_indicators,
+        }

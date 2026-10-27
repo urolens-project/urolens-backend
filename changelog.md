@@ -18,6 +18,26 @@
   `FEATURE_DISABLED` (flag off) or 501 `NOT_IMPLEMENTED` (flag on) until the mobile and
   web lanes fill them in. Client-facing shapes: `docs/contract/field-shapes.json`.
   Needs the B1 baseline migrations (`0000`, `0046`) first.
+- **With `FIELD_WORKFLOW_ENABLED` on, the phone captures fields through a new
+  `POST /api/v1/fields`, and the single-image upload tells old apps to update.** The
+  new route takes the same multipart form as the upload (`specimen_id`, `file`) plus an
+  optional `magnification` (`HPF` default, or `LPF`), and answers 201 with
+  `FieldAnalysisResponse`: the field's number, AI counts, boxes (percent of the image,
+  ids assigned by the backend; empty until the engine returns detections), confidence,
+  image size, its own Smart Diagnosis preview, and the accepted-field count against
+  `MIN_FIELDS_PER_SPECIMEN`. The first field creates the result in `CAPTURING` and
+  starts the specimen; each field gets the next number (never reused) and starts
+  `ANALYZED`. Earlier images, fields and corrections are never touched. A result in any
+  other status, including a single-image result still waiting for confirmation, takes
+  no fields (409 `RESULT_NOT_EDITABLE`) until capture is reopened on the web. A box the
+  engine returns that is not finite or covers no part of the image is dropped and
+  counted in the audit row (`dropped_boxes`); the AI counts stay as the engine reported
+  them, so the web shows a class with fewer boxes than its count. With the flag on,
+  `POST /api/v1/images/upload` answers 410 `APP_UPDATE_REQUIRED` and stores nothing;
+  with it off, that route is unchanged and `POST /api/v1/fields` answers 404
+  `FEATURE_DISABLED`. New `src/services/field_capture_service.py`;
+  `AIIntegrationService` gained small shared helpers and no behaviour change. Routes
+  64 → 65; `docs/contract/field-shapes.json` regenerated.
 
 ### Fixed
 - **A fresh install of the AI engine made every image upload fail with
