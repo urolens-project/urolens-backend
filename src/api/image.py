@@ -3,6 +3,8 @@
 Routes
 ------
 POST /api/v1/images/upload              — multipart upload, returns analysis result
+                                          (410 APP_UPDATE_REQUIRED while FIELD_WORKFLOW_ENABLED
+                                          is on: fields are added via POST /api/v1/fields)
 POST /api/v1/images/{image_id}/discard  — mark image DISCARDED for retake flow
 """
 from __future__ import annotations
@@ -13,8 +15,10 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger, getAuditLogger
+from ..core.config import settings
 from ..core.database import getDb
 from ..core.enums import UserRole
+from ..core.exceptions import AppUpdateRequiredError
 from ..core.rbac import RequireRole
 from ..schemas.image import AnalysisResultResponse, ImageDiscardResponse
 from ..services.ai_integration_service import AIIntegrationService
@@ -30,6 +34,16 @@ async def getAiIntegrationService(
 ) -> AIIntegrationService:
     """FastAPI dependency constructing a request-scoped `AIIntegrationService`."""
     return AIIntegrationService(db=db, auditLogger=auditLogger)
+
+
+def refuseWhenFieldWorkflowOn() -> None:
+    """Dependency: 410 `APP_UPDATE_REQUIRED` once the multi-field workflow is on.
+
+    Only an app that predates multi-field still calls the single-image upload; it
+    must update rather than replace an image the new workflow keeps as a field.
+    """
+    if settings.fieldWorkflowEnabled:
+        raise AppUpdateRequiredError()
 
 
 async def getImageRetakeService(
@@ -51,10 +65,12 @@ async def uploadImage(
     specimen_id: uuid.UUID = Form(...),
     file: UploadFile = File(..., description="JPEG or PNG, minimum 640×480"),
     claims: dict = Depends(_medtech),
+    _retired: None = Depends(refuseWhenFieldWorkflowOn),
     _service: AIIntegrationService = Depends(getAiIntegrationService),
 ) -> AnalysisResultResponse:
     """Upload a microscopy image for a specimen and run AI inference; see
-    `AIIntegrationService.handleUpload`.
+    `AIIntegrationService.handleUpload`. Refused with 410 while the multi-field
+    workflow is on.
     """
     uploaderId = uuid.UUID(claims["user_id"])
     result = await _service.handleUpload(specimen_id, uploaderId, file, request)
