@@ -24,8 +24,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger, getAuditLogger
+from ..core.config import settings
 from ..core.database import getDb
 from ..core.enums import UserRole
+from ..core.exceptions import AppUpdateRequiredError
 from ..core.rbac import RequireRole
 from ..schemas.medtech_history import MedtechHistoryCategory, MedtechHistoryListResponse
 from ..schemas.result_review import (
@@ -57,13 +59,31 @@ from ..services.notification_service import NotificationService
 from ..services.result_confirmation_service import ResultConfirmationService
 from ..services.result_review_service import ResultReviewService, getSmartDiagnosis
 from ..services.smart_diagnosis_service import SmartDiagnosisService
-from ..services.specimen_access import requireResultReadable
+from ..services.specimen_access import isMedtech, requireResultReadable
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
 _REQUIRE_SUPERVISOR = RequireRole([UserRole.SUPERVISOR])
 _REQUIRE_MEDTECH = RequireRole([UserRole.MEDTECH])
 _REQUIRE_BOTH = RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])
+
+async def retireResultOverrideWhenFieldWorkflow(currentUser: dict = Depends(_REQUIRE_BOTH)) -> None:
+    """Dependency: the result-level override is retired while the multi-field flag is on.
+
+    Runs after the role check (403 first) and before the body is validated (410 beats 422).
+    MedTechs correct per field, supervisors return the result; a phone still on the old
+    version is told to update.
+    """
+    if settings.fieldWorkflowEnabled:
+        raise AppUpdateRequiredError()
+
+
+async def retireMedtechAnnotateWhenFieldWorkflow(currentUser: dict = Depends(_REQUIRE_BOTH)) -> None:
+    """Dependency: a MedTech's free-drawn annotation is retired while the multi-field flag is
+    on. The supervisor's annotation is unchanged. Same ordering as the override above."""
+    if settings.fieldWorkflowEnabled and isMedtech(currentUser["role"]):
+        raise AppUpdateRequiredError()
+
 
 # ── Dependency factories (DIP) ────────────────────────────────────────────────
 
@@ -151,6 +171,7 @@ async def overrideParameter(
     body: OverrideRequest,
     request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    _retired: None = Depends(retireResultOverrideWhenFieldWorkflow),
     _service: ManualOverrideService = Depends(getOverrideService),
 ) -> OverrideResponse:
     """Override a single AI-generated parameter value.
@@ -273,6 +294,7 @@ async def annotateResult(
     body: AnnotationRequest,
     request: Request,
     currentUser: dict = Depends(_REQUIRE_BOTH),
+    _retired: None = Depends(retireMedtechAnnotateWhenFieldWorkflow),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> AnnotationResponse:
     """Save the caller's annotation on a result; see `ResultReviewService.saveAnnotation`.
@@ -326,6 +348,8 @@ async def returnResult(
         userId=uuid.UUID(currentUser["user_id"]),
         reason=body.reason,
         request=request,
+        fieldId=body.fieldId,
+        particleType=body.particleType,
     )
     return ReturnResponse(**result)
 

@@ -277,6 +277,15 @@ class FocalFinding(BaseModel):
     fieldNos: list[int]
 
 
+class FieldSummary(BaseModel):
+    """A result's stored field summary as the contract shows it: per-class statistics over
+    the accepted fields (exact means, plus `displayValue`) and the focal findings."""
+
+    fieldCount: int
+    perClass: dict[str, ParticleAggregate]
+    focalFindings: list[FocalFinding] = []
+
+
 class VerificationSummaryResponse(BaseModel):
     """`GET /results/{id}/summary`: the numbers confirmation will store."""
 
@@ -328,7 +337,7 @@ class FullResultFieldAdditions(BaseModel):
 
     fields: list[FieldSummaryItem]
     fieldCount: int
-    fieldSummary: dict[str, ParticleAggregate] | None = None
+    fieldSummary: FieldSummary | None = None
 
 
 class SyncResultField(BaseModel):

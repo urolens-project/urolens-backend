@@ -453,6 +453,7 @@ class ResultConfirmationService:
 
         returnedResultIds = {ar.resultId for ar, _ in rows if ar.status == ResultStatus.RETURNED_FOR_CORRECTION}
         reasonMap: dict[uuid.UUID, str] = {}
+        returnPointers: dict[uuid.UUID, dict[str, object]] = {}
         if returnedResultIds:
             retRows = (
                 await self.db.execute(
@@ -463,6 +464,11 @@ class ResultConfirmationService:
             ).scalars().all()
             for ret in retRows:
                 reasonMap.setdefault(ret.resultId, ret.reason)
+                if settings.fieldWorkflowEnabled and ret.resultId not in returnPointers:
+                    # The latest return first (ordered newest first), same query as the reason.
+                    returnPointers[ret.resultId] = {
+                        "returnFieldId": ret.fieldId, "returnParticleType": ret.particleType,
+                    }
 
         fieldCounts = (
             await self._fieldCountsFor([ar.resultId for ar, _ in rows])
@@ -497,6 +503,7 @@ class ResultConfirmationService:
                     "status": ar.status,
                     "returnReason": reasonMap.get(ar.resultId),
                     **fieldCounts.get(ar.resultId, {}),
+                    **returnPointers.get(ar.resultId, {}),
                 }
             )
 

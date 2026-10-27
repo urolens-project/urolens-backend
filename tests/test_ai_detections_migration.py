@@ -37,9 +37,9 @@ def _render(function) -> str:
     return buffer.getvalue()
 
 
-def test_revisionSitsOn0047AsTheSingleHead(scriptDir: ScriptDirectory) -> None:
+def test_revisionSitsOn0047AndTheChainHasOneHead(scriptDir: ScriptDirectory) -> None:
     assert scriptDir.get_revision("0048").down_revision == "0047"
-    assert scriptDir.get_heads() == ["0048"]
+    assert len(scriptDir.get_heads()) == 1
 
 
 def test_upgradeAddsTheColumnOnlyWhereItIsMissing(scriptDir: ScriptDirectory) -> None:
