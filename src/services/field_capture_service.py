@@ -79,6 +79,10 @@ class FieldCaptureService(AIIntegrationService):
                 `RESULT_NOT_EDITABLE`, if its result exists and is not `CAPTURING`;
                 `CONSENT_REFUSED`, if the patient refused processing.
             ImageResolutionError: `INVALID_IMAGE_RESOLUTION`, if below 640x480.
+            ImageNotMicroscopyError: `IMAGE_NOT_MICROSCOPY` (422), if the AI
+                engine's input gate says it isn't a microscope image.
+            ImageExposureError: `IMAGE_EXPOSURE` (422), if the gate says it is
+                too dark, blown out, or mostly black.
             AIAnalysisError: `AI_ANALYSIS_FAILED` (503), if inference failed.
             StorageError: `STORAGE_ERROR` (503), if the image couldn't be stored.
         """
