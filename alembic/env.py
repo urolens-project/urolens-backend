@@ -39,7 +39,12 @@ def runMigrationsOffline() -> None:
 
 def runMigrationsOnline() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.databaseUrl
+    # An explicit `alembic -x dbUrl=...` wins. DATABASE_URL in the environment
+    # cannot redirect a run: config.py reloads `.env` with override=True, so
+    # settings always name the database in `.env` (live, on a dev machine).
+    configuration["sqlalchemy.url"] = (
+        context.get_x_argument(as_dictionary=True).get("dbUrl") or settings.databaseUrl
+    )
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

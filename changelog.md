@@ -40,6 +40,20 @@
   64 → 65; `docs/contract/field-shapes.json` regenerated.
 
 ### Fixed
+- **A database built from migrations had no `analysis_results.ai_detections`, so every
+  query loading a result failed there.** The model maps the column (AI boxes for the
+  result review screens), but only the closed `feat/review-image-annotation` branch's
+  `0046` ever created it, by hand on live. Migration `0048` adds it with
+  `ADD COLUMN IF NOT EXISTS`: a no-op on live (which has it), created everywhere else.
+  Its downgrade refuses while any result still has boxes in the column. Live's
+  `alembic_version` (`0046`) needs no stamp: this chain's `0046` only adds two foreign
+  keys live already has. **Also fixed:** `tests/test_fresh_db_build.py` passed
+  `FRESH_DB_URL` to Alembic as `DATABASE_URL`, which `.env` (reloaded with
+  `override=True`) silently replaced, so running it would have migrated the database
+  in `.env` (live on a dev machine) instead of the scratch one. `alembic/env.py` now
+  takes an explicit `-x dbUrl=...`, the test passes it and refuses a URL naming the
+  `.env` database. **Known, not fixed here:** a fresh build still stops at `0021`
+  (`relation "notifications" does not exist`); the B1 baseline does not yet cover it.
 - **A fresh install of the AI engine made every image upload fail with
   `AI_ANALYSIS_FAILED`, and nothing said why until the first upload.** The engine's
   `develop` branch renamed its detector weights to `best.pt` and added an input gate

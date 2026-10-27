@@ -60,7 +60,8 @@ def test_revisionSitsOn0046WithASingleHead(migration):
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     scriptDir = ScriptDirectory.from_config(cfg)
     assert migration.down_revision == "0046"
-    assert scriptDir.get_heads() == ["0047"]
+    # Later revisions build on 0047; the chain must still have exactly one head.
+    assert len(scriptDir.get_heads()) == 1
 
 
 @pytest.mark.parametrize("table", NEW_TABLES)
