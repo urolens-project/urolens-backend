@@ -6,6 +6,8 @@ POST /api/v1/images/upload              — multipart upload, returns analysis r
                                           (410 APP_UPDATE_REQUIRED while FIELD_WORKFLOW_ENABLED
                                           is on: fields are added via POST /api/v1/fields)
 POST /api/v1/images/{image_id}/discard  — mark image DISCARDED for retake flow
+                                          (410 APP_UPDATE_REQUIRED while FIELD_WORKFLOW_ENABLED
+                                          is on: fields are discarded via POST /api/v1/fields/{id}/discard)
 """
 from __future__ import annotations
 
@@ -39,8 +41,9 @@ async def getAiIntegrationService(
 def refuseWhenFieldWorkflowOn() -> None:
     """Dependency: 410 `APP_UPDATE_REQUIRED` once the multi-field workflow is on.
 
-    Only an app that predates multi-field still calls the single-image upload; it
-    must update rather than replace an image the new workflow keeps as a field.
+    Only an app that predates multi-field still calls the single-image upload or
+    discard; it must update rather than replace or discard an image the new
+    workflow keeps as a field.
     """
     if settings.fieldWorkflowEnabled:
         raise AppUpdateRequiredError()
@@ -97,10 +100,12 @@ async def discardImage(
     image_id: uuid.UUID,
     request: Request,
     claims: dict = Depends(_medtech),
+    _retired: None = Depends(refuseWhenFieldWorkflowOn),
     _service: ImageRetakeService = Depends(getImageRetakeService),
 ) -> ImageDiscardResponse:
     """Discard the current image so the MedTech can retake; see
-    `ImageRetakeService.discard_and_retake`.
+    `ImageRetakeService.discardAndRetake`. Refused with 410 while the multi-field
+    workflow is on.
     """
     medtechId = uuid.UUID(claims["user_id"])
     result = await _service.discardAndRetake(
