@@ -41,11 +41,10 @@ ROUTES = [
 ]
 BODY_ROUTES = [r for r in ROUTES if r[3] is not None]
 # Routes whose handlers are still stubs and answer 501 with the flag on. The rest are
-# written (read paths in test_field_read_paths.py, corrections in test_field_corrections.py);
-# the summary is a later web phase, accept and submit belong to the mobile lane.
+# written (read paths in test_field_read_paths.py, corrections in test_field_corrections.py,
+# accept, the capturing discard and submit in test_field_capture_decisions.py); the
+# summary is a later web phase.
 STILL_STUB_PATHS = {
-    f"/api/v1/fields/{ID}/accept",
-    f"/api/v1/results/{ID}/fields/submit",
     f"/api/v1/results/{ID}/summary",
 }
 STUB_ROUTES = [r for r in ROUTES if r[1] in STILL_STUB_PATHS]

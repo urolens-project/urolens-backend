@@ -1,7 +1,8 @@
 """Unit tests — multi-field corrections (web lane, W2).
 
 Box edits, per-field overrides and reverts, marking a field as checked, the web
-path of discard, and reopen-capture. The session is a small stateful fake that
+path of discard (the capturing path is in test_field_capture_decisions.py), and
+reopen-capture. The session is a small stateful fake that
 routes `execute` by the compiled SQL, so the services run end to end without a
 database.
 """
@@ -848,16 +849,6 @@ async def test_aFieldAlreadyDiscardedIsReturnedUnchanged():
 
 
 @pytest.mark.asyncio
-async def test_theCapturingPathBelongsToTheMobileLaneAndStaysUnimplemented():
-    field = mkField()
-    db = CorrectionDb(field, result=mkResult(ResultStatus.CAPTURING))
-    with pytest.raises(NotImplementedError):
-        await _discardService(db).discardField(field.fieldId, MEDTECH_ID, None, MagicMock())
-    assert field.status == FieldStatus.ACCEPTED
-    db.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [
     ResultStatus.PENDING_SUPERVISOR_APPROVAL, ResultStatus.APPROVED, ResultStatus.RELEASED,
     ResultStatus.CRITICAL_ESCALATED, ResultStatus.IMAGE_RETAKE_REQUESTED, ResultStatus.FAILED])
@@ -1078,14 +1069,6 @@ def test_theDiscardRoutePassesTheReasonOrNone(routeClient):
 
     reasons = [call.args[2] for call in service.discardField.await_args_list]
     assert reasons == ["Blurry", None]
-
-
-def test_theDiscardRouteAnswers501ForTheMobilePath(routeClient):
-    service = MagicMock(discardField=AsyncMock(side_effect=NotImplementedError))
-    app.dependency_overrides[getResultFieldService] = lambda: service
-    response = routeClient.post(f"/api/v1/fields/{uuid.uuid4()}/discard")
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
 
 
 def test_theReopenRouteCallsReopenCapture(routeClient):
