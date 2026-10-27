@@ -36,3 +36,32 @@ async def signedImageUrl(storageKey: str | None) -> str | None:
         logger.warning("Could not sign image URL for %s", storageKey, exc_info=True)
         return None
     return signed.get("signedUrl")
+
+
+async def signedImageUrls(storageKeys: list[str | None]) -> dict[str, str | None]:
+    """Issue time-limited URLs for many specimen images with one Storage call.
+
+    Same bucket and `SIGNED_IMAGE_URL_TTL_SECONDS` as `signedImageUrl`.
+
+    Returns:
+        A dict keyed by storage key. A key that is empty is skipped; a key that
+        could not be signed (or every key, if the call failed) maps to `None`.
+        Like `signedImageUrl` this never raises, and it never logs a URL (a
+        signed URL is a bearer credential for the image).
+    """
+    keys = list(dict.fromkeys(key for key in storageKeys if key))
+    if not keys:
+        return {}
+    signedByKey: dict[str, str | None] = dict.fromkeys(keys)
+    try:
+        signed = await supabase.storage.from_(settings.supabaseImageBucket).create_signed_urls(
+            keys, SIGNED_IMAGE_URL_TTL_SECONDS
+        )
+    except Exception:
+        logger.warning("Could not sign %d image URLs", len(keys), exc_info=True)
+        return signedByKey
+    for item in signed or []:
+        path = item.get("path")
+        if path in signedByKey and not item.get("error"):
+            signedByKey[path] = item.get("signedURL") or item.get("signedUrl")
+    return signedByKey

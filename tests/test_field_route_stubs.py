@@ -38,6 +38,15 @@ ROUTES = [
     ("GET", f"/api/v1/results/{ID}/summary", BOTH, None),
 ]
 BODY_ROUTES = [r for r in ROUTES if r[3] is not None]
+# Routes whose handlers are still stubs and answer 501 with the flag on. The rest are
+# written (read paths in test_field_read_paths.py, corrections in test_field_corrections.py);
+# the summary is a later web phase, accept and submit belong to the mobile lane.
+STILL_STUB_PATHS = {
+    f"/api/v1/fields/{ID}/accept",
+    f"/api/v1/results/{ID}/fields/submit",
+    f"/api/v1/results/{ID}/summary",
+}
+STUB_ROUTES = [r for r in ROUTES if r[1] in STILL_STUB_PATHS]
 
 
 def _loginAs(role: str) -> None:
@@ -63,7 +72,7 @@ def test_flagOffAnswers404(client, monkeypatch, method, path, roles, body):
     assert response.json()["error"]["code"] == "FEATURE_DISABLED"
 
 
-@pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES)
+@pytest.mark.parametrize(("method", "path", "roles", "body"), STUB_ROUTES)
 def test_flagOnAnswers501(client, monkeypatch, method, path, roles, body):
     monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
     for role in roles:

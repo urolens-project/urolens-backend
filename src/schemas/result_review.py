@@ -8,7 +8,14 @@ from datetime import datetime
 from typing import Any, Literal, get_args
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from .patient_portal import PARTICLE_LABELS
 
@@ -163,6 +170,21 @@ class MedtechPendingResultItem(BaseModel):
     returnReason: str | None = None
     """The supervisor's reason, present only when status is
     RETURNED_FOR_CORRECTION."""
+    fieldCount: int | None = None
+    """Accepted fields. Multi-field workflow only: left out of the JSON, not sent
+    as null, while `fieldWorkflowEnabled` is off, so the response is unchanged."""
+    verifiedFieldCount: int | None = None
+    """Accepted fields a MedTech has marked as checked (same omission rule)."""
+    flaggedFieldCount: int | None = None
+    """Accepted fields with at least one review flag (same omission rule)."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldCounts(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        data = handler(self)
+        for key in ("fieldCount", "verifiedFieldCount", "flaggedFieldCount"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class MedtechPendingListResponse(BaseModel):

@@ -3,6 +3,7 @@ Supervisor during review — correct a single AI-generated result parameter,
 recording both the original and corrected values.
 """
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import Request
 from sqlalchemy import select
@@ -10,11 +11,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.audit_logger import AuditLogger
 from ..core.exceptions import (
+    ConflictException,
     NotFoundException,
     UnprocessableException,
 )
 from ..models.analysis_result import AnalysisResult
-from ..models.manual_override import ManualOverride
+from ..models.manual_override import ManualOverride, OverrideKind
+from ..schemas.field import FieldActionResponse
+from .field_access import (
+    loadFieldForWrite,
+    requireFieldAccepted,
+    requireVerificationPhase,
+)
+from .field_aggregation_service import activeOverrides, computeEffectiveCounts
+from .field_correction_service import (
+    currentEdits,
+    loadDetections,
+    markCorrected,
+    overrideRowsFor,
+    overrideTuples,
+    recomputeEffective,
+)
+from .result_field_service import activeOverrideRows, buildFieldActionResponse
 from .specimen_access import (
     getAssignedSpecimen,
     isMedtech,
@@ -136,6 +154,164 @@ class ManualOverrideService:
         await self.db.commit()
         await self.db.refresh(override)
         return override
+
+    # ------------------------------------------------------------------
+    # Per-field overrides (multi-field workflow)
+    # ------------------------------------------------------------------
+
+    async def overrideFieldParameter(
+        self,
+        fieldId: uuid.UUID,
+        particleType: str,
+        correctedValue: int,
+        rationale: str,
+        medtechId: uuid.UUID,
+        request: Request,
+    ) -> FieldActionResponse:
+        """Set one class's count on one field by hand, with a reason.
+
+        The original is always the field's AI count (0 if the AI found none of the
+        class), never the client's. A value equal to the class's current effective
+        count is refused. Inserts a `kind=OVERRIDE` row with `field_id`; values are
+        stored as text like the result-level rows (`"7.0"`). While it is in force the
+        class's boxes cannot be edited. Does not touch the result-level
+        `overrideParameter` above.
+
+        Raises:
+            NotFoundException: `FIELD_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`;
+                `INVALID_FIELD_STATUS`.
+            UnprocessableException: `OVERRIDE_UNCHANGED`.
+        """
+        field, result, _specimen = await loadFieldForWrite(self.db, fieldId, medtechId)
+        requireVerificationPhase(result)
+        requireFieldAccepted(field)
+
+        current = float((field.effectiveCounts or {}).get(particleType, 0))
+        if float(correctedValue) == current:
+            raise UnprocessableException(
+                code="OVERRIDE_UNCHANGED",
+                message="The corrected value is the same as the current value.",
+            )
+
+        now = datetime.now(UTC)
+        detections = await loadDetections(self.db, field)
+        edits = await currentEdits(self.db, fieldId)
+        rows = await overrideRowsFor(self.db, fieldId)
+        originalAi = float((field.aiFindings or {}).get(particleType, 0))
+        override = ManualOverride(
+            resultId=field.resultId,
+            fieldId=fieldId,
+            medtechId=medtechId,
+            parameterName=particleType,
+            originalAiValue=str(originalAi),
+            correctedValue=str(float(correctedValue)),  # same "7.0" text format as originalAiValue
+            rationale=rationale,
+            kind=OverrideKind.OVERRIDE,
+            overriddenAt=now,
+        )
+        self.db.add(override)
+        recomputeEffective(field, detections, edits, [*rows, override])
+        markCorrected(field, medtechId, now)
+        await self.db.flush()
+
+        response = await buildFieldActionResponse(self.db, fieldId)
+        await self.auditLogger.record(
+            eventType="RESULT_OVERRIDDEN",
+            entityType="analysis_result",
+            entityId=field.resultId,
+            userId=medtechId,
+            detailJson={
+                "specimen_id": str(field.specimenId),
+                "field_id": str(fieldId),
+                "parameter": particleType,
+                "original_ai_value": originalAi,
+                "corrected_value": correctedValue,
+            },
+            db=self.db,
+            request=request,
+        )
+        await self.db.commit()
+        return response
+
+    async def revertFieldOverride(
+        self,
+        fieldId: uuid.UUID,
+        particleType: str,
+        rationale: str,
+        medtechId: uuid.UUID,
+        request: Request,
+    ) -> FieldActionResponse:
+        """End the override in force for one class of one field, with a reason.
+
+        Nothing is deleted: a `kind=REVERT` row is added and from then the class
+        counts its boxes again. The row fills the NOT NULL columns: `original_ai_value`
+        is the AI count and `corrected_value` the box-derived count the class returns to.
+
+        Raises:
+            NotFoundException: `FIELD_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`;
+                `INVALID_FIELD_STATUS`; `OVERRIDE_NOT_IN_FORCE`.
+        """
+        field, result, _specimen = await loadFieldForWrite(self.db, fieldId, medtechId)
+        requireVerificationPhase(result)
+        requireFieldAccepted(field)
+
+        rows = await overrideRowsFor(self.db, fieldId)
+        if particleType not in activeOverrideRows(rows):
+            raise ConflictException(
+                code="OVERRIDE_NOT_IN_FORCE",
+                message="There is no manual count in force for this class on this field.",
+            )
+
+        now = datetime.now(UTC)
+        detections = await loadDetections(self.db, field)
+        edits = await currentEdits(self.db, fieldId)
+        othersInForce = {
+            c: v for c, v in activeOverrides(overrideTuples(rows)).items() if c != particleType
+        }
+        boxCount = computeEffectiveCounts(
+            field.aiFindings or {},
+            detections,
+            [e.detectionId for e in edits if e.action == "REMOVED" and e.detectionId],
+            [e.particleType for e in edits if e.action == "ADDED"],
+            othersInForce,
+        ).get(particleType, 0)
+        originalAi = float((field.aiFindings or {}).get(particleType, 0))
+        revert = ManualOverride(
+            resultId=field.resultId,
+            fieldId=fieldId,
+            medtechId=medtechId,
+            parameterName=particleType,
+            originalAiValue=str(originalAi),
+            correctedValue=str(float(boxCount)),
+            rationale=rationale,
+            kind=OverrideKind.REVERT,
+            overriddenAt=now,
+        )
+        self.db.add(revert)
+        recomputeEffective(field, detections, edits, [*rows, revert])
+        markCorrected(field, medtechId, now)
+        await self.db.flush()
+
+        response = await buildFieldActionResponse(self.db, fieldId)
+        await self.auditLogger.record(
+            eventType="OVERRIDE_REVERTED",
+            entityType="analysis_result",
+            entityId=field.resultId,
+            userId=medtechId,
+            detailJson={
+                "specimen_id": str(field.specimenId),
+                "field_id": str(fieldId),
+                "parameter": particleType,
+            },
+            db=self.db,
+            request=request,
+        )
+        await self.db.commit()
+        return response
 
     # ------------------------------------------------------------------
     # Private helpers
