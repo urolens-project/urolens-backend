@@ -57,6 +57,9 @@ def _db(latestOverride: str | None = None) -> AsyncMock:
     result.status = ResultStatus.PENDING_CONFIRM
     result.aiFindings = {"erythrocytes": 7}
     result.particleClasses = {}
+    # overrideParameter also checks requireNoPendingRetake — no image
+    # attached means "not mid-retake" without a db.get(Image, ...) call.
+    result.imageId = None
     specimen = MagicMock(spec=Specimen)
     specimen.medtechId = MEDTECH_USER_ID
 

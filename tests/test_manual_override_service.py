@@ -29,6 +29,7 @@ from src.core.exceptions import (
     UnprocessableException,
 )
 from src.models.analysis_result import AnalysisResult, ResultStatus
+from src.models.image import Image, ImageStatus
 from src.models.manual_override import ManualOverride
 from src.models.specimen import Specimen
 from src.services.manual_override_service import ManualOverrideService
@@ -47,6 +48,11 @@ def _makeResult(status: str = ResultStatus.PENDING_CONFIRM) -> AnalysisResult:
     result.status = status
     result.aiFindings = {"rbc_casts": 7.0, "uric_acid_crystals": 15.0}
     result.particleClasses = {}
+    # overrideParameter now also checks requireNoPendingRetake — no image
+    # attached means "not mid-retake" without a db.get(Image, ...) call,
+    # which this mock's db.get isn't set up to answer anyway (it always
+    # returns the Specimen regardless of model).
+    result.imageId = None
     return result
 
 
@@ -196,6 +202,34 @@ async def test_medtechCannotOverrideOnceTheResultIsOutOfTheirHands(lockedStatus)
         await _override(_makeService(db))
 
     assert excInfo.value.errorCode == "RESULT_NOT_EDITABLE"
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_overrideRefusedWhileImageRetakeIsPending():
+    """UROLENS-230: a correction made while the result's image is discarded
+    (retake pending) would anchor itself to findings about to be reset by
+    the replacement image once it's uploaded — overrideParameter must
+    refuse it, same as confirmResult already did.
+    """
+    result = _makeResult()
+    imageId = uuid.uuid4()
+    result.imageId = imageId
+    specimen = _makeSpecimen()
+    image = MagicMock(spec=Image)
+    image.status = ImageStatus.DISCARDED
+
+    async def _get(model, _id, **_kwargs):
+        return image if model is Image else specimen
+
+    db = _makeDbMock(result, specimen=specimen)
+    db.get = AsyncMock(side_effect=_get)
+
+    with pytest.raises(UnprocessableException) as excInfo:
+        await _override(_makeService(db))
+
+    assert excInfo.value.errorCode == "PENDING_RETAKE"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
 
