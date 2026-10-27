@@ -1,4 +1,4 @@
-"""Access and phase rules for the multi-field routes (web lane).
+"""Access and phase rules for the multi-field routes (both lanes).
 
 Reads follow `ResultReviewService.getFullResult`: a MedTech sees only a specimen
 assigned to them, a Supervisor sees any result, and there is no status gate.
@@ -17,6 +17,7 @@ from ..models.analysis_result import AnalysisResult
 from ..models.result_field import FieldStatus, ResultField
 from ..models.specimen import Specimen
 from .specimen_access import (
+    CAPTURE_PHASE_RESULT_STATUSES,
     MEDTECH_EDITABLE_RESULT_STATUSES,
     getAssignedSpecimen,
     isMedtech,
@@ -103,6 +104,19 @@ def requireVerificationPhase(result: AnalysisResult) -> None:
             `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`.
     """
     if result.status not in MEDTECH_EDITABLE_RESULT_STATUSES:
+        raise ConflictException(
+            code="INVALID_RESULT_STATUS",
+            message=f"Action not allowed in status '{result.status}'.",
+        )
+
+
+def requireCapturePhase(result: AnalysisResult) -> None:
+    """The phone may decide on fields and submit them only while capturing.
+
+    Raises:
+        ConflictException: `INVALID_RESULT_STATUS`, unless the result is `CAPTURING`.
+    """
+    if result.status not in CAPTURE_PHASE_RESULT_STATUSES:
         raise ConflictException(
             code="INVALID_RESULT_STATUS",
             message=f"Action not allowed in status '{result.status}'.",

@@ -1,8 +1,6 @@
 """Multi-field service seam.
 
-Web lane (implemented): `listFields`, `getField`. Everything else is still a
-signature that raises `NotImplementedError` until its owner lane fills it in. The
-foundation created this file so both lanes edit different functions of one
+The foundation created this file so both lanes edit different functions of one
 module; announce any new function in the PR.
 
 Owners (from the lane split): mobile = acceptField, submitFields; web =
@@ -24,7 +22,13 @@ from sqlalchemy.orm import undefer
 
 from ..core.audit_logger import AuditLogger
 from ..core.config import settings
-from ..core.exceptions import NotFoundException, UnprocessableException
+from ..core.exceptions import (
+    ConflictException,
+    FieldsBelowMinimumError,
+    FieldsUndecidedError,
+    NotFoundException,
+    UnprocessableException,
+)
 from ..core.particle_counts import toWholeCount
 from ..core.rule_thresholds import loadNormalMax
 from ..core.storage import signedImageUrls
@@ -33,6 +37,7 @@ from ..models.field_annotation_edit import EditAction, FieldAnnotationEdit
 from ..models.image import Image, ImageStatus
 from ..models.manual_override import ManualOverride, OverrideKind
 from ..models.result_field import FieldStatus, ResultField
+from ..models.specimen import Specimen
 from ..schemas.field import (
     AddedBox,
     Detection,
@@ -49,11 +54,14 @@ from .field_access import (
     fieldNotFound,
     loadFieldForWrite,
     readFieldAccess,
+    requireCapturePhase,
     requireVerificationPhase,
 )
 from .field_aggregation_service import FieldCounts, FlagThresholds, classMeans, flagsFor
 from .notification_service import NotificationService
+from .open_returns import openReturnReasons
 from .specimen_access import (
+    CAPTURE_PHASE_RESULT_STATUSES,
     MEDTECH_EDITABLE_RESULT_STATUSES,
     getAssignedSpecimen,
     isMedtech,
@@ -210,63 +218,94 @@ class ResultFieldService:
     async def acceptField(
         self, fieldId: uuid.UUID, medtechId: uuid.UUID, request: Request
     ) -> FieldActionResponse:
-        """Owner: mobile. ANALYZED to ACCEPTED, only while the result is CAPTURING."""
-        raise NotImplementedError
+        """Owner: mobile. Proceed: ANALYZED to ACCEPTED, only while the result is CAPTURING.
+
+        The field's `version` goes up and the result's `field_count` (ACCEPTED fields)
+        and first-accepted-field image pointer are updated. Already accepted: returns
+        the current state, so a queued `ACCEPT_FIELD` the phone sends twice is harmless.
+
+        Raises:
+            NotFoundException: `FIELD_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, unless the
+                result is `CAPTURING`; `INVALID_FIELD_STATUS`, if the field was discarded.
+        """
+        field, result, _specimen = await loadFieldForWrite(self.db, fieldId, medtechId)
+        requireCapturePhase(result)
+        if field.status == FieldStatus.ACCEPTED:
+            return await buildFieldActionResponse(self.db, fieldId)
+        if field.status != FieldStatus.ANALYZED:
+            raise ConflictException(
+                code="INVALID_FIELD_STATUS",
+                message=f"Action not allowed on a field in status '{field.status}'.",
+            )
+
+        field.status = FieldStatus.ACCEPTED
+        field.version += 1
+        await self.db.flush()
+        await self._recountAcceptedFields(result)
+
+        response = await buildFieldActionResponse(self.db, fieldId)
+        await self.auditLogger.record(
+            eventType="FIELD_ACCEPTED",
+            entityType="analysis_result",
+            entityId=field.resultId,
+            userId=medtechId,
+            detailJson={
+                "specimen_id": str(field.specimenId),
+                "field_id": str(fieldId),
+                "field_no": field.fieldNo,
+                "accepted_field_count": result.fieldCount,
+            },
+            db=self.db,
+            request=request,
+        )
+        await self.db.commit()
+        return response
 
     async def discardField(
         self, fieldId: uuid.UUID, medtechId: uuid.UUID, reason: str | None, request: Request
     ) -> FieldActionResponse:
         """Owner: mobile and web (shared). Sets the field and its image to DISCARDED.
 
-        One function, two paths by the result's status. **Web path (implemented):**
-        `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`, reason required. The field and
-        its image become `DISCARDED`, the field's `version` goes up, and the result's
-        `field_count` (ACCEPTED fields) and first-accepted-field image pointer are
-        updated. Discarding is not a correction: verified marks are untouched.
-        Already discarded: returns the current state. **Mobile path (`CAPTURING`):
-        owned by the mobile lane, still `NotImplementedError`.**
+        One function, two paths by the result's status. **Mobile path:** `CAPTURING`,
+        reason optional; an ANALYZED or ACCEPTED field may be discarded. **Web path:**
+        `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`, reason required. Either way the
+        field and its image become `DISCARDED`, the field's `version` goes up, and the
+        result's `field_count` (ACCEPTED fields) and first-accepted-field image pointer
+        are updated. Discarding is not a correction: verified marks are untouched.
+        Already discarded: returns the current state.
 
         Raises:
             NotFoundException: `FIELD_NOT_FOUND`.
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
             ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, for any
                 status other than the web and mobile paths above.
-            UnprocessableException: `REASON_REQUIRED`, if the reason is missing or blank.
+            UnprocessableException: `REASON_REQUIRED`, on the web path if the reason is
+                missing or blank.
         """
         field, result, _specimen = await loadFieldForWrite(self.db, fieldId, medtechId)
-        if result.status == ResultStatus.CAPTURING:
-            raise NotImplementedError  # mobile path: CAPTURING, reason optional
-        requireVerificationPhase(result)
+        capturing = result.status in CAPTURE_PHASE_RESULT_STATUSES
+        if not capturing:
+            requireVerificationPhase(result)
         if field.status == FieldStatus.DISCARDED:
             return await buildFieldActionResponse(self.db, fieldId)
-        if reason is None or not reason.strip():
+        reason = reason.strip() if reason else None
+        if not reason and not capturing:
             raise UnprocessableException(
                 code="REASON_REQUIRED", message="A reason is required to exclude a field."
             )
 
         now = datetime.now(UTC)
         field.status = FieldStatus.DISCARDED
-        field.discardReason = reason.strip()
+        field.discardReason = reason or None
         field.version += 1
         image = await self.db.get(Image, field.imageId)
         if image is not None:
             image.status = ImageStatus.DISCARDED
             image.discardedAt = now
         await self.db.flush()
-
-        accepted = (
-            await self.db.execute(
-                select(ResultField.imageId)
-                .where(
-                    ResultField.resultId == field.resultId,
-                    ResultField.status == FieldStatus.ACCEPTED,
-                )
-                .order_by(ResultField.fieldNo)
-            )
-        ).scalars().all()
-        result.fieldCount = len(accepted)
-        if accepted:
-            result.imageId = accepted[0]
+        await self._recountAcceptedFields(result)
 
         response = await buildFieldActionResponse(self.db, fieldId)
         await self.auditLogger.record(
@@ -284,9 +323,65 @@ class ResultFieldService:
     async def submitFields(
         self, resultId: uuid.UUID, medtechId: uuid.UUID, request: Request
     ) -> ResultStatusResponse:
-        """Owner: mobile. CAPTURING to PENDING_CONFIRM; refuses FIELDS_UNDECIDED or
-        FIELDS_BELOW_MINIMUM and never discards a field itself."""
-        raise NotImplementedError
+        """Owner: mobile. Submit for Verification: CAPTURING to PENDING_CONFIRM.
+
+        Online only on the phone (never queued). Refused while any field still waits
+        for Proceed or Discard, then below the minimum of accepted fields; a field is
+        never discarded automatically. `field_count` is recounted before the move.
+
+        A result the supervisor returned and the website sent back for more fields
+        still answers that return: while the return is open (see `open_returns`) it
+        goes back to `RETURNED_FOR_CORRECTION` instead, so the queue keeps the reason
+        and its confirm counts as a resubmission.
+
+        Raises:
+            NotFoundException: `RESULT_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, unless the
+                result is `CAPTURING`.
+            FieldsUndecidedError: `FIELDS_UNDECIDED`, while any field is ANALYZED.
+            FieldsBelowMinimumError: `FIELDS_BELOW_MINIMUM`, with fewer than
+                `minFieldsPerSpecimen` ACCEPTED fields.
+        """
+        result, _specimen = await self._loadResultForWrite(resultId, medtechId)
+        requireCapturePhase(result)
+        statuses = (
+            await self.db.execute(
+                select(ResultField.status).where(ResultField.resultId == resultId)
+            )
+        ).scalars().all()
+        undecided = sum(s == FieldStatus.ANALYZED for s in statuses)
+        if undecided:
+            raise FieldsUndecidedError(undecided)
+        accepted = sum(s == FieldStatus.ACCEPTED for s in statuses)
+        if accepted < settings.minFieldsPerSpecimen:
+            raise FieldsBelowMinimumError(accepted, settings.minFieldsPerSpecimen)
+
+        returnOpen = resultId in await openReturnReasons(self.db, [resultId])
+        newStatus = ResultStatus.RETURNED_FOR_CORRECTION if returnOpen else ResultStatus.PENDING_CONFIRM
+
+        await self._recountAcceptedFields(result)
+        result.status = newStatus
+        await self.db.flush()
+        await self.db.refresh(result, attribute_names=["updatedAt"])
+
+        await self.auditLogger.record(
+            eventType="FIELDS_SUBMITTED",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=medtechId,
+            detailJson={
+                "specimen_id": str(result.specimenId),
+                "accepted_field_count": result.fieldCount,
+                "discarded_field_count": len(statuses) - accepted,
+                "status": newStatus.value,
+            },
+            db=self.db,
+            request=request,
+        )
+        response = ResultStatusResponse(resultId=resultId, status=newStatus, updatedAt=result.updatedAt)
+        await self.db.commit()
+        return response
 
     async def listFields(self, resultId: uuid.UUID, claims: dict) -> FieldListResponse:
         """Owner: web. Fields of a result with one signed image URL each; no detections.
@@ -476,10 +571,9 @@ class ResultFieldService:
     async def reopenCapture(
         self, resultId: uuid.UUID, medtechId: uuid.UUID, request: Request
     ) -> ResultStatusResponse:
-        """Owner: web. PENDING_CONFIRM or RETURNED_FOR_CORRECTION back to CAPTURING,
-        keeping fields, corrections and verified marks.
+        """Owner: web. PENDING_CONFIRM or RETURNED_FOR_CORRECTION back to CAPTURING.
 
-        A legacy single-image result leaves legacy here: from now on it follows the
+        Fields, corrections and verified marks are kept. A legacy single-image result leaves legacy here: from now on it follows the
         multi-field rules. The assigned MedTech gets a push that names the sample only.
 
         Raises:
@@ -488,21 +582,7 @@ class ResultFieldService:
             ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, unless the
                 result is `PENDING_CONFIRM` or `RETURNED_FOR_CORRECTION`.
         """
-        result = await self.db.get(AnalysisResult, resultId)
-        if result is None:
-            raise NotFoundException(
-                code="RESULT_NOT_FOUND", message=f"No analysis result found with id {resultId}."
-            )
-        specimen = await getAssignedSpecimen(self.db, result.specimenId, medtechId)
-        requireSpecimenNotRejected(specimen)
-        # The first read only found the specimen to lock; read the status again.
-        result = (
-            await self.db.execute(
-                select(AnalysisResult)
-                .where(AnalysisResult.resultId == resultId)
-                .execution_options(populate_existing=True)
-            )
-        ).scalar_one()
+        result, specimen = await self._loadResultForWrite(resultId, medtechId)
         requireVerificationPhase(result)
 
         wasLegacy = bool(result.isLegacySingleField)
@@ -534,6 +614,52 @@ class ResultFieldService:
         )
         await self.db.commit()
         return response
+
+    # ── Writes ───────────────────────────────────────────────────────────────
+
+    async def _loadResultForWrite(
+        self, resultId: uuid.UUID, medtechId: uuid.UUID
+    ) -> tuple[AnalysisResult, Specimen]:
+        """Lock the result's specimen, check ownership, then re-read the result.
+
+        Raises:
+            NotFoundException: `RESULT_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`.
+        """
+        result = await self.db.get(AnalysisResult, resultId)
+        if result is None:
+            raise NotFoundException(
+                code="RESULT_NOT_FOUND", message=f"No analysis result found with id {resultId}."
+            )
+        specimen = await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+        requireSpecimenNotRejected(specimen)
+        # The first read only found the specimen to lock; read the status again.
+        result = (
+            await self.db.execute(
+                select(AnalysisResult)
+                .where(AnalysisResult.resultId == resultId)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        return result, specimen
+
+    async def _recountAcceptedFields(self, result: AnalysisResult) -> None:
+        # `field_count` is the number of ACCEPTED fields; the single-image pointer
+        # follows the first accepted field and is left alone when there is none.
+        accepted = (
+            await self.db.execute(
+                select(ResultField.imageId)
+                .where(
+                    ResultField.resultId == result.resultId,
+                    ResultField.status == FieldStatus.ACCEPTED,
+                )
+                .order_by(ResultField.fieldNo)
+            )
+        ).scalars().all()
+        result.fieldCount = len(accepted)
+        if accepted:
+            result.imageId = accepted[0]
 
     # ── Queries ──────────────────────────────────────────────────────────────
 

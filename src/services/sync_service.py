@@ -3,7 +3,8 @@ queue assignments, analysis results, and the manual overrides on those results.
 
 The mobile queue (UROLENS-225) and Reports screen (UROLENS-236) are built
 entirely from this payload. Each returned-for-correction result carries the
-supervisor's latest reason. Patient names are deliberately **not** sent: the
+supervisor's latest reason, and so does a CAPTURING result sent back for more
+fields while that return is still open (see `open_returns`). Patient names are deliberately **not** sent: the
 app shows only the patient code (a privacy decision in the mobile UI), so the
 name has no reason to be on a MedTech's phone (RA 10173 data minimization).
 `patient_name` stays in the payload as `""` so existing app versions, whose
@@ -53,6 +54,7 @@ from src.models.result_field import ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
 from src.schemas.field import SyncResultField
+from src.services.open_returns import openReturnReasons
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +277,10 @@ async def _resultRows(db: AsyncSession, results: list[AnalysisResult]) -> list[d
     approvals = await _latestApprovals(db, ids)
     returnedIds = [r.resultId for r in results if r.status == ResultStatus.RETURNED_FOR_CORRECTION]
     reasons = await _latestReturnReasons(db, returnedIds) if returnedIds else {}
+    # A returned result sent back for more fields is CAPTURING but still answers
+    # that return; keep its reason on the phone while it captures.
+    capturingIds = [r.resultId for r in results if r.status == ResultStatus.CAPTURING]
+    reasons |= await openReturnReasons(db, capturingIds)
     return [_resultRow(r, approvals.get(r.resultId), reasons.get(r.resultId)) for r in results]
 
 
@@ -420,7 +426,7 @@ async def pull(
         [...], "deleted": [ids]}`. Rows use DB column names with the primary
         key as `"id"`. Specimens carry `patient_name` as `""` and
         `completed_at`; results carry `return_reason` (latest, when
-        RETURNED_FOR_CORRECTION), `approved_at`, `released_at` and
+        RETURNED_FOR_CORRECTION; the open return's, when CAPTURING), `approved_at`, `released_at` and
         `particle_classes` (the confirmed counts); overrides carry numbers,
         with `original_ai_value` null when the stored one isn't a number, and
         an override whose corrected value isn't a number is left out.

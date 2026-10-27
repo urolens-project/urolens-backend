@@ -539,7 +539,7 @@ def test_listAndDetailCallTheServiceWhenTheFlagIsOn(routeClient, monkeypatch):
 
 def test_otherFieldRoutesStillAnswer501(routeClient, monkeypatch):
     monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
-    assert routeClient.post(f"/api/v1/fields/{uuid.uuid4()}/accept").status_code == 501
+    assert routeClient.get(f"/api/v1/results/{RESULT_ID}/summary").status_code == 501
 
 
 # ── storage: signedImageUrls ─────────────────────────────────────────────────
