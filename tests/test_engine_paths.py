@@ -1,5 +1,6 @@
 """AI engine file paths: bundled fallbacks, explicit overrides, the environment
-hand-off to the engine, and the startup check that reports missing files.
+hand-off to the engine, and the startup check that reports missing files and
+Git LFS pointers left in place of the real weights.
 """
 import logging
 import os
@@ -143,6 +144,46 @@ def test_aPathToAMissingFileIsReported() -> None:
             _settingsWith(model=str(model), gate="/nowhere/gate.pt", rules=str(rules))
         )
     assert problems == ["GATE_WEIGHTS_PATH points to a file that does not exist: /nowhere/gate.pt"]
+
+
+# What `git lfs` leaves in a checkout that never ran `git lfs pull`.
+_LFS_POINTER = (
+    b"version https://git-lfs.github.com/spec/v1\n"
+    b"oid sha256:123e7b00ef92ca50ce7c45b435a151825d6856114007aae8ee69d4b34882f64c\n"
+    b"size 3186242\n"
+)
+
+
+def test_aGitLfsPointerInPlaceOfTheWeightsIsReported() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        model, gate, rules = (Path(folder) / name for name in ("best.pt", "gate.pt", "config.yaml"))
+        model.write_bytes(b"\x80\x02real-weights")
+        gate.write_bytes(_LFS_POINTER)
+        rules.write_bytes(b"conditions: {}")
+        problems = config.engineFileProblems(
+            _settingsWith(model=str(model), gate=str(gate), rules=str(rules))
+        )
+
+    assert len(problems) == 1
+    assert problems[0].startswith(f"GATE_WEIGHTS_PATH points to a Git LFS pointer, not the real file: {gate}.")
+    assert "git lfs pull" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"version 2 of my weights", b"version https://git-lfs.github.com/spe", b"\x80\x02" + _LFS_POINTER],
+)
+def test_aRealFileIsNotMistakenForAPointer(content: bytes) -> None:
+    # Only a file that starts with the full LFS spec line is a pointer.
+    with tempfile.NamedTemporaryFile() as handle:
+        handle.write(content)
+        handle.flush()
+        assert config._isGitLfsPointer(handle.name) is False
+
+
+def test_anUnreadableFileIsNotCalledAPointer() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        assert config._isGitLfsPointer(folder) is False
 
 
 def test_startupLogsEachMissingEngineFile(caplog: pytest.LogCaptureFixture) -> None:
