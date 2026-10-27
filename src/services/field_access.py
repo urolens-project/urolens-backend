@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.exceptions import ConflictException, ForbiddenException, NotFoundException
-from ..models.analysis_result import AnalysisResult
+from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.result_field import FieldStatus, ResultField
 from ..models.specimen import Specimen
 from .specimen_access import (
@@ -24,6 +24,14 @@ from .specimen_access import (
     requireSpecimenAssigned,
     requireSpecimenNotRejected,
 )
+
+# Statuses a result may be confirmed from. A result from before multi-field (flagged
+# legacy) may also be confirmed while its single image is mid-retake or failed.
+CONFIRMABLE_RESULT_STATUSES = frozenset(MEDTECH_EDITABLE_RESULT_STATUSES)
+LEGACY_CONFIRMABLE_RESULT_STATUSES = CONFIRMABLE_RESULT_STATUSES | frozenset({
+    ResultStatus.IMAGE_RETAKE_REQUESTED,
+    ResultStatus.FAILED,
+})
 
 
 def fieldNotFound(fieldId: uuid.UUID) -> NotFoundException:

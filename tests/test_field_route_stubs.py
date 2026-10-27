@@ -1,9 +1,9 @@
-"""Unit tests — multi-field route stubs (`api/fields.py`).
+"""Unit tests — the guards every multi-field route shares (`api/fields.py`).
 
-Flag off: 404 FEATURE_DISABLED. Flag on: 501 NOT_IMPLEMENTED. Role checks come
-first, and the flag check beats a body-validation 422. Routes a lane has built
-(`BUILT_ROUTES`) keep the role and flag checks; their behaviour is tested
-with their feature.
+Every field route is built now; this file keeps the checks they share. Flag
+off: 404 FEATURE_DISABLED. Role checks come first, and the flag check beats a
+body-validation 422. Behaviour is tested with each feature (test_field_read_paths.py,
+test_field_corrections.py, test_field_confirm.py, test_field_capture_decisions.py).
 """
 from __future__ import annotations
 
@@ -40,14 +40,6 @@ ROUTES = [
     ("GET", f"/api/v1/results/{ID}/summary", BOTH, None),
 ]
 BODY_ROUTES = [r for r in ROUTES if r[3] is not None]
-# Routes whose handlers are still stubs and answer 501 with the flag on. The rest are
-# written (read paths in test_field_read_paths.py, corrections in test_field_corrections.py,
-# accept, the capturing discard and submit in test_field_capture_decisions.py); the
-# summary is a later web phase.
-STILL_STUB_PATHS = {
-    f"/api/v1/results/{ID}/summary",
-}
-STUB_ROUTES = [r for r in ROUTES if r[1] in STILL_STUB_PATHS]
 
 # Built by a lane: no longer a stub, still behind the role and flag checks.
 BUILT_ROUTES = [
@@ -76,16 +68,6 @@ def test_flagOffAnswers404(client, monkeypatch, method, path, roles, body):
     response = _call(client, method, path, body)
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "FEATURE_DISABLED"
-
-
-@pytest.mark.parametrize(("method", "path", "roles", "body"), STUB_ROUTES)
-def test_flagOnAnswers501(client, monkeypatch, method, path, roles, body):
-    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
-    for role in roles:
-        _loginAs(role)
-        response = _call(client, method, path, body)
-        assert response.status_code == 501, (role, response.text)
-        assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
 
 
 @pytest.mark.parametrize(("method", "path", "roles", "body"), ROUTES + BUILT_ROUTES)

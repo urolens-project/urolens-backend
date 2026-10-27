@@ -16,12 +16,8 @@ POST /api/v1/results/{id}/reopen-capture          — Capture more fields (web l
 GET  /api/v1/results/{id}/summary                 — Verification summary (web lane)
 
 Every route is registered with its final role and response model, and answers
-404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. With it on, a route whose
-handler is not written yet answers 501 NOT_IMPLEMENTED. Built so far: the whole
-mobile lane (capture, accept, the capturing path of discard, submit), and in the web
-lane list, detail, annotations, override, revert, verify, discard and reopen-capture.
-Still a stub: the summary (web, later phase). The flag check is a dependency so it also wins over a
-body-validation 422.
+404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. Every handler is written.
+The flag check is a dependency so it also wins over a body-validation 422.
 """
 from __future__ import annotations
 
@@ -34,7 +30,7 @@ from ..core.audit_logger import AuditLogger, getAuditLogger
 from ..core.config import settings
 from ..core.database import getDb
 from ..core.enums import UserRole
-from ..core.exceptions import FeatureDisabledError, NotImplementedYetError
+from ..core.exceptions import FeatureDisabledError
 from ..core.rbac import RequireRole
 from ..models.result_field import Magnification
 from ..schemas.field import (
@@ -302,6 +298,7 @@ async def getVerificationSummary(
     id: uuid.UUID,
     claims: dict = Depends(_medtechOrSupervisor),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> VerificationSummaryResponse:
     """Per-class averages, corrections, focal findings and the diagnosis preview."""
-    raise NotImplementedYetError()
+    return await _service.getVerificationSummary(id, claims)
