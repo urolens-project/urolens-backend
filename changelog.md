@@ -40,6 +40,17 @@
   64 → 65; `docs/contract/field-shapes.json` regenerated.
 
 ### Fixed
+- **The startup check passed AI engine weights that were only Git LFS pointers, so
+  every upload then failed with 503 `AI_ANALYSIS_FAILED`.** The engine stores
+  `best.pt` and `gate.pt` with Git LFS; a checkout without `git lfs pull`, and a pip
+  install of the engine from GitHub, leave a ~130-byte text pointer in place of each.
+  That file exists, so the check added for the engine paths reported nothing.
+  `engineFileProblems` (`src/core/config.py`) now also reads the start of each required
+  file (`MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`, `RULE_ENGINE_CONFIG_PATH`) and logs
+  an `AI engine:` error at startup when it is a Git LFS pointer, naming the variable and
+  path and how to fix it (`git lfs pull` in the engine repo, or point the variable at
+  the downloaded file). It still never stops the app. No route, response or error code
+  changes.
 - **A picture the AI engine's input gate rejects was reported as a server failure
   (503 `AI_ANALYSIS_FAILED`), and a sideways photo was stored sideways.** Both upload
   routes (`POST /api/v1/images/upload` and `POST /api/v1/fields`) now answer 422
