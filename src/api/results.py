@@ -298,6 +298,7 @@ async def annotateResult(
 async def approveResult(
     result_id: uuid.UUID,
     body: ApproveRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ApproveResponse:
@@ -306,6 +307,7 @@ async def approveResult(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
         notes=body.notes,
+        request=request,
     )
     return ApproveResponse(**result)
 
@@ -314,6 +316,7 @@ async def approveResult(
 async def returnResult(
     result_id: uuid.UUID,
     body: ReturnRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> ReturnResponse:
@@ -322,6 +325,7 @@ async def returnResult(
         resultId=result_id,
         userId=uuid.UUID(currentUser["user_id"]),
         reason=body.reason,
+        request=request,
     )
     return ReturnResponse(**result)
 
@@ -330,6 +334,7 @@ async def returnResult(
 async def escalateResult(
     result_id: uuid.UUID,
     body: EscalateRequest,
+    request: Request,
     currentUser: dict = Depends(_REQUIRE_SUPERVISOR),
     _service: ResultReviewService = Depends(getResultReviewService),
 ) -> EscalateResponse:
@@ -339,6 +344,7 @@ async def escalateResult(
         userId=uuid.UUID(currentUser["user_id"]),
         escalationPath=body.escalationPath,
         escalationNote=body.escalationNote,
+        request=request,
     )
     return EscalateResponse(**result)
 

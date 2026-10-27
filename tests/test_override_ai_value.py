@@ -48,8 +48,8 @@ def _body(**overrides: object) -> dict:
     return {"parameter": "erythrocytes", "correctedValue": 4, "rationale": "Recounted", **overrides}
 
 
-def test_maxOverrideCountIsThreeHundred() -> None:
-    assert MAX_OVERRIDE_COUNT == 300
+def test_maxOverrideCountIsOneThousand() -> None:
+    assert MAX_OVERRIDE_COUNT == 1000
 
 
 @pytest.mark.parametrize("value", [0, 1, MAX_OVERRIDE_COUNT, 5.0])
