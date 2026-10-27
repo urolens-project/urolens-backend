@@ -1838,6 +1838,9 @@
         "anyOf": [
           {
             "enum": [
+              "RESULT_NOT_CONFIRMABLE",
+              "LEGACY_NO_FIELD",
+              "LEGACY_NO_FINDINGS",
               "FIELDS_BELOW_MINIMUM",
               "FIELDS_NOT_VERIFIED"
             ],

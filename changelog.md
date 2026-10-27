@@ -80,11 +80,12 @@
   - **A returned result keeps its returned state through a capture round trip.** When
     the supervisor returned the result and the website reopened capture, submit sends
     it back to `RETURNED_FOR_CORRECTION` instead of `PENDING_CONFIRM` (a deliberate
-    change from proposal section 2.7). The website queue keeps showing the return reason
-    and listing it first, and its confirm is audited `RESULT_RESUBMITTED` and announced
-    to supervisors as resubmitted. A return is open while it is newer than the result's
-    last confirmation (`result_confirmations.confirmed_at`, moved by every confirm); new
-    `services/open_returns.py` holds that rule.
+    change from proposal section 2.7), so the website queue keeps showing the return
+    reason and listing it first. Multi-field confirm already counts such a confirm as a
+    resubmission from the returns themselves (`_returnedSince`); both use the same rule:
+    a return is open while it is newer than the result's last confirmation
+    (`result_confirmations.confirmed_at`, moved by every confirm). New
+    `services/open_returns.py` holds it for submit and sync.
   - `GET /api/v1/sync/pull` now also sends `return_reason` for a `CAPTURING` result
     whose return is open, so the phone shows why more fields were asked for while it
     captures. Returned results are unchanged; no other status gets a reason or an extra

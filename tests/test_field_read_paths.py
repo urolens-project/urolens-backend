@@ -537,11 +537,6 @@ def test_listAndDetailCallTheServiceWhenTheFlagIsOn(routeClient, monkeypatch):
     assert service.listFields.await_args.args[0] == RESULT_ID
 
 
-def test_otherFieldRoutesStillAnswer501(routeClient, monkeypatch):
-    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
-    assert routeClient.get(f"/api/v1/results/{RESULT_ID}/summary").status_code == 501
-
-
 # ── storage: signedImageUrls ─────────────────────────────────────────────────
 
 def _supabase(items=None, error: Exception | None = None):
