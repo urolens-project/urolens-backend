@@ -16,9 +16,12 @@ POST /api/v1/results/{id}/reopen-capture          — Capture more fields (web l
 GET  /api/v1/results/{id}/summary                 — Verification summary (web lane)
 
 Every route is registered with its final role and response model, and answers
-404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. Routes a lane has not
-built yet answer 501 NOT_IMPLEMENTED when it is on. The flag check is a
-dependency so it also wins over a body-validation 422.
+404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. With it on, a route whose
+handler is not written yet answers 501 NOT_IMPLEMENTED. Built so far: field capture
+(mobile lane), and in the web lane list, detail, annotations, override, revert,
+verify, discard and reopen-capture. Still stubs: accept and submit (mobile lane) and
+the summary (web, later phase). The flag check is a dependency so it also wins over a
+body-validation 422.
 """
 from __future__ import annotations
 
@@ -47,10 +50,37 @@ from ..schemas.field import (
     VerificationSummaryResponse,
 )
 from ..services.field_capture_service import FieldCaptureService
+from ..services.field_correction_service import FieldCorrectionService
+from ..services.manual_override_service import ManualOverrideService
+from ..services.result_field_service import ResultFieldService
 
 router = APIRouter(tags=["fields"])
 _medtech = RequireRole([UserRole.MEDTECH])
 _medtechOrSupervisor = RequireRole([UserRole.MEDTECH, UserRole.SUPERVISOR])
+
+
+async def getResultFieldService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> ResultFieldService:
+    """FastAPI dependency constructing a request-scoped `ResultFieldService`."""
+    return ResultFieldService(db=db, auditLogger=auditLogger)
+
+
+async def getFieldCorrectionService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> FieldCorrectionService:
+    """FastAPI dependency constructing a request-scoped `FieldCorrectionService`."""
+    return FieldCorrectionService(db=db, auditLogger=auditLogger)
+
+
+async def getFieldOverrideService(
+    db: AsyncSession = Depends(getDb),
+    auditLogger: AuditLogger = Depends(getAuditLogger),
+) -> ManualOverrideService:
+    """FastAPI dependency constructing a request-scoped `ManualOverrideService`."""
+    return ManualOverrideService(db=db, auditLogger=auditLogger)
 
 
 def requireFieldWorkflow() -> None:
@@ -110,13 +140,21 @@ async def acceptField(
 )
 async def discardField(
     field_id: uuid.UUID,
+    request: Request,
     body: DiscardFieldRequest | None = None,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> FieldActionResponse:
     """Discard a field. Mobile path while CAPTURING (reason optional); web path while
     PENDING_CONFIRM or RETURNED_FOR_CORRECTION (reason required)."""
-    raise NotImplementedYetError()
+    try:
+        return await _service.discardField(
+            field_id, uuid.UUID(claims["user_id"]), body.reason if body else None, request
+        )
+    except NotImplementedError:
+        # The CAPTURING (mobile) path belongs to the mobile lane and is not written yet.
+        raise NotImplementedYetError() from None
 
 
 @router.post(
@@ -142,9 +180,10 @@ async def listFields(
     id: uuid.UUID,
     claims: dict = Depends(_medtechOrSupervisor),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> FieldListResponse:
     """Fields with counts, status, flags and one signed image URL each; no detections."""
-    raise NotImplementedYetError()
+    return await _service.listFields(id, claims)
 
 
 @router.get(
@@ -154,11 +193,13 @@ async def listFields(
 )
 async def getField(
     field_id: uuid.UUID,
+    request: Request,
     claims: dict = Depends(_medtechOrSupervisor),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> FieldDetail:
     """Detections and box edits for one field; records the open that `verify` needs."""
-    raise NotImplementedYetError()
+    return await _service.getField(field_id, claims, request)
 
 
 @router.put(
@@ -169,11 +210,13 @@ async def getField(
 async def saveAnnotations(
     field_id: uuid.UUID,
     body: SaveAnnotationsRequest,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: FieldCorrectionService = Depends(getFieldCorrectionService),
 ) -> FieldActionResponse:
     """Replace the field's edit list; 409 FIELD_VERSION_CONFLICT on a stale version."""
-    raise NotImplementedYetError()
+    return await _service.saveAnnotations(field_id, uuid.UUID(claims["user_id"]), body, request)
 
 
 @router.post(
@@ -184,11 +227,16 @@ async def saveAnnotations(
 async def overrideFieldParameter(
     field_id: uuid.UUID,
     body: FieldOverrideRequest,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ManualOverrideService = Depends(getFieldOverrideService),
 ) -> FieldActionResponse:
     """Numeric override with a required reason; locks box editing for that class."""
-    raise NotImplementedYetError()
+    return await _service.overrideFieldParameter(
+        field_id, body.particleType, body.correctedValue, body.rationale,
+        uuid.UUID(claims["user_id"]), request,
+    )
 
 
 @router.post(
@@ -199,11 +247,15 @@ async def overrideFieldParameter(
 async def revertFieldOverride(
     field_id: uuid.UUID,
     body: RevertOverrideRequest,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ManualOverrideService = Depends(getFieldOverrideService),
 ) -> FieldActionResponse:
     """Adds a REVERT row; the class counts boxes again."""
-    raise NotImplementedYetError()
+    return await _service.revertFieldOverride(
+        field_id, body.particleType, body.rationale, uuid.UUID(claims["user_id"]), request
+    )
 
 
 @router.post(
@@ -213,11 +265,13 @@ async def revertFieldOverride(
 )
 async def verifyField(
     field_id: uuid.UUID,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: FieldCorrectionService = Depends(getFieldCorrectionService),
 ) -> FieldActionResponse:
     """409 FIELD_NOT_OPENED unless the same user opened the field since its last correction."""
-    raise NotImplementedYetError()
+    return await _service.markVerified(field_id, uuid.UUID(claims["user_id"]), request)
 
 
 @router.post(
@@ -227,11 +281,13 @@ async def verifyField(
 )
 async def reopenCapture(
     id: uuid.UUID,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> ResultStatusResponse:
     """PENDING_CONFIRM or RETURNED_FOR_CORRECTION back to CAPTURING; fields are kept."""
-    raise NotImplementedYetError()
+    return await _service.reopenCapture(id, uuid.UUID(claims["user_id"]), request)
 
 
 @router.get(
