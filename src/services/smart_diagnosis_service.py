@@ -57,9 +57,9 @@ class SmartDiagnosisService:
         `counts`, when given, is the input to the engine instead of the result's
         stored findings: multi-field confirmation passes the exact mean counts, which
         are decimals, with `allowDecimal=True`. Without `allowDecimal` a fractional
-        count is refused as it always was. The pinned engine itself rejects decimals
-        until it ships support for them; that failure takes the normal path below
-        (the diagnosis is marked unavailable and confirmation still succeeds).
+        count is refused as it always was. The engine accepts decimals since v0.2.0;
+        any engine failure takes the normal path below (the diagnosis is marked
+        unavailable and confirmation still succeeds).
 
         Runs inside a SAVEPOINT nested in the caller's transaction (`db`), so
         an engine failure rolls back only the diagnosis work, not the
@@ -122,8 +122,7 @@ class SmartDiagnosisService:
         """The diagnosis for `counts`, without saving anything, and whether it is unavailable.
 
         Used by the verification summary to preview the final diagnosis on the exact
-        mean counts. Any engine failure (including the pinned engine refusing decimals)
-        gives `(None, True)`; empty counts give `(None, False)`: nothing to diagnose.
+        mean counts. Any engine failure gives `(None, True)`; empty counts give `(None, False)`: nothing to diagnose.
         """
         if not counts:
             return None, False

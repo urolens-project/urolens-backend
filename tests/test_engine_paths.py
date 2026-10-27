@@ -1,6 +1,8 @@
 """AI engine file paths: bundled fallbacks, explicit overrides, the environment
-hand-off to the engine, and the startup check that reports missing files and
-Git LFS pointers left in place of the real weights.
+hand-off to the engine, and the startup check that reports an old or missing
+engine, a variable overriding the engine's own file, missing files and Git LFS
+pointers left in place of the real weights. With FIELD_WORKFLOW_ENABLED on, any
+problem stops the server from starting.
 """
 import logging
 import os
@@ -36,6 +38,14 @@ def test_bundledModelWeightsPreferBestPtOverTheOldName() -> None:
         spec = _packageWith(packageDir, "models/yolov8/best.pt", "models/yolov8/weights.pt")
         with patch.object(config.importlib.util, "find_spec", return_value=spec):
             assert config._bundledModelWeightsPath() == str(Path(packageDir) / "models/yolov8/best.pt")
+
+
+def test_aLeftoverWeightsPtIsNeverTheBundledModel() -> None:
+    # A hand-copied weights.pt from before v0.2.0 is not the pinned model.
+    with tempfile.TemporaryDirectory() as packageDir:
+        spec = _packageWith(packageDir, "models/yolov8/weights.pt")
+        with patch.object(config.importlib.util, "find_spec", return_value=spec):
+            assert config._bundledModelWeightsPath() == ""
 
 
 @pytest.mark.parametrize(
@@ -119,6 +129,15 @@ def _settingsWith(**paths: str) -> MagicMock:
     return current
 
 
+@pytest.fixture
+def cleanEngine():
+    """The pinned engine is installed and has no bundled files to compare against."""
+    with patch.object(config, "_installedEngineVersion", return_value="0.2.0"), \
+         patch.object(config, "_bundledEngineFile", return_value=""):
+        yield
+
+
+@pytest.mark.usefixtures("cleanEngine")
 def test_noProblemsWhenEveryRequiredFileExists() -> None:
     with tempfile.TemporaryDirectory() as folder:
         files = {name: str(Path(folder) / name) for name in ("model", "gate", "rules")}
@@ -128,12 +147,14 @@ def test_noProblemsWhenEveryRequiredFileExists() -> None:
         assert config.engineFileProblems(_settingsWith(**files, thresholds="/missing.yaml")) == []
 
 
+@pytest.mark.usefixtures("cleanEngine")
 def test_anUnsetRequiredFileIsReportedByItsVariableName() -> None:
     problems = config.engineFileProblems(_settingsWith())
     assert len(problems) == 3
     assert any(p.startswith("GATE_WEIGHTS_PATH is unset") for p in problems)
 
 
+@pytest.mark.usefixtures("cleanEngine")
 def test_aPathToAMissingFileIsReported() -> None:
     with tempfile.TemporaryDirectory() as folder:
         model = Path(folder) / "best.pt"
@@ -154,6 +175,7 @@ _LFS_POINTER = (
 )
 
 
+@pytest.mark.usefixtures("cleanEngine")
 def test_aGitLfsPointerInPlaceOfTheWeightsIsReported() -> None:
     with tempfile.TemporaryDirectory() as folder:
         model, gate, rules = (Path(folder) / name for name in ("best.pt", "gate.pt", "config.yaml"))
@@ -195,3 +217,100 @@ def test_startupLogsEachMissingEngineFile(caplog: pytest.LogCaptureFixture) -> N
     assert [r.getMessage() for r in caplog.records if r.name == "main"] == [
         "AI engine: GATE_WEIGHTS_PATH is unset."
     ]
+
+
+# ── The pinned engine: version and overrides ─────────────────────────────────
+
+@pytest.mark.parametrize("version", ["0.2.0", "0.2.1", "0.10.0", "1.0.0", "0.3.0rc1"])
+def test_theMinimumEngineOrNewerIsAccepted(version: str) -> None:
+    with patch.object(config, "_installedEngineVersion", return_value=version):
+        assert config._engineVersionProblems() == []
+
+
+@pytest.mark.parametrize("version", ["0.1.0", "0.1.9", "0.0.1"])
+def test_anOlderEngineIsReported(version: str) -> None:
+    with patch.object(config, "_installedEngineVersion", return_value=version):
+        [problem] = config._engineVersionProblems()
+    assert problem.startswith(f"The installed AI engine is {version}; this backend needs 0.2.0 or newer.")
+    assert "requirements.txt" in problem
+
+
+def test_aMissingEngineIsReported() -> None:
+    with patch.object(config, "_installedEngineVersion", return_value=None):
+        [problem] = config._engineVersionProblems()
+    assert "is not installed" in problem
+
+
+def test_theRealInstalledEngineIsReadByItsDistributionName() -> None:
+    # CI installs the pinned engine from requirements.txt.
+    assert config._installedEngineVersion() is not None
+
+
+def _bundledIn(packageDir: str):
+    def find(*parts: str) -> str:
+        path = Path(packageDir).joinpath(*parts)
+        return str(path) if path.is_file() else ""
+    return find
+
+
+def test_aVariablePointingAwayFromTheEnginesOwnFileIsReported() -> None:
+    with tempfile.TemporaryDirectory() as packageDir, tempfile.TemporaryDirectory() as elsewhere:
+        _packageWith(packageDir, "models/yolov8/best.pt", "models/gate/gate.pt")
+        stale = Path(elsewhere) / "weights.pt"
+        stale.write_bytes(b"old model")
+        bundledGate = str(Path(packageDir) / "models/gate/gate.pt")
+        with patch.object(config, "_bundledEngineFile", side_effect=_bundledIn(packageDir)):
+            problems = config._overrideProblems(_settingsWith(model=str(stale), gate=bundledGate))
+
+    assert len(problems) == 1   # the gate path is the engine's own file
+    assert problems[0].startswith(f"MODEL_WEIGHTS_PATH points to {stale}, not the installed engine's own file")
+    assert "Remove the variable" in problems[0]
+
+
+def test_aVariableNamingTheEnginesOwnFileIsFine() -> None:
+    with tempfile.TemporaryDirectory() as packageDir:
+        _packageWith(packageDir, "models/yolov8/best.pt")
+        own = str(Path(packageDir) / "models" / "yolov8" / ".." / "yolov8" / "best.pt")
+        with patch.object(config, "_bundledEngineFile", side_effect=_bundledIn(packageDir)):
+            assert config._overrideProblems(_settingsWith(model=own)) == []
+
+
+def test_withoutABundledFileAnOverrideIsLeftToTheFileChecks() -> None:
+    with patch.object(config, "_bundledEngineFile", return_value=""):
+        assert config._overrideProblems(_settingsWith(model="/somewhere/best.pt")) == []
+
+
+def test_theVersionAndOverrideProblemsComeFirst() -> None:
+    with patch.object(config, "_engineVersionProblems", return_value=["old engine"]), \
+         patch.object(config, "_overrideProblems", return_value=["override"]), \
+         patch.object(config, "_bundledEngineFile", return_value=""):
+        problems = config.engineFileProblems(_settingsWith())
+    assert problems[:2] == ["old engine", "override"] and len(problems) == 5
+
+
+# ── Startup: the flag decides whether a problem stops the server ───────────────
+
+def test_withTheFlagOnAnEngineProblemStopsTheServer(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config.settings, "fieldWorkflowEnabled", True)
+    with patch.object(main, "engineFileProblems", return_value=["MODEL_WEIGHTS_PATH points to /old/weights.pt"]), \
+         caplog.at_level(logging.ERROR, logger="main"), \
+         pytest.raises(RuntimeError, match="FIELD_WORKFLOW_ENABLED is on but the AI engine is not ready"), \
+         TestClient(main.app):
+        pass
+
+    assert "AI engine: MODEL_WEIGHTS_PATH points to /old/weights.pt" in caplog.text
+
+
+def test_withTheFlagOnAReadyEngineStarts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config.settings, "fieldWorkflowEnabled", True)
+    with patch.object(main, "engineFileProblems", return_value=[]), TestClient(main.app) as client:
+        assert client.get("/").status_code == 200
+
+
+def test_withTheFlagOffAnEngineProblemIsOnlyLogged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config.settings, "fieldWorkflowEnabled", False)
+    with patch.object(main, "engineFileProblems", return_value=["The installed AI engine is 0.1.0"]), \
+         TestClient(main.app) as client:
+        assert client.get("/").status_code == 200

@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from src.core import rule_thresholds
+from src.core.config import settings
 from src.core.rule_thresholds import (
     CONFIG_PATH_ENV,
     loadNormalMax,
@@ -140,10 +140,11 @@ def test_theSyntheticConfigUsesKnownNames():
 def test_everyParticleNameInTheRealRulesConfigIsAKnownLabel():
     """Fails if the engine's config names a particle the backend does not know.
 
-    Reads the file at RULE_ENGINE_CONFIG_PATH; skips when none is configured or
-    readable (the config is not shipped with the engine package, see P-2).
+    Reads the config the backend resolved (`settings.ruleEngineConfigPath`: the
+    file shipped inside the installed engine since v0.2.0, unless overridden);
+    skips only when there is none, e.g. without the engine installed.
     """
-    path = os.environ.get(CONFIG_PATH_ENV, "")
+    path = settings.ruleEngineConfigPath
     if not path or not Path(path).is_file():
         pytest.skip(f"{CONFIG_PATH_ENV} is not set to a readable rules config")
     unknown = unknownParticleNames(readNormalMax(path))

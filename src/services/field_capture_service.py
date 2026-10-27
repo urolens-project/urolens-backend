@@ -296,8 +296,10 @@ def toFieldDetections(
     A box reaching past an edge is trimmed to the image. A box that is not a set
     of finite numbers, or covers no part of the image, is dropped and counted:
     the AI counts stay exactly as the engine reported them, so the MedTech sees a
-    class with fewer boxes than its count and reconciles it on the web. An engine
-    that does not return detections yet gives no boxes, never a failure.
+    class with fewer boxes than its count and reconciles it on the web. Engines
+    before v0.2.0 return no detections; this route only runs with the flag on,
+    which refuses such an engine at startup, so that case gives no boxes rather
+    than a failure only as a safeguard.
 
     Args:
         inference: the engine's `InferenceResult`.
