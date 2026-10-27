@@ -1655,6 +1655,19 @@
         "title": "Resultid",
         "type": "string"
       },
+      "smartDiagnosisPreview": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Smartdiagnosispreview"
+      },
       "smartDiagnosisUnavailable": {
         "default": false,
         "title": "Smartdiagnosisunavailable",
