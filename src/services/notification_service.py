@@ -93,6 +93,22 @@ class NotificationService:
             entityId=resultId,
         )
 
+    async def notifyMedtechCaptureReopened(
+        self, medtechId: uuid.UUID, resultId: uuid.UUID, sampleUid: str
+    ) -> None:
+        """Tell the MedTech the web asked for more fields on their sample.
+
+        Names the sample only: the message is pushed to the lock screen, so it
+        carries no patient data. Like every notification this never raises, and the
+        push goes out after the caller's commit.
+        """
+        await self.notify(
+            userId=medtechId,
+            message=f"More fields requested for sample {sampleUid}.",
+            notificationType="CAPTURE_REOPENED",
+            entityId=resultId,
+        )
+
     async def notifySupervisorResultReady(
         self,
         resultId: uuid.UUID,
