@@ -16,12 +16,8 @@ POST /api/v1/results/{id}/reopen-capture          — Capture more fields (web l
 GET  /api/v1/results/{id}/summary                 — Verification summary (web lane)
 
 Every route is registered with its final role and response model, and answers
-404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. With it on, a route whose
-handler is not written yet answers 501 NOT_IMPLEMENTED. Built so far: field capture
-(mobile lane), and in the web lane list, detail, annotations, override, revert,
-verify, discard and reopen-capture. Still stubs: accept and submit (mobile lane) and
-the summary (web, later phase). The flag check is a dependency so it also wins over a
-body-validation 422.
+404 FEATURE_DISABLED while `fieldWorkflowEnabled` is off. Every handler is written.
+The flag check is a dependency so it also wins over a body-validation 422.
 """
 from __future__ import annotations
 
@@ -34,7 +30,7 @@ from ..core.audit_logger import AuditLogger, getAuditLogger
 from ..core.config import settings
 from ..core.database import getDb
 from ..core.enums import UserRole
-from ..core.exceptions import FeatureDisabledError, NotImplementedYetError
+from ..core.exceptions import FeatureDisabledError
 from ..core.rbac import RequireRole
 from ..models.result_field import Magnification
 from ..schemas.field import (
@@ -126,11 +122,13 @@ async def captureField(
 )
 async def acceptField(
     field_id: uuid.UUID,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> FieldActionResponse:
-    """Move a field from ANALYZED to ACCEPTED while the result is CAPTURING."""
-    raise NotImplementedYetError()
+    """Proceed; see `ResultFieldService.acceptField`."""
+    return await _service.acceptField(field_id, uuid.UUID(claims["user_id"]), request)
 
 
 @router.post(
@@ -146,15 +144,14 @@ async def discardField(
     _enabled: None = Depends(requireFieldWorkflow),
     _service: ResultFieldService = Depends(getResultFieldService),
 ) -> FieldActionResponse:
-    """Discard a field. Mobile path while CAPTURING (reason optional); web path while
-    PENDING_CONFIRM or RETURNED_FOR_CORRECTION (reason required)."""
-    try:
-        return await _service.discardField(
-            field_id, uuid.UUID(claims["user_id"]), body.reason if body else None, request
-        )
-    except NotImplementedError:
-        # The CAPTURING (mobile) path belongs to the mobile lane and is not written yet.
-        raise NotImplementedYetError() from None
+    """Discard a field; see `ResultFieldService.discardField`.
+
+    Mobile path while CAPTURING (reason optional); web path while PENDING_CONFIRM or
+    RETURNED_FOR_CORRECTION (reason required).
+    """
+    return await _service.discardField(
+        field_id, uuid.UUID(claims["user_id"]), body.reason if body else None, request
+    )
 
 
 @router.post(
@@ -164,11 +161,13 @@ async def discardField(
 )
 async def submitFields(
     id: uuid.UUID,
+    request: Request,
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
 ) -> ResultStatusResponse:
-    """CAPTURING to PENDING_CONFIRM; 409 FIELDS_UNDECIDED or FIELDS_BELOW_MINIMUM."""
-    raise NotImplementedYetError()
+    """Submit for Verification; see `ResultFieldService.submitFields`."""
+    return await _service.submitFields(id, uuid.UUID(claims["user_id"]), request)
 
 
 @router.get(
