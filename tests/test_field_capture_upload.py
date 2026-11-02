@@ -8,6 +8,9 @@
   CAPTURING, may add a field.
 - A failed analysis stores nothing. A box the engine returns that can't be drawn
   is dropped and counted; the AI counts stay as reported.
+- A retried upload (same capture id on the same specimen) gets the field already
+  made, as it is now, without analysing, storing or auditing anything again; also
+  after the result left capture. A new capture id is stored on the new field.
 DB, storage and the AI engine are mocked.
 """
 from __future__ import annotations
@@ -18,9 +21,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from src.core.audit_logger import AuditLogger
-from src.core.exceptions import AIAnalysisError, ConflictException
+from src.core.exceptions import AIAnalysisError, ConflictException, ForbiddenException
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.image import Image, ImageStatus
 from src.models.result_field import FieldStatus, Magnification, ResultField
@@ -85,6 +89,7 @@ async def _upload(
     inference: SimpleNamespace,
     magnification: Magnification = Magnification.HPF,
     diagnosis: object = None,
+    captureId: str | None = None,
 ):
     diagnosisPatch = (
         patch.object(FieldCaptureService, "_computeSmartDiagnosis", side_effect=diagnosis)
@@ -101,9 +106,9 @@ async def _upload(
         _uploadToStorage=AsyncMock(),
     ), diagnosisPatch, patch.object(
         field_capture_service.specimen_service, "markProcessing", AsyncMock(return_value=existing is None)
-    ):
+    ), patch.object(field_capture_service, "getAssignedSpecimen", AsyncMock(return_value=_specimen())):
         response = await service.handleFieldUpload(
-            SPECIMEN_ID, MEDTECH_ID, MagicMock(content_type="image/jpeg"), magnification, None
+            SPECIMEN_ID, MEDTECH_ID, MagicMock(content_type="image/jpeg"), magnification, None, captureId
         )
         stored = service._uploadToStorage.await_args.args[0]
     return response, stored
@@ -379,3 +384,119 @@ async def test_noFieldMayBeAddedForAPatientWhoRefusedProcessing() -> None:
 
     assert excInfo.value.errorCode == "CONSENT_REFUSED"
 
+
+# ── A retried upload (capture id) ─────────────────────────────────────────────
+
+CAPTURE_ID = "k3J9xQ2mZpL7aB4c"
+
+
+def _storedField() -> ResultField:
+    return ResultField(
+        fieldId=uuid.uuid4(), resultId=RESULT_ID, specimenId=SPECIMEN_ID, imageId=uuid.uuid4(), fieldNo=4,
+        magnification=Magnification.LPF, status=FieldStatus.ACCEPTED, aiFindings={"erythrocytes": 3},
+        detections=[{"id": "d1", "particleType": "erythrocytes", "confidence": 0.8,
+                     "x": 10.0, "y": 10.0, "w": 10.0, "h": 10.0}],
+        imageWidth=800, imageHeight=600, confidenceScores={"erythrocytes": 0.8},
+        effectiveCounts={"erythrocytes": 3}, smartDiagnosis={"gout": {"level": "LOW"}},
+        smartDiagnosisUnavailable=False, modelVersion="v0.2.0", version=2, clientCaptureId=CAPTURE_ID,
+    )
+
+
+def _replayService(stored: ResultField, status: ResultStatus = ResultStatus.CAPTURING) -> tuple:
+    result = _capturingResult(fieldCount=5)
+    result.status = status
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=stored)))
+    db.get = AsyncMock(return_value=result)
+    auditLogger = MagicMock(spec=AuditLogger, record=AsyncMock())
+    return FieldCaptureService(db=db, auditLogger=auditLogger), db
+
+
+async def _uploadAgain(service: FieldCaptureService, assigned: object = None) -> tuple:
+    """Upload again with `CAPTURE_ID`; returns the response and the steps a new
+    capture would run (guard, analysis, storage), which a replay must skip."""
+    skipped = SimpleNamespace(guard=AsyncMock(), inference=AsyncMock(), storage=AsyncMock())
+    with patch.multiple(
+        service,
+        _readWithinLimit=AsyncMock(return_value=b"raw"),
+        _requireFieldUploadAllowed=skipped.guard,
+        _runInference=skipped.inference,
+        _uploadToStorage=skipped.storage,
+    ), patch.object(field_capture_service, "getAssignedSpecimen", assigned or AsyncMock(return_value=_specimen())):
+        response = await service.handleFieldUpload(
+            SPECIMEN_ID, MEDTECH_ID, MagicMock(content_type="image/jpeg"), Magnification.HPF, None, CAPTURE_ID
+        )
+    return response, skipped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [ResultStatus.CAPTURING, ResultStatus.PENDING_CONFIRM])
+async def test_aRetriedUploadGetsTheFieldItAlreadyMadeAndStoresNothing(status: ResultStatus) -> None:
+    # PENDING_CONFIRM: the answer was lost and the MedTech submitted before the retry ran.
+    stored = _storedField()
+    service, db = _replayService(stored, status)
+
+    response, skipped = await _uploadAgain(service)
+
+    assert (response.fieldId, response.fieldNo, response.status) == (stored.fieldId, 4, FieldStatus.ACCEPTED)
+    assert response.magnification == Magnification.LPF
+    assert [d.id for d in response.detections] == ["d1"]
+    assert response.aiFindings == {"erythrocytes": 3}
+    assert response.smartDiagnosisPreview == {"gout": {"level": "LOW"}}
+    assert (response.acceptedFieldCount, response.imageWidth, response.imageHeight) == (5, 800, 600)
+    skipped.inference.assert_not_awaited()
+    skipped.storage.assert_not_awaited()
+    skipped.guard.assert_not_awaited()
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+    service.auditLogger.record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_theReplayLooksUpThisSpecimensCaptureWithItsBoxes() -> None:
+    service, db = _replayService(_storedField())
+
+    await _uploadAgain(service)
+
+    [statement] = [c.args[0] for c in db.execute.await_args_list]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "result_fields.specimen_id = " in sql and "result_fields.client_capture_id = " in sql
+    assert "result_fields.detections" in sql
+
+
+@pytest.mark.asyncio
+async def test_aRetryChecksOwnershipBeforeLookingAnythingUp() -> None:
+    service, db = _replayService(_storedField())
+    refused = AsyncMock(side_effect=ForbiddenException(code="SPECIMEN_NOT_ASSIGNED", message="Not yours."))
+
+    with pytest.raises(ForbiddenException) as excInfo:
+        await _uploadAgain(service, assigned=refused)
+
+    assert excInfo.value.errorCode == "SPECIMEN_NOT_ASSIGNED"
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_aNewCaptureIdIsStoredOnTheFieldAndInTheAudit() -> None:
+    service, db = _service()  # the capture-id lookup finds nothing
+
+    response, _ = await _upload(service, None, _inference(), captureId=CAPTURE_ID)
+
+    [field] = _added(db, ResultField)
+    assert field.clientCaptureId == CAPTURE_ID
+    assert response.fieldId == field.fieldId
+    assert service.auditLogger.record.await_args.kwargs["detailJson"]["capture_id"] == CAPTURE_ID
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_withoutACaptureIdNothingIsLookedUp() -> None:
+    service, db = _service()
+
+    await _upload(service, None, _inference())
+
+    [field] = _added(db, ResultField)
+    assert field.clientCaptureId is None
+    statements = [str(c.args[0]) for c in db.execute.await_args_list]
+    assert not any("client_capture_id" in sql for sql in statements)

@@ -38,6 +38,7 @@ RESULT_FIELD_COLUMNS = {
     "smart_diagnosis_unavailable": (False, True),
     "model_version": (False, False),
     "discard_reason": (True, False),
+    "client_capture_id": (True, False),  # migration 0050
     "verified_by": (True, False),
     "verified_at": (True, False),
     "last_opened_by": (True, False),
@@ -72,6 +73,10 @@ def test_resultFieldsConstraintsAndIndexes():
     indexed = {tuple(c.name for c in i.columns) for i in table.indexes}
     assert ("result_id",) in indexed
     assert ("specimen_id",) in indexed
+    [capture] = [i for i in table.indexes if i.name == "uq_result_fields_specimen_capture"]
+    assert capture.unique
+    assert tuple(c.name for c in capture.columns) == ("specimen_id", "client_capture_id")
+    assert str(capture.dialect_options["postgresql"]["where"]) == "client_capture_id IS NOT NULL"
     assert ("specimen_id", "updated_at") in indexed
     assert table.columns["image_id"].type.__class__.__name__ == "UUID"
     assert table.columns["magnification"].type.length == 3

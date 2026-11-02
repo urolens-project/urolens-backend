@@ -68,6 +68,10 @@ class ResultField(Base):
         ),
         CheckConstraint("version >= 1", name="ck_result_fields_version"),
         Index("ix_result_fields_specimen_updated", "specimen_id", "updated_at"),
+        Index(
+            "uq_result_fields_specimen_capture", "specimen_id", "client_capture_id",
+            unique=True, postgresql_where=text("client_capture_id IS NOT NULL"),
+        ),
     )
 
     fieldId: Mapped[uuid.UUID] = mapped_column(
@@ -130,6 +134,9 @@ class ResultField(Base):
     )
     modelVersion: Mapped[str] = mapped_column("model_version", String(30), nullable=False)
     discardReason: Mapped[str | None] = mapped_column("discard_reason", Text, nullable=True)
+    clientCaptureId: Mapped[str | None] = mapped_column("client_capture_id", String(64), nullable=True)
+    """The phone's name for the photo (migration 0050), unique per specimen: a retried
+    upload with the same name gets this field back instead of adding another."""
 
     # ── Verification ─────────────────────────────────────────────────────────
     verifiedBy: Mapped[uuid.UUID | None] = mapped_column(
