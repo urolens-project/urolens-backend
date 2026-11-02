@@ -15,10 +15,16 @@ an audit row per view). Run as a module from the repo root:
   hit the wrong server.
 - Logs in once per role and reuses the token (login is rate limited to 5
   attempts / 5 min per account).
-- Upload specimens must be assigned to the MedTech and have no submitted
-  result; each is uploaded to repeatedly (each upload replaces the previous
-  image). Upload concurrency is capped at the number of specimen IDs, since
-  uploads to one specimen are serialized by its row lock.
+- Uploads go to `POST /fields` by default (`--upload-route fields`), the
+  multi-field capture route the app uses once `FIELD_WORKFLOW_ENABLED` is on.
+  Upload specimens must be assigned to the MedTech with no result yet or one
+  still `CAPTURING`. Each upload adds a field, so they collect fields during a
+  run: reject or reset them afterwards. The image is a real slide photo scaled
+  to camera size, since the engine's input gate refuses anything else.
+  `--upload-route images` measures the single-image route instead (flag off);
+  there each upload replaces the previous image and the specimen must have no
+  submitted result. Either way, upload concurrency is capped at the number of
+  specimen IDs, since uploads to one specimen are serialized by its row lock.
 - Credentials come from environment variables (test-harness secrets, not app
   config — hence not `src.core.config.settings`); missing ones are prompted.
 
@@ -40,6 +46,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -54,6 +61,7 @@ P95_TARGETS_MS: dict[str, float] = {
     "supervisor_pending_list": 500,
     "result_detail": 800,
     "image_upload": 8000,
+    "field_upload": 8000,
 }
 
 _API = "/api/v1"
@@ -111,6 +119,25 @@ def requireHostConfirmation(baseUrl: str, confirmHost: str) -> str:
             "This test writes data — point it at staging, never production."
         )
     return host
+
+
+# A slide photo the engine's gate accepts (copied from urolens-ai-engine's test fixtures).
+_SLIDE_IMAGE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "images" / "slide_leukocytes_640x480.jpg"
+
+# Route and multipart fields per --upload-route.
+_UPLOAD_ROUTES: dict[str, tuple[str, str]] = {
+    "fields": ("field_upload", f"{_API}/fields"),
+    "images": ("image_upload", f"{_API}/images/upload"),
+}
+
+
+def makeFieldImage(width: int = 2048, height: int = 1536) -> bytes:
+    """A real slide photo scaled to camera size, as a JPEG the AI gate accepts."""
+    with Image.open(_SLIDE_IMAGE) as slide:
+        image = slide.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
 
 
 def makeUploadImage(width: int = 2048, height: int = 1536) -> bytes:
@@ -203,23 +230,25 @@ async def runBaseline(args: argparse.Namespace) -> list[dict]:
                 _printRow(summaries[-1])
 
         specimenIds = [s for s in os.environ.get("PERF_UPLOAD_SPECIMEN_IDS", "").split(",") if s]
+        scenario, route = _UPLOAD_ROUTES[args.upload_route]
         if specimenIds:
-            image = makeUploadImage()
+            image = makeFieldImage() if args.upload_route == "fields" else makeUploadImage()
+            form = {"magnification": "HPF"} if args.upload_route == "fields" else {}
 
             def upload(i: int) -> Awaitable[httpx.Response]:
                 return client.post(
-                    f"{_API}/images/upload",
-                    data={"specimen_id": specimenIds[i % len(specimenIds)]},
+                    route,
+                    data={"specimen_id": specimenIds[i % len(specimenIds)], **form},
                     files={"file": ("perf.jpg", image, "image/jpeg")},
                     headers=medtech,
                 )
 
             for concurrency in sorted({1, min(len(specimenIds), max(args.concurrency))}):
-                result = await runScenario("image_upload", concurrency, args.upload_requests, upload)
+                result = await runScenario(scenario, concurrency, args.upload_requests, upload)
                 summaries.append(result.summary())
                 _printRow(summaries[-1])
         else:
-            print("! image_upload skipped: set PERF_UPLOAD_SPECIMEN_IDS", file=sys.stderr)
+            print(f"! {scenario} skipped: set PERF_UPLOAD_SPECIMEN_IDS", file=sys.stderr)
     return summaries
 
 
@@ -241,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--requests", type=int, default=100, help="per read scenario and level")
     parser.add_argument("--upload-requests", type=int, default=20)
     parser.add_argument(
+        "--upload-route", choices=sorted(_UPLOAD_ROUTES), default="fields",
+        help="fields: POST /fields (multi-field flag on); images: POST /images/upload (flag off)",
+    )
+    parser.add_argument(
         "--deployed-ref", required=True,
         help="the branch/commit staging is running — recorded so the baseline says what was measured",
     )
@@ -253,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         "ticket": "UROLENS-220 SEC-4",
         "host": host,
         "deployed_ref": args.deployed_ref,
+        "upload_route": args.upload_route,
         "measured_at": datetime.now(UTC).isoformat(),
         "p95_targets_ms": P95_TARGETS_MS,
         "results": summaries,
