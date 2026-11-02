@@ -262,3 +262,41 @@ async def test_theReturnedResultMessageNamesTheSampleOnly() -> None:
         notificationType="RESULT_RETURNED",
         entityId=resultId,
     )
+
+
+# ── Capture More Fields (multi-field) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_theCaptureReopenedMessageNamesTheSampleOnly() -> None:
+    service = NotificationService(AsyncMock())
+    service.notify = AsyncMock()
+    medtechId, resultId = uuid.uuid4(), uuid.uuid4()
+
+    await service.notifyMedtechCaptureReopened(medtechId, resultId, "SMP-20261102-00007")
+
+    service.notify.assert_awaited_once_with(
+        userId=medtechId,
+        message="More fields requested for sample SMP-20261102-00007.",
+        notificationType="CAPTURE_REOPENED",
+        entityId=resultId,
+    )
+
+
+@pytest.mark.asyncio
+async def test_theCaptureReopenedPushCarriesWhatTheAppRoutesOn() -> None:
+    # The app opens the sample from `data.notification_type` and `data.entity_id`
+    # (the result's id); the lock-screen body names the sample code only.
+    session, expo = _session(), _FakeExpo()
+    medtechId, resultId = uuid.uuid4(), uuid.uuid4()
+
+    with patch.object(notification_service.httpx, "AsyncClient", expo):
+        await NotificationService(session).notifyMedtechCaptureReopened(medtechId, resultId, "SMP-20261102-00007")
+        await session.commit()
+        [[push]] = await _sent(expo)
+
+    assert push["body"] == "More fields requested for sample SMP-20261102-00007."
+    assert push["data"] == {
+        "notification_id": str(NOTIFICATION_IDS[0]),
+        "notification_type": "CAPTURE_REOPENED",
+        "entity_id": str(resultId),
+    }
