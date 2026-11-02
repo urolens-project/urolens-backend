@@ -303,6 +303,13 @@ class VerificationSummaryResponse(BaseModel):
 
 # ── Shapes for routes the lanes will change (schema-only for now) ────────────
 
+# The phone's name for a photo, sent as `capture_id` with every upload of it (migration
+# 0050): long enough to be unique per specimen, short and plain enough to store and log.
+CAPTURE_ID_MIN_LENGTH = 8
+CAPTURE_ID_MAX_LENGTH = 64
+CAPTURE_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+
+
 class FieldAnalysisResponse(BaseModel):
     """`POST /fields` (201): the field one image upload added to a specimen."""
 

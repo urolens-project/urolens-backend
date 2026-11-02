@@ -39,7 +39,8 @@ def _render(function) -> str:
 
 def test_revisionSitsOn0048AndTheChainHasOneHead(scriptDir):
     assert scriptDir.get_revision("0049").down_revision == "0048"
-    assert scriptDir.get_heads() == ["0049"]
+    # Later revisions build on 0049; the chain must still have exactly one head.
+    assert len(scriptDir.get_heads()) == 1
 
 
 def test_upgradeAddsTheTwoColumnsTheKeyAndTheIndexAllGuarded(scriptDir):

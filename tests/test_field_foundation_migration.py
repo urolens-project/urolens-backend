@@ -1,7 +1,8 @@
 """Unit tests — migration 0047 (multi-field foundation). No database: `upgrade()`
 is rendered to SQL through an offline Alembic context and read as text, and the
 module source is read for the guards. The real-database check is
-`tests/test_fresh_db_build.py`.
+`tests/test_fresh_db_build.py`. The model is compared with 0047 plus the later
+revisions that add to its tables (`LATER_REVISIONS`).
 """
 from __future__ import annotations
 
@@ -23,6 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 NEW_TABLES = ("result_fields", "field_annotation_edits")
 _TABLE_RE = re.compile(r"CREATE TABLE (\w+) \((.*?)\n\)", re.DOTALL)
 _NOT_COLUMNS = ("CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK")
+# Later revisions that add columns or indexes to the tables 0047 created.
+LATER_REVISIONS = ("0050",)
+_ADD_COLUMN_RE = re.compile(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^\n;]*)")
 
 
 @pytest.fixture(scope="module")
@@ -32,15 +36,27 @@ def migration():
     return ScriptDirectory.from_config(cfg).get_revision("0047")
 
 
-@pytest.fixture(scope="module")
-def upgradeSql(migration) -> str:
+def _render(revision) -> str:
     buffer = io.StringIO()
     context = MigrationContext.configure(
         dialect_name="postgresql", opts={"as_sql": True, "output_buffer": buffer}
     )
     with Operations.context(context):
-        migration.module.upgrade()
+        revision.module.upgrade()
     return buffer.getvalue()
+
+
+@pytest.fixture(scope="module")
+def upgradeSql(migration) -> str:
+    return _render(migration)
+
+
+@pytest.fixture(scope="module")
+def laterSql() -> str:
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    scriptDir = ScriptDirectory.from_config(cfg)
+    return "".join(_render(scriptDir.get_revision(rev)) for rev in LATER_REVISIONS)
 
 
 def _columns(sql: str, table: str) -> dict[str, bool]:
@@ -65,8 +81,11 @@ def test_revisionSitsOn0046WithASingleHead(migration):
 
 
 @pytest.mark.parametrize("table", NEW_TABLES)
-def test_createTableMatchesTheModel(upgradeSql, table):
+def test_createTableMatchesTheModel(upgradeSql, laterSql, table):
     emitted = _columns(upgradeSql, table)
+    for added, column, definition in _ADD_COLUMN_RE.findall(laterSql):
+        if added == table:
+            emitted[column] = "NOT NULL" not in definition
     expected = {c.name: c.nullable for c in Base.metadata.tables[table].columns}
     assert emitted == expected
 
@@ -81,11 +100,14 @@ def test_rlsIsEnabledWithLiteralStatementsAndNoPolicies(upgradeSql, migration):
     assert "CREATE POLICY" not in upgradeSql
 
 
-def test_everyModelIndexAndConstraintIsCreated(upgradeSql):
+def test_everyModelIndexAndConstraintIsCreated(upgradeSql, laterSql):
     for table in NEW_TABLES:
         mapped = Base.metadata.tables[table]
         for index in mapped.indexes:
-            assert f"CREATE INDEX {index.name} ON {table}" in upgradeSql, index.name
+            created = f"CREATE INDEX {index.name} ON {table}" in upgradeSql or (
+                f"INDEX IF NOT EXISTS {index.name}" in laterSql and f"ON {table}" in laterSql
+            )
+            assert created, index.name
         for constraint in mapped.constraints:
             if constraint.name:
                 assert constraint.name in upgradeSql, constraint.name
