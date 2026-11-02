@@ -83,6 +83,20 @@ jobs:
         # Any failure here is a real regression.
         run: pytest -q
 
+      - name: Run tests with the multi-field flag on (report only)
+        # The step above runs with FIELD_WORKFLOW_ENABLED unset (off), the way
+        # most tests were written. This runs the same suite the way production
+        # will run once the multi-field release ships, so a test, or code, that
+        # silently assumes the flag is off shows up here. Report only until the
+        # single-image tests still failing with the flag on set it off
+        # themselves (web lane: result confirmation, result review and
+        # annotate, the MedTech pending list, review concurrency); then drop
+        # continue-on-error so this gates like the step above.
+        continue-on-error: true
+        env:
+          FIELD_WORKFLOW_ENABLED: "true"
+        run: pytest -q
+
       - name: OpenAPI sanity check
         run: python -m scripts.check_openapi
 

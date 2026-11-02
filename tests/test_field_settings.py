@@ -1,6 +1,8 @@
 """Unit tests — multi-field settings and the env parsers in `core.config`."""
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from src.core import config
@@ -13,6 +15,10 @@ _FIELD_ENV = (
     "FIELD_OUTLIER_MULTIPLIER",
     "FIELD_OUTLIER_MIN_ABOVE",
 )
+
+# Read before `cleanEnv` clears it: the CI job that runs the suite with the flag on
+# sets it on purpose, so the live settings object is on there.
+_FLAG_SET_BY_ENVIRONMENT = "FIELD_WORKFLOW_ENABLED" in os.environ
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +78,7 @@ def test_defaultsKeepTheFlagOff():
     assert loaded.fieldOutlierMinAbove == 5
 
 
+@pytest.mark.skipif(_FLAG_SET_BY_ENVIRONMENT, reason="FIELD_WORKFLOW_ENABLED is set by the environment")
 def test_theLiveSettingsObjectAlsoDefaultsOff():
     assert config.settings.fieldWorkflowEnabled is False
 
