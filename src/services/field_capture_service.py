@@ -7,6 +7,9 @@ single-image pipeline of `AIIntegrationService` (type and size checks, decode,
 metadata strip, storage) and changes only what is persisted: a new `images` row
 and a new `result_fields` row, never a replacement. Earlier fields, their images
 and any corrections are left alone.
+
+An upload may carry the phone's capture id. A retry of the same photo (after a lost
+answer) then gets the field already made for it, not a second one (migration 0050).
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from typing import Any, NamedTuple
 
 from fastapi import Request, UploadFile
 from sqlalchemy import func, select
+from sqlalchemy.orm import undefer
 
 from ..core.config import settings
 from ..core.exceptions import AIAnalysisError, ConflictException
@@ -48,6 +52,7 @@ class FieldCaptureService(AIIntegrationService):
         file: UploadFile,
         magnification: Magnification,
         request: Request | None,
+        captureId: str | None = None,
     ) -> FieldAnalysisResponse:
         """Validate, analyse and store one field of a specimen.
 
@@ -59,12 +64,20 @@ class FieldCaptureService(AIIntegrationService):
         until the MedTech accepts it. Nothing is saved unless the image is both
         analysed and stored.
 
+        With a `captureId` this specimen has already stored a field for, nothing is
+        analysed, stored or audited: that field is returned as it is now, in the same
+        shape, so a retry after a lost answer can't count one view twice. This is
+        decided after the ownership check and before the status check, so a retry
+        still gets its field after the result has moved on.
+
         Args:
             specimenId: the specimen the field belongs to.
             uploaderId: the calling MedTech, from their token.
             file: the multipart image.
             magnification: the objective the field was captured at.
             request: the inbound request, for the audit row's client IP.
+            captureId: the phone's name for this photo, the same on every retry of
+                it; None from an app that sends none (no replay check then).
 
         Returns:
             The new field's analysis, with the accepted-field count and minimum.
@@ -89,6 +102,10 @@ class FieldCaptureService(AIIntegrationService):
         contentType = file.content_type or ""
         self._validateFormat(contentType)
         rawBytes = await self._readWithinLimit(file)
+        if captureId is not None:
+            replay = await self._replayedCapture(specimenId, uploaderId, captureId)
+            if replay is not None:
+                return replay
         specimen, result = await self._requireFieldUploadAllowed(specimenId, uploaderId, request)
         width, height = await self._validateImage(rawBytes, contentType)
         imageBytes = await self._stripMetadata(rawBytes, contentType)
@@ -137,6 +154,7 @@ class FieldCaptureService(AIIntegrationService):
             effectiveCounts=dict(counts),
             modelVersion=settings.aiModelVersion,
             version=1,
+            clientCaptureId=captureId,
         )
         field.smartDiagnosis, field.smartDiagnosisUnavailable = self._previewSmartDiagnosis(counts, field)
         self.db.add(field)
@@ -161,6 +179,7 @@ class FieldCaptureService(AIIntegrationService):
                 "file_size_bytes": len(imageBytes),
                 "started_analysis": startedAnalysis,
                 "dropped_boxes": droppedBoxes,
+                "capture_id": captureId,
             },
             request=request,
         )
@@ -185,6 +204,53 @@ class FieldCaptureService(AIIntegrationService):
         )
 
     # ── Private helpers ──────────────────────────────────────────────────
+
+    async def _replayedCapture(
+        self, specimenId: uuid.UUID, uploaderId: uuid.UUID, captureId: str
+    ) -> FieldAnalysisResponse | None:
+        """The field this specimen already holds for `captureId`, as the upload answered it.
+
+        Takes the specimen lock first, so two copies of one upload arriving together
+        run one after the other and the second finds the first's field (the unique
+        index on specimen and capture id is the last guard). Read only: no audit row,
+        nothing committed.
+
+        Returns:
+            The stored field in the `POST /fields` shape, or None for a new capture.
+
+        Raises:
+            SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if `specimenId` doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if it isn't the caller's.
+        """
+        await getAssignedSpecimen(self.db, specimenId, uploaderId)
+        field = (
+            await self.db.execute(
+                select(ResultField)
+                .options(undefer(ResultField.detections))
+                .where(ResultField.specimenId == specimenId, ResultField.clientCaptureId == captureId)
+            )
+        ).scalar_one_or_none()
+        if field is None:
+            return None
+        result = await self.db.get(AnalysisResult, field.resultId)
+        log.info("Capture replayed for specimen %s: field %s returned again", specimenId, field.fieldId)
+        return FieldAnalysisResponse(
+            fieldId=field.fieldId,
+            fieldNo=field.fieldNo,
+            magnification=field.magnification,
+            resultId=field.resultId,
+            imageId=field.imageId,
+            status=field.status,
+            aiFindings=field.aiFindings,
+            detections=[Detection(**box) for box in field.detections or []],
+            imageWidth=field.imageWidth,
+            imageHeight=field.imageHeight,
+            confidenceScores=field.confidenceScores,
+            smartDiagnosisPreview=field.smartDiagnosis,
+            smartDiagnosisUnavailable=field.smartDiagnosisUnavailable,
+            acceptedFieldCount=(result.fieldCount if result is not None else 0) or 0,
+            minFields=settings.minFieldsPerSpecimen,
+        )
 
     async def _requireFieldUploadAllowed(
         self, specimenId: uuid.UUID, uploaderId: uuid.UUID, request: Request | None

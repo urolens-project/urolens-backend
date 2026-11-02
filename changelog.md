@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Added
+- **A retried field upload no longer adds the same photo twice (behind `FIELD_WORKFLOW_ENABLED`;
+  an app that sends no capture id is unaffected).** `POST /api/v1/fields` takes an optional
+  multipart `capture_id`: the phone's name for a photo, sent with every upload of it (8–64
+  letters, digits, `-` or `_`; anything else is a 422 `VALIDATION_ERROR`). The first upload
+  stores it on the new field. An upload with an id this specimen already has returns that
+  field as it is now, as a 201 in the same shape, without analysing, storing or auditing
+  anything again. That also holds after the result has left capture, so a retry after a lost
+  answer can't count one view twice in the averages. The ownership check still runs first,
+  and two copies arriving together are serialized by the specimen lock. Migration `0050` adds
+  `result_fields.client_capture_id` (nullable) and a unique index on specimen and capture id
+  for rows that have one; no new table, so no row-level security change. The upload audit row
+  records the capture id. Run `0050` before releasing the app version that sends it.
 - **The phone gets the server's field minimum and the confirmed averages through sync (behind
   `FIELD_WORKFLOW_ENABLED`; with it off `GET /sync/pull` is unchanged).** The response carries
   `minFields` (from `MIN_FIELDS_PER_SPECIMEN`) beside `timestamp`, so the app shows the lab's real

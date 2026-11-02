@@ -34,6 +34,9 @@ from ..core.exceptions import FeatureDisabledError
 from ..core.rbac import RequireRole
 from ..models.result_field import Magnification
 from ..schemas.field import (
+    CAPTURE_ID_MAX_LENGTH,
+    CAPTURE_ID_MIN_LENGTH,
+    CAPTURE_ID_PATTERN,
     DiscardFieldRequest,
     FieldActionResponse,
     FieldAnalysisResponse,
@@ -106,13 +109,23 @@ async def captureField(
     specimenId: uuid.UUID = Form(..., alias="specimen_id"),
     file: UploadFile = File(..., description="JPEG or PNG, minimum 640×480"),
     magnification: Magnification = Form(Magnification.HPF, description="Objective of the field"),
+    captureId: str | None = Form(
+        None,
+        alias="capture_id",
+        min_length=CAPTURE_ID_MIN_LENGTH,
+        max_length=CAPTURE_ID_MAX_LENGTH,
+        pattern=CAPTURE_ID_PATTERN,
+        description="The phone's name for this photo, the same on every retry of it",
+    ),
     claims: dict = Depends(_medtech),
     _enabled: None = Depends(requireFieldWorkflow),
     _service: FieldCaptureService = Depends(getFieldCaptureService),
 ) -> FieldAnalysisResponse:
     """Add one analysed field to a specimen; see `FieldCaptureService.handleFieldUpload`."""
     uploaderId = uuid.UUID(claims["user_id"])
-    return await _service.handleFieldUpload(specimenId, uploaderId, file, magnification, request)
+    return await _service.handleFieldUpload(
+        specimenId, uploaderId, file, magnification, request, captureId
+    )
 
 
 @router.post(
