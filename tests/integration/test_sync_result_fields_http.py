@@ -1,5 +1,5 @@
 """HTTP-level tests — `GET /api/v1/sync/pull` keeps its JSON without `resultFields`
-while the multi-field flag is off, and carries it while on. The service is
+and `minFields` while the multi-field flag is off, and carries them while on. The service is
 replaced with a fake; its behaviour is covered by `tests/test_sync_result_fields.py`.
 """
 from __future__ import annotations
@@ -33,9 +33,14 @@ async def test_withoutFieldsTheResponseHasNoResultFieldsKey(asyncClient: AsyncCl
 @pytest.mark.asyncio
 async def test_withFieldsTheResponseCarriesThem(asyncClient: AsyncClient, medtechToken: str) -> None:
     fields = {"created": [{"fieldId": "f1", "status": "ACCEPTED"}], "updated": [], "deleted": []}
-    payload = {"timestamp": "2026-10-27T08:00:00+00:00", "changes": {**_TABLES, "resultFields": fields}}
+    payload = {
+        "timestamp": "2026-10-27T08:00:00+00:00",
+        "changes": {**_TABLES, "resultFields": fields},
+        "minFields": 10,
+    }
 
     response = await _get(asyncClient, medtechToken, payload)
 
     assert response.status_code == 200, response.text
     assert response.json()["changes"]["resultFields"] == fields
+    assert response.json()["minFields"] == 10
