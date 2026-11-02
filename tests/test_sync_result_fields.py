@@ -6,7 +6,9 @@
   published `SyncResultField` shape (camelCase, every status, never the AI
   boxes, which are not even loaded); a delta sends fields changed since the
   last sync and deletes the fields of samples that left the window; the audit
-  row lists the field IDs sent, also when only fields changed.
+  row lists the field IDs sent, also when only fields changed. Result rows
+  carry `field_summary` (the contract shape with display values, null until
+  confirmation) and the payload carries `minFields` from the settings.
 DB is mocked.
 """
 from __future__ import annotations
@@ -80,7 +82,10 @@ async def test_withTheFlagOffNothingAboutFieldsIsSentOrRead(monkeypatch: pytest.
     assert set(payload["changes"]) == {"specimens", "queueAssignments", "analysisResults", "manualOverrides"}
     assert syncQueries(db, ResultField, "ResultField") == []
     assert "field_ids" not in auditLogger.record.await_args.kwargs["detailJson"]
-    assert "resultFields" not in SyncPullResponse.model_validate(payload).model_dump(mode="json")["changes"]
+    dumped = SyncPullResponse.model_validate(payload).model_dump(mode="json")
+    assert "resultFields" not in dumped["changes"]
+    assert "minFields" not in dumped
+    assert "field_summary" not in payload["changes"]["analysisResults"]["created"][0]
 
 
 # ── Flag on ───────────────────────────────────────────────────────────────────
@@ -179,6 +184,56 @@ async def test_withTheFlagOffRemovedSamplesDoNotLookUpFields(monkeypatch: pytest
     assert syncQueries(db, ResultField, "fieldId") == []
 
 
+@pytest.mark.asyncio
+async def test_thePayloadCarriesTheServersMinimumOfFields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    monkeypatch.setattr(settings, "minFieldsPerSpecimen", 12)
+    db = makeSyncDb()
+
+    payload, _ = await _pull(db)
+
+    assert payload["minFields"] == 12
+    assert SyncPullResponse.model_validate(payload).model_dump(mode="json")["minFields"] == 12
+
+
+@pytest.mark.asyncio
+async def test_aConfirmedResultCarriesItsFieldSummaryWithDisplayValues(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    stored = {
+        "fieldCount": 10,
+        "perClass": {
+            "casts": {"mean": 0.1, "min": 0, "max": 1, "total": 1, "fieldsSeen": 1, "aiMean": 0.1},
+            "erythrocytes": {"mean": 2.4, "min": 1, "max": 5, "total": 24, "fieldsSeen": 10, "aiMean": 2.6},
+        },
+        "focalFindings": [{"particleType": "erythrocytes", "fieldNos": [7]}],
+    }
+    result = syncResult(specimen, status="PENDING_SUPERVISOR_APPROVAL", fieldSummary=stored)
+    db = makeSyncDb(rows=[(specimen, result)])
+
+    payload, _ = await _pull(db)
+
+    [row] = payload["changes"]["analysisResults"]["created"]
+    summary = row["field_summary"]
+    assert summary["fieldCount"] == 10
+    assert summary["perClass"]["casts"]["displayValue"] == "<1"
+    assert summary["perClass"]["erythrocytes"]["displayValue"] == "2"
+    assert summary["perClass"]["erythrocytes"]["mean"] == 2.4
+    assert summary["perClass"]["erythrocytes"]["fieldsAboveNormal"] == [7]
+    assert summary["focalFindings"] == [{"particleType": "erythrocytes", "fieldNos": [7]}]
+
+
+@pytest.mark.asyncio
+async def test_aResultNotYetConfirmedHasANullFieldSummary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    db = makeSyncDb(rows=[(specimen, syncResult(specimen, status="CAPTURING"))])
+
+    payload, _ = await _pull(db)
+
+    assert payload["changes"]["analysisResults"]["created"][0]["field_summary"] is None
+
+
 # ── The response JSON ─────────────────────────────────────────────────────────
 
 def test_theResponseLeavesResultFieldsOutRatherThanNullWhenOff() -> None:
@@ -192,3 +247,16 @@ def test_theResponseLeavesResultFieldsOutRatherThanNullWhenOff() -> None:
 
     assert "resultFields" not in off["changes"]
     assert on["changes"]["resultFields"] == empty
+
+
+def test_theResponseLeavesMinFieldsOutRatherThanNullWhenOff() -> None:
+    empty = {"created": [], "updated": [], "deleted": []}
+    tables = {"specimens": empty, "queueAssignments": empty, "analysisResults": empty, "manualOverrides": empty}
+
+    off = SyncPullResponse.model_validate({"timestamp": "t", "changes": tables}).model_dump(mode="json")
+    on = SyncPullResponse.model_validate(
+        {"timestamp": "t", "changes": {**tables, "resultFields": empty}, "minFields": 10}
+    ).model_dump(mode="json")
+
+    assert "minFields" not in off
+    assert on["minFields"] == 10

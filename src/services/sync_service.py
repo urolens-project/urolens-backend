@@ -24,8 +24,11 @@ While `FIELD_WORKFLOW_ENABLED` is on, the results' captured fields are sent too
 (`resultFields`, in the published `SyncResultField` shape): every status, so a
 discarded field arrives as a status change, and never the AI boxes, which a
 field can hold up to 1,000 of; the phone keeps the boxes of the fields it
-captured and fetches others one field at a time. With the flag off the payload
-is exactly as before.
+captured and fetches others one field at a time. Also while it is on, each result
+row carries `field_summary` (the confirmed per-class averages with their display
+values, null until confirmation), and the payload carries `minFields`, the accepted
+fields a specimen needs, so the phone shows the server's minimum instead of a
+hard-coded one. With the flag off the payload is exactly as before.
 
 Read with SQLAlchemy. The previous Supabase REST version downloaded every
 specimen the MedTech ever had on every sync and put every specimen ID in the
@@ -54,6 +57,7 @@ from src.models.result_field import ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
 from src.schemas.field import SyncResultField
+from src.services.field_aggregation_service import toContractFieldSummary
 from src.services.open_returns import openReturnReasons
 
 logger = logging.getLogger(__name__)
@@ -129,8 +133,10 @@ def _specimenRow(s: Specimen) -> dict[str, Any]:
     }
 
 
-def _resultRow(r: AnalysisResult, approvedAt: datetime | None, returnReason: str | None) -> dict[str, Any]:
-    return {
+def _resultRow(
+    r: AnalysisResult, approvedAt: datetime | None, returnReason: str | None, withFieldSummary: bool
+) -> dict[str, Any]:
+    row = {
         "id": str(r.resultId),
         "specimen_id": str(r.specimenId),
         "ai_findings": r.aiFindings,
@@ -148,6 +154,11 @@ def _resultRow(r: AnalysisResult, approvedAt: datetime | None, returnReason: str
         "updated_at": _iso(r.updatedAt),
         "return_reason": returnReason,
     }
+    if withFieldSummary:
+        # The same contract shape (with `displayValue`, e.g. "<1") that the web and
+        # the physician view show; null until a multi-field result is confirmed.
+        row["field_summary"] = toContractFieldSummary(r.fieldSummary)
+    return row
 
 
 def _assignmentRow(a: QueueAssignment) -> dict[str, Any]:
@@ -270,7 +281,9 @@ async def _latestReturnReasons(db: AsyncSession, resultIds: list[uuid.UUID]) -> 
     return reasons
 
 
-async def _resultRows(db: AsyncSession, results: list[AnalysisResult]) -> list[dict[str, Any]]:
+async def _resultRows(
+    db: AsyncSession, results: list[AnalysisResult], withFieldSummary: bool
+) -> list[dict[str, Any]]:
     if not results:
         return []
     ids = [r.resultId for r in results]
@@ -281,7 +294,10 @@ async def _resultRows(db: AsyncSession, results: list[AnalysisResult]) -> list[d
     # that return; keep its reason on the phone while it captures.
     capturingIds = [r.resultId for r in results if r.status == ResultStatus.CAPTURING]
     reasons |= await openReturnReasons(db, capturingIds)
-    return [_resultRow(r, approvals.get(r.resultId), reasons.get(r.resultId)) for r in results]
+    return [
+        _resultRow(r, approvals.get(r.resultId), reasons.get(r.resultId), withFieldSummary)
+        for r in results
+    ]
 
 
 async def _assignments(
@@ -433,7 +449,9 @@ async def pull(
         `deleted` is only filled on a delta. While `FIELD_WORKFLOW_ENABLED` is
         on, `changes` also has `resultFields`: `SyncResultField` rows
         (camelCase, every status, no AI boxes), deleted with their sample; the
-        audit row then lists the field IDs sent.
+        audit row then lists the field IDs sent. Result rows then also carry
+        `field_summary` (the `FieldSummary` shape, or null), and the payload
+        has `minFields` beside `timestamp`.
     """
     medtechId = uuid.UUID(userId)
     isDelta = lastSyncedAt is not None
@@ -445,7 +463,7 @@ async def pull(
 
     specimens, results = await _specimensAndResults(db, medtechId, cutoff, lastSyncedAt)
     specimenRows = [_specimenRow(s) for s in specimens]
-    resultRows = await _resultRows(db, results)
+    resultRows = await _resultRows(db, results, withFieldSummary=fieldsOn)
     assignmentRows = [_assignmentRow(a) for a in await _assignments(db, medtechId, cutoff, lastSyncedAt)]
     overrideRows = [
         row
@@ -506,6 +524,8 @@ async def pull(
         "analysisResults":  makeChanges(resultRows, "analysisResults"),
         "manualOverrides":  makeChanges(overrideRows, "manualOverrides"),
     }
+    payload: dict[str, Any] = {"timestamp": now.isoformat(), "changes": changes}
     if fieldsOn:
         changes["resultFields"] = makeChanges(fieldRows, "resultFields")
-    return {"timestamp": now.isoformat(), "changes": changes}
+        payload["minFields"] = settings.minFieldsPerSpecimen
+    return payload
