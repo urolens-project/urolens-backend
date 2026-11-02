@@ -260,3 +260,36 @@ def test_theResponseLeavesMinFieldsOutRatherThanNullWhenOff() -> None:
 
     assert "minFields" not in off
     assert on["minFields"] == 10
+
+
+# ── Volume ────────────────────────────────────────────────────────────────────
+
+def _volume(specimens: int, fieldsEach: int) -> tuple[list, list[ResultField]]:
+    rows, fields = [], []
+    for _ in range(specimens):
+        specimen = syncSpecimen(specimenId=uuid.uuid4())
+        result = syncResult(specimen, status="CAPTURING")
+        rows.append((specimen, result))
+        fields += [_field(result.resultId, specimen.specimenId, n) for n in range(1, fieldsEach + 1)]
+    return rows, fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("since", [None, SINCE], ids=["full", "delta"])
+async def test_theNumberOfQueriesDoesNotGrowWithSamplesOrFields(
+    monkeypatch: pytest.MonkeyPatch, since: datetime | None
+) -> None:
+    # A MedTech's window can hold dozens of samples with 10+ fields each; one query
+    # per sample or per field would make every sync slower as the day goes on.
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    smallRows, smallFields = _volume(1, 1)
+    bigRows, bigFields = _volume(50, 15)
+    small = makeSyncDb(rows=smallRows, fields=smallFields)
+    big = makeSyncDb(rows=bigRows, fields=bigFields)
+
+    smallPayload, _ = await _pull(small, since)
+    bigPayload, _ = await _pull(big, since)
+
+    table = "updated" if since else "created"
+    assert len(bigPayload["changes"]["resultFields"][table]) == 750
+    assert big.execute.await_count == small.execute.await_count
