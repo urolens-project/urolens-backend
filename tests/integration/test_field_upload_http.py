@@ -2,6 +2,8 @@
 
 - `POST /api/v1/fields` (flag on) adds a field and answers with its analysis;
   `magnification` reaches the service (HPF when omitted); an unknown one is a 422.
+  `capture_id` reaches the service as sent (None when omitted); one that is too
+  short, too long or has other characters is a 422 before the service runs.
 - `POST /api/v1/fields` (flag off) is 404 `FEATURE_DISABLED`.
 - `POST /api/v1/images/upload` (flag on) is 410 `APP_UPDATE_REQUIRED` and stores
   nothing, so an app that predates multi-field is told to update.
@@ -121,6 +123,41 @@ async def test_anUnknownMagnificationIsRefusedBeforeAnyUpload(
     response = await _post(asyncClient, "/api/v1/fields", medtechToken, magnification="100X")
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    fieldService.handleFieldUpload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("form", "expected"),
+    [({"capture_id": "k3J9xQ2m-ZpL_7aB4c"}, "k3J9xQ2m-ZpL_7aB4c"), ({}, None)],
+    ids=["sent", "omitted"],
+)
+async def test_theCaptureIdReachesTheService(
+    asyncClient: AsyncClient, medtechToken: str, fakeServices: tuple, monkeypatch: pytest.MonkeyPatch,
+    form: dict, expected: str | None,
+) -> None:
+    fieldService, _ = fakeServices
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+
+    response = await _post(asyncClient, "/api/v1/fields", medtechToken, **form)
+
+    assert response.status_code == 201, response.text
+    assert fieldService.handleFieldUpload.await_args.args[5] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("captureId", ["short", "x" * 65, "has spaces in it", "semi;colon-id", "ümlaut-id-1"])
+async def test_aMalformedCaptureIdIsRefusedBeforeAnyUpload(
+    asyncClient: AsyncClient, medtechToken: str, fakeServices: tuple, monkeypatch: pytest.MonkeyPatch,
+    captureId: str,
+) -> None:
+    fieldService, _ = fakeServices
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+
+    response = await _post(asyncClient, "/api/v1/fields", medtechToken, capture_id=captureId)
+
+    assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
     fieldService.handleFieldUpload.assert_not_awaited()
 
