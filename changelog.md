@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **The phone gets the server's field minimum and the confirmed averages through sync (behind
+  `FIELD_WORKFLOW_ENABLED`; with it off `GET /sync/pull` is unchanged).** The response carries
+  `minFields` (from `MIN_FIELDS_PER_SPECIMEN`) beside `timestamp`, so the app shows the lab's real
+  minimum instead of a hard-coded 10. Each analysis-result row carries `field_summary`: the same
+  `FieldSummary` shape the web and physician views use (per class: mean, min, max, total, fields
+  seen, AI mean, `displayValue` such as "<1", fields above normal; plus focal findings), or `null`
+  until a multi-field result is confirmed and for single-image results. Not added: `field_count`
+  (the app counts its accepted `resultFields` rows, which also reflects decisions made offline). No
+  migration. Also fixes `test_removalsCoverAgingOutAndReassignment`, which failed from 2026-10-29
+  on because it relied on the order of a fixed date and today's cutoff.
 - **Multi-field web lane: review, return and reader changes (all behind `FIELD_WORKFLOW_ENABLED`, off
   by default; with it off every response is unchanged).** `GET /results/{id}` gains the result's
   fields, the field count, the stored per-class summary (exact means with a `displayValue`, and focal
