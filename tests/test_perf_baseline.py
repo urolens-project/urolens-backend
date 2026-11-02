@@ -7,6 +7,7 @@ image, and the scenario runner (warm-up excluded, concurrency honoured).
 from __future__ import annotations
 
 import asyncio
+import io
 import math
 import tempfile
 from collections import Counter
@@ -15,11 +16,13 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from PIL import Image as PILImage
 
 from scripts import perf_baseline
 from scripts.perf_baseline import (
     P95_TARGETS_MS,
     ScenarioResult,
+    makeFieldImage,
     makeUploadImage,
     percentile,
     requireHostConfirmation,
@@ -55,8 +58,24 @@ def test_anyErrorFailsTheScenarioEvenIfFast():
 def test_everyScenarioHasATarget():
     assert set(P95_TARGETS_MS) == {
         "sync_pull_full", "sync_pull_delta", "medtech_pending_list",
-        "supervisor_pending_list", "result_detail", "image_upload",
+        "supervisor_pending_list", "result_detail", "image_upload", "field_upload",
     }
+
+
+def test_everyUploadRouteHasATargetAndADefaultOfFields():
+    assert {scenario for scenario, _route in perf_baseline._UPLOAD_ROUTES.values()} <= set(P95_TARGETS_MS)
+    with patch.object(perf_baseline, "runBaseline", return_value=[]) as run:
+        perf_baseline.main(["--base-url", "https://staging.example.com", "--confirm-host", "staging.example.com",
+                            "--deployed-ref", "abc123"])
+    assert run.call_args.args[0].upload_route == "fields"
+
+
+def test_theFieldImageIsACameraSizedSlideJpegUnderTheUploadCap():
+    image = makeFieldImage()
+    assert image[:3] == b"\xff\xd8\xff"  # JPEG
+    assert len(image) < 10 * 1024 * 1024
+
+    assert PILImage.open(io.BytesIO(image)).size == (2048, 1536)
 
 
 def test_hostGuardRefusesAMismatchedHost():
