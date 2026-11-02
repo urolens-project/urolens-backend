@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.config import settings
 from src.models.analysis_result import ResultStatus
 from src.services import sync_service
 from src.services.result_confirmation_service import ResultConfirmationService
@@ -132,7 +133,9 @@ async def test_emptyPendingListIsNotLogged():
 # ── Sync pull ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice():
+async def test_syncPullRecordsWhichSpecimensWereSentToTheDevice(monkeypatch):
+    # The flag-on audit row (with `field_ids`) is in tests/test_sync_result_fields.py.
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
     specimen = syncSpecimen()
     result = syncResult(specimen)
     db = makeSyncDb(rows=[(specimen, result)])
