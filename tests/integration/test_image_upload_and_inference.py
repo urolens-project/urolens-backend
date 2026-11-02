@@ -25,6 +25,7 @@ import pytest
 from PIL import Image as PILImage
 
 from main import app
+from src.core.config import settings
 from src.core.database import getDb
 from src.core.exceptions import (
     ConflictError,
@@ -42,6 +43,17 @@ from tests.integration.conftest import (
     TEST_SPECIMEN_ID,
     _makeSbMock,
 )
+
+
+@pytest.fixture(autouse=True)
+def singleImageWorkflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run with the multi-field flag off, whatever the environment says.
+
+    These cover the single-image path, which the flag retires (410
+    `APP_UPDATE_REQUIRED`; see tests/integration/test_retired_image_discard_http.py).
+    """
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
 

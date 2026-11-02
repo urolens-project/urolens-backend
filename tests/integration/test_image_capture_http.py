@@ -19,6 +19,7 @@ from httpx import AsyncClient
 from PIL import Image as PILImage
 
 from main import app
+from src.core.config import settings
 from src.core.database import getDb
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.audit_log import AuditLog
@@ -26,6 +27,17 @@ from src.models.image import Image, ImageStatus
 from src.models.specimen import Specimen
 from src.services.ai_integration_service import AIIntegrationService
 from tests.integration.conftest import MEDTECH_USER_ID, TEST_SPECIMEN_ID, _makeSbMock
+
+
+@pytest.fixture(autouse=True)
+def singleImageWorkflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run with the multi-field flag off, whatever the environment says.
+
+    These cover the single-image path, which the flag retires (410
+    `APP_UPDATE_REQUIRED`; see tests/integration/test_field_upload_http.py).
+    """
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-0000000003b1")
 IMAGE_ID = uuid.UUID("00000000-0000-0000-0000-0000000003b2")
