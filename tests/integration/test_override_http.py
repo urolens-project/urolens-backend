@@ -29,6 +29,17 @@ from src.services.manual_override_service import ManualOverrideService
 from tests.conftest import makeSyncDb
 from tests.integration.conftest import MEDTECH_USER_ID
 
+
+@pytest.fixture(autouse=True)
+def singleImageWorkflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run with the multi-field flag off, whatever the environment says.
+
+    These cover the single-image path, which the flag retires (410
+    `APP_UPDATE_REQUIRED`; see tests/test_field_review_and_readers.py).
+    """
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+
+
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-0000000002b1")
 SPECIMEN_ID = uuid.UUID("00000000-0000-0000-0000-0000000002b2")
 

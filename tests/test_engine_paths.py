@@ -208,7 +208,9 @@ def test_anUnreadableFileIsNotCalledAPointer() -> None:
         assert config._isGitLfsPointer(folder) is False
 
 
-def test_startupLogsEachMissingEngineFile(caplog: pytest.LogCaptureFixture) -> None:
+def test_startupLogsEachMissingEngineFile(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    # With the flag off the server still starts; with it on it stops (tested below).
+    monkeypatch.setattr(config.settings, "fieldWorkflowEnabled", False)
     with patch.object(main, "engineFileProblems", return_value=["GATE_WEIGHTS_PATH is unset."]), \
          caplog.at_level(logging.ERROR, logger="main"), \
          TestClient(main.app):
