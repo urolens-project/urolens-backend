@@ -182,10 +182,12 @@ async def test_removalsCoverAgingOutAndReassignment() -> None:
     assert "queue_assignments.medtech_id = " in sql
     assert "specimens.medtech_id IS DISTINCT FROM" in sql
     assert "specimens.updated_at > " in sql
-    dates = sorted(v for v in _params(query).values() if isinstance(v, datetime))
-    assert dates[0] == SINCE - timedelta(days=30)  # the window's edge at the last sync
-    assert before - timedelta(days=30, seconds=5) <= dates[1] <= datetime.now(UTC) - timedelta(days=30)
-    assert dates[2] == SINCE
+    # Matched by value, not by sort order: today's cutoff passes SINCE as the calendar moves on.
+    dates = [v for v in _params(query).values() if isinstance(v, datetime)]
+    assert SINCE - timedelta(days=30) in dates  # the window's edge at the last sync
+    assert SINCE in dates
+    [cutoff] = [d for d in dates if d not in (SINCE, SINCE - timedelta(days=30))]
+    assert before - timedelta(days=30, seconds=5) <= cutoff <= datetime.now(UTC) - timedelta(days=30)
 
 
 @pytest.mark.asyncio

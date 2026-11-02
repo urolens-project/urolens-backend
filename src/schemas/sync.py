@@ -44,3 +44,15 @@ class SyncPullResponse(BaseModel):
 
     timestamp: str
     changes: SyncChanges
+    minFields: int | None = None
+    """Accepted fields a specimen needs before it can be submitted
+    (`MIN_FIELDS_PER_SPECIMEN`). Only present while `FIELD_WORKFLOW_ENABLED` is
+    on; with it off the key is left out, so the response is unchanged."""
+
+    @model_serializer(mode="wrap")
+    def _omitMinFieldsWhenOff(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Absent, not null, while the multi-field workflow is off.
+        data = handler(self)
+        if self.minFields is None:
+            data.pop("minFields", None)
+        return data
