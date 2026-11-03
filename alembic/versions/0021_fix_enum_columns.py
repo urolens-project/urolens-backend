@@ -18,6 +18,7 @@ Columns fixed:
   smart_diagnosis_outputs.nephro_score  probability_level -> VARCHAR(10)
 """
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0021"
