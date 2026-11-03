@@ -106,6 +106,12 @@ class _RacingFakeSession:
             f"{self._label}:execute:{'update' if stmt.is_update else 'other'}"
         )
         result = MagicMock()
+        if stmt.is_update and stmt.table.name == "result_fields":
+            # A return also clears the fields' verified marks while
+            # `FIELD_WORKFLOW_ENABLED` is on. It is not the status transition
+            # the race is about, so it must not touch `resultStatus`.
+            result.rowcount = 1
+            return result
         if stmt.is_update:
             params = stmt.compile().params
             async with self._shared.lock:
