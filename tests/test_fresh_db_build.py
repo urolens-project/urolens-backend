@@ -3,7 +3,7 @@
 Skipped unless `FRESH_DB_URL` points at an EMPTY scratch database (it runs
 `alembic upgrade head` on it). Never point it at a shared or live database. The
 URL is passed to Alembic as `-x dbUrl=...`, because `.env` (reloaded with
-override=True) would otherwise win over an environment variable.
+override=False) could otherwise name a different database than the one meant.
 Needs the B1 baseline revisions (0000, 0046).
 
     FRESH_DB_URL=postgresql://user:pass@localhost:5432/scratch pytest tests/test_fresh_db_build.py
