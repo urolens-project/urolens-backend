@@ -190,7 +190,7 @@ async def test_currentLabelForQueriesNewestNonSupersededLabel():
 
     stmt = db.execute.call_args[0][0]
     compiled = str(stmt)
-    assert "ORDER BY sample_labels.created_at DESC" in compiled
+    assert "ORDER BY sample_labels.generated_at DESC" in compiled
     assert "sample_labels.superseded IS false" in compiled
 
 
