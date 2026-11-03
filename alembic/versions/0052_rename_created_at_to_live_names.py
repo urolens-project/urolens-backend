@@ -38,6 +38,7 @@ RENAMES = (
 def upgrade() -> None:
     """Rename created_at where it still exists."""
     for table, old, new in RENAMES:
+        # The names come from the RENAMES constant above, not from input.
         op.execute(
             f"""
             DO $$
@@ -50,7 +51,7 @@ def upgrade() -> None:
                 END IF;
             END
             $$;
-            """
+            """  # noqa: S608
         )
 
 
