@@ -103,6 +103,23 @@ def _jsonb(name: str, default: str) -> sa.Column:
     return sa.Column(name, postgresql.JSONB(), nullable=False, server_default=sa.text(default))
 
 
+def _columnsExist(table: str, columns: Sequence[str]) -> bool:
+    """True when every named column exists on public.<table> (existence guard).
+
+    Offline (`--sql`) there is no database to ask, so the statement is rendered as before.
+    """
+    if op.get_context().as_sql:
+        return True
+    found = op.get_bind().execute(
+        sa.text(
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' "
+            "AND table_name = :t AND column_name = ANY(:c)"
+        ),
+        {"t": table, "c": list(columns)},
+    ).scalar()
+    return found == len(set(columns))
+
+
 def upgrade() -> None:
     """Upgrade schema."""
     # 0. Preflight
@@ -247,30 +264,37 @@ def upgrade() -> None:
     )
 
     # 6. Backfill: one ACCEPTED field per result with an ACTIVE image
-    op.execute(
-        """
-        INSERT INTO result_fields (
-            field_id, result_id, specimen_id, image_id, field_no, magnification, status,
-            ai_findings, detections, image_width, image_height, confidence_scores,
-            effective_counts, smart_diagnosis, smart_diagnosis_unavailable, model_version,
-            verified_by, verified_at, created_at, updated_at
+    # Guard: runs only if every analysis_results column it reads exists. A fresh build
+    # has no smart_diagnosis column (live got it outside the migrations) and no rows.
+    if _columnsExist(
+        "analysis_results",
+        ("ai_findings", "particle_classes", "smart_diagnosis", "smart_diagnosis_unavailable",
+         "model_version", "confirmed_by", "confirmed_at"),
+    ):
+        op.execute(
+            """
+            INSERT INTO result_fields (
+                field_id, result_id, specimen_id, image_id, field_no, magnification, status,
+                ai_findings, detections, image_width, image_height, confidence_scores,
+                effective_counts, smart_diagnosis, smart_diagnosis_unavailable, model_version,
+                verified_by, verified_at, created_at, updated_at
+            )
+            SELECT gen_random_uuid(), r.result_id, r.specimen_id, i.image_id, 1, 'HPF', 'ACCEPTED',
+                   COALESCE(r.ai_findings, '{}'::jsonb), '[]'::jsonb,
+                   COALESCE(i.width_px, 0), COALESCE(i.height_px, 0), '{}'::jsonb,
+                   CASE WHEN r.particle_classes IS NOT NULL AND r.particle_classes <> '{}'::jsonb
+                        THEN r.particle_classes ELSE COALESCE(r.ai_findings, '{}'::jsonb) END,
+                   r.smart_diagnosis, COALESCE(r.smart_diagnosis_unavailable, false),
+                   COALESCE(r.model_version, 'unknown'),
+                   r.confirmed_by,
+                   CASE WHEN r.confirmed_by IS NOT NULL THEN r.confirmed_at END,
+                   i.uploaded_at, now()
+              FROM analysis_results r
+              JOIN images i ON i.image_id = r.image_id
+             WHERE i.status = 'ACTIVE'
+               AND NOT EXISTS (SELECT 1 FROM result_fields f WHERE f.image_id = i.image_id)
+            """
         )
-        SELECT gen_random_uuid(), r.result_id, r.specimen_id, i.image_id, 1, 'HPF', 'ACCEPTED',
-               COALESCE(r.ai_findings, '{}'::jsonb), '[]'::jsonb,
-               COALESCE(i.width_px, 0), COALESCE(i.height_px, 0), '{}'::jsonb,
-               CASE WHEN r.particle_classes IS NOT NULL AND r.particle_classes <> '{}'::jsonb
-                    THEN r.particle_classes ELSE COALESCE(r.ai_findings, '{}'::jsonb) END,
-               r.smart_diagnosis, COALESCE(r.smart_diagnosis_unavailable, false),
-               COALESCE(r.model_version, 'unknown'),
-               r.confirmed_by,
-               CASE WHEN r.confirmed_by IS NOT NULL THEN r.confirmed_at END,
-               i.uploaded_at, now()
-          FROM analysis_results r
-          JOIN images i ON i.image_id = r.image_id
-         WHERE i.status = 'ACTIVE'
-           AND NOT EXISTS (SELECT 1 FROM result_fields f WHERE f.image_id = i.image_id)
-        """
-    )
 
     # 7. field_count = number of ACCEPTED fields (updated_at deliberately untouched)
     op.execute(

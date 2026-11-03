@@ -46,7 +46,7 @@ class SampleLabel(Base):
     affixedAt: Mapped[datetime | None] = mapped_column("affixed_at",
         DateTime(timezone=True), nullable=True
     )
-    createdAt: Mapped[datetime] = mapped_column("created_at",
+    createdAt: Mapped[datetime] = mapped_column("generated_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     superseded: Mapped[bool] = mapped_column(

@@ -38,7 +38,7 @@ from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 _PLACEHOLDER_JWT_SIGNING_KEY = "change-me-in-production-use-a-long-random-string"
 
