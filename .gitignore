@@ -15,3 +15,12 @@ __pycache__/
 .claude/
 CLAUDE.md
 package.json
+
+# Coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# local schema-only dump of live (PG 17), used by tests/db
+live-schema-local.sql
