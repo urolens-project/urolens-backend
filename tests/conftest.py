@@ -15,8 +15,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import Select
+from sqlalchemy.engine import make_url
 
 from src.core import rate_limit
+from src.core.config import settings
 from src.models.analysis_result import AnalysisResult
 from src.models.manual_override import ManualOverride
 from src.models.queue_assignment import QueueAssignment
@@ -24,6 +26,28 @@ from src.models.result_approval import ResultApproval
 from src.models.result_field import ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
+
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+@pytest.fixture(scope="session", autouse=True)
+def refuseNonLocalDatabase() -> None:
+    """Stop the whole run if the app's `DATABASE_URL` is not on this machine.
+
+    `.env` names the live database on a dev machine. Environment variables win
+    over it (`load_dotenv(override=False)`), but with none set the live URL is
+    what `settings` holds. CI's placeholder is on localhost, so it passes. The
+    message never prints the URL or its host, since both come from `.env`.
+    """
+    host = make_url(settings.databaseUrl).host
+    if host not in _LOCAL_DB_HOSTS:
+        pytest.exit(
+            "Refusing to run: DATABASE_URL does not point at a local database. Set DATABASE_URL "
+            "to a placeholder or a scratch database on localhost (see .github/workflows/ci.yml) "
+            "before running the tests.",
+            returncode=2,
+        )
+
 
 SYNC_MEDTECH_ID = uuid.UUID("00000000-0000-0000-0000-00000000c0de")
 
@@ -118,6 +142,32 @@ def syncQueries(db: AsyncMock, entity: type, name: str) -> list[Select]:
         if (c.args[0].column_descriptions[0].get("entity"), c.args[0].column_descriptions[0].get("name"))
         == (entity, name)
     ]
+
+
+# Modules written for the single-image workflow that don't pin the flag off
+# themselves (the upload and override modules carry their own autouse fixture).
+# They assert the responses and queries that exist while `FIELD_WORKFLOW_ENABLED`
+# is off. The suite is run in both modes, so these are pinned to off. A test that wants the flag on sets it
+# itself with `monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)`,
+# which runs after this fixture and wins. Remove a module from the set when its
+# tests are moved to the multi-field workflow.
+_SINGLE_IMAGE_MODULES = frozenset({
+    "test_review_confirm_http",
+    "test_smart_diagnosis",
+    "test_result_review_service",
+    "test_result_confirmation_service",
+    "test_result_review_and_annotate",
+    "test_assigned_queue",
+    "test_phi_access_logging",
+    "test_specimen_access",
+    "test_w0_corrected_counts_and_audit",
+})
+
+
+@pytest.fixture(autouse=True)
+def singleImageWorkflow(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.module.__name__.rsplit(".", 1)[-1] in _SINGLE_IMAGE_MODULES:
+        monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
 
 
 @pytest.fixture(autouse=True)
