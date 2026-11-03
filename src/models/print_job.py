@@ -43,7 +43,7 @@ class PrintJob(Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(_PRINT_JOB_STATUS, nullable=False, default="SENT")
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    createdAt: Mapped[datetime] = mapped_column("dispatched_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

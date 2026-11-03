@@ -51,7 +51,7 @@ class SpecimenRejection(Base):
     )
     reasonCode: Mapped[str] = mapped_column("reason_code", _REJECTION_REASON, nullable=False)
     freeTextNote: Mapped[str | None] = mapped_column("free_text_note", Text, nullable=True)
-    createdAt: Mapped[datetime] = mapped_column("created_at", 
+    createdAt: Mapped[datetime] = mapped_column("rejected_at",
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

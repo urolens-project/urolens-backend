@@ -80,10 +80,11 @@ class _RefusingSession:
 def refuseRealDatabase():
     """Fail loudly if a test uses the database session without mocking it.
 
-    `.env` points at a real database, and `load_dotenv(override=True)` means
-    nothing in the test environment can redirect it — so a test that forgets
-    `app.dependency_overrides[getDb]` (e.g. the `mockSqlDb` fixture) would
-    otherwise silently query that database. The stand-in session fails on
+    `.env` points at a real database, and nothing here can be sure the test
+    environment redirects it (the session guard in tests/conftest.py stops a
+    run on a non-local host, but a local database is still real) — so a test
+    that forgets `app.dependency_overrides[getDb]` (e.g. the `mockSqlDb`
+    fixture) would otherwise silently query that database. The stand-in session fails on
     first *use*, not on injection: FastAPI resolves `getDb` for every
     DB-backed route even when the handler rejects the request before any
     query. Tests that install their own override replace this one; it only

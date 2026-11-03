@@ -39,9 +39,10 @@ def runMigrationsOffline() -> None:
 
 def runMigrationsOnline() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    # An explicit `alembic -x dbUrl=...` wins. DATABASE_URL in the environment
-    # cannot redirect a run: config.py reloads `.env` with override=True, so
-    # settings always name the database in `.env` (live, on a dev machine).
+    # An explicit `alembic -x dbUrl=...` wins. Otherwise settings decide: an
+    # environment DATABASE_URL beats `.env` (config.py loads it with
+    # override=False), and with neither set a run uses the database in `.env`
+    # (live, on a dev machine). Pass -x dbUrl for any scratch database.
     configuration["sqlalchemy.url"] = (
         context.get_x_argument(as_dictionary=True).get("dbUrl") or settings.databaseUrl
     )
