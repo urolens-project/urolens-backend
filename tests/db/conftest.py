@@ -112,9 +112,9 @@ async def db() -> AsyncGenerator[AsyncSession]:
         await engine.dispose()
 
 
-async def seedAssignedSpecimen(db: AsyncSession) -> SimpleNamespace:
-    """A MedTech, a supervisor and a receptionist; a consenting patient; a lab request;
-    and a specimen assigned to the MedTech, as the receptionist and queue leave it."""
+async def seedLabRequest(db: AsyncSession) -> SimpleNamespace:
+    """A MedTech, a supervisor and a receptionist; a consenting patient; and a lab
+    request waiting for its specimen (`PENDING_SAMPLE`), as the encoding desk leaves it."""
     tag = uuid.uuid4().hex[:10]
     ids = SimpleNamespace(
         medtechId=uuid.uuid4(), supervisorId=uuid.uuid4(), receptionistId=uuid.uuid4(),
@@ -149,6 +149,14 @@ async def seedAssignedSpecimen(db: AsyncSession) -> SimpleNamespace:
         ),
         {"id": ids.labRequestId, "uid": f"REQ-T{tag[:8]}", "p": ids.patientId, "by": ids.receptionistId},
     )
+    await db.commit()
+    return ids
+
+
+async def seedAssignedSpecimen(db: AsyncSession) -> SimpleNamespace:
+    """`seedLabRequest`, plus a specimen assigned to the MedTech, as the receptionist
+    and queue leave it."""
+    ids = await seedLabRequest(db)
     await db.execute(
         text(
             "INSERT INTO specimens (specimen_id, lab_request_id, sample_uid, status, received_by, medtech_id,"
