@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- **A refused Submit for Verification names the fields still waiting for a decision (behind
+  `FIELD_WORKFLOW_ENABLED`).** The 409 `FIELDS_UNDECIDED` from
+  `POST /api/v1/results/{id}/fields/submit` now carries
+  `details.undecidedFields`: `[{"fieldId": "...", "fieldNo": 3}, ...]`, in field order. The
+  code and message are unchanged ("2 fields not reviewed."). The phone can fetch a field it
+  doesn't have (stored on the server, but the phone lost the answer to its upload) instead of
+  waiting for its next sync to bring it. To carry it, `main.py`'s error handler adds a
+  `details` key for any exception that sets `errorDetails`; every other error's body is
+  unchanged. No migration, no new route or setting.
 - **A retried field upload no longer adds the same photo twice (behind `FIELD_WORKFLOW_ENABLED`;
   an app that sends no capture id is unaffected).** `POST /api/v1/fields` takes an optional
   multipart `capture_id`: the phone's name for a photo, sent with every upload of it (8–64
@@ -128,6 +137,17 @@
     already did. No migration, no new route, no setting.
 
 ### Changed
+- **Smart Diagnosis no longer rates glomerulonephritis or nephrolithiasis HIGH on red blood
+  cells alone.** `requirements.txt` pins `urolens-ai-engine` to `6598912` (tag `v0.2.1`:
+  engine PR #21, rules config v1.1, and the version bump in PR #22). Before it, a
+  high erythrocyte count reached HIGH by itself (about 179 per field for glomerulonephritis,
+  354 for nephrolithiasis). Now HIGH also needs casts above normal for glomerulonephritis and
+  crystals above normal for nephrolithiasis; without them the level stops at MODERATE. Gout is
+  unchanged. Applies to new analyses, confirms and verification summaries; stored diagnoses
+  are not recalculated. No migration, route or setting. Deploy: `pip install -r
+  requirements.txt` (the version changed, so it upgrades without `--reinstall`) and restart;
+  `RULE_ENGINE_CONFIG_PATH` must stay unset, or the old copy of the rules keeps running (the
+  startup check reports it).
 - **The AI engine is now v0.2.0, and the server refuses to start the multi-field workflow
   on anything else.** `requirements.txt` pins `urolens-ai-engine` to `c1b2d11` (tag
   `v0.2.0`): its install ships the weights (no more Git LFS pointers), the rules config and

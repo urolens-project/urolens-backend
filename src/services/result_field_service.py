@@ -440,6 +440,59 @@ class ResultFieldService:
         await self.db.commit()
         return response
 
+    async def restoreField(
+        self, fieldId: uuid.UUID, medtechId: uuid.UUID, request: Request
+    ) -> FieldActionResponse:
+        """Owner: web. Undo an exclude: DISCARDED back to ACCEPTED, while the
+        result is PENDING_CONFIRM or RETURNED_FOR_CORRECTION — the verification
+        phase, the only phase "Exclude Field" is reachable from on the web.
+
+        Mirrors `discardField`'s web path exactly but in reverse; there is no
+        capture-phase (mobile) path, since nothing there offers an "undo" of
+        Discard. Already ACCEPTED: returns the current state, so a double-click
+        is harmless. The field's `version` goes up and the result's `field_count`
+        and first-accepted-field image pointer are updated.
+
+        Raises:
+            NotFoundException: `FIELD_NOT_FOUND`.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
+            ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, unless
+                the result is in the web verification phase; `INVALID_FIELD_STATUS`,
+                if the field was never discarded (nothing to restore).
+        """
+        field, result, _specimen = await loadFieldForWrite(self.db, fieldId, medtechId)
+        requireVerificationPhase(result)
+        if field.status == FieldStatus.ACCEPTED:
+            return await buildFieldActionResponse(self.db, fieldId)
+        if field.status != FieldStatus.DISCARDED:
+            raise ConflictException(
+                code="INVALID_FIELD_STATUS",
+                message=f"Action not allowed on a field in status '{field.status}'.",
+            )
+
+        field.status = FieldStatus.ACCEPTED
+        field.discardReason = None
+        field.version += 1
+        image = await self.db.get(Image, field.imageId)
+        if image is not None:
+            image.status = ImageStatus.ACTIVE
+            image.discardedAt = None
+        await self.db.flush()
+        await self._recountAcceptedFields(result)
+
+        response = await buildFieldActionResponse(self.db, fieldId)
+        await self.auditLogger.record(
+            eventType="FIELD_RESTORED",
+            entityType="analysis_result",
+            entityId=field.resultId,
+            userId=medtechId,
+            detailJson={"specimen_id": str(field.specimenId), "field_id": str(fieldId)},
+            db=self.db,
+            request=request,
+        )
+        await self.db.commit()
+        return response
+
     async def submitFields(
         self, resultId: uuid.UUID, medtechId: uuid.UUID, request: Request
     ) -> ResultStatusResponse:
@@ -459,18 +512,27 @@ class ResultFieldService:
             ForbiddenException: `SPECIMEN_NOT_ASSIGNED`.
             ConflictException: `SPECIMEN_REJECTED`; `INVALID_RESULT_STATUS`, unless the
                 result is `CAPTURING`.
-            FieldsUndecidedError: `FIELDS_UNDECIDED`, while any field is ANALYZED.
+            FieldsUndecidedError: `FIELDS_UNDECIDED`, while any field is ANALYZED; its
+                `details.undecidedFields` names them, so a phone that is missing one
+                can fetch it.
             FieldsBelowMinimumError: `FIELDS_BELOW_MINIMUM`, with fewer than
                 `minFieldsPerSpecimen` ACCEPTED fields.
         """
         result, _specimen = await self._loadResultForWrite(resultId, medtechId)
         requireCapturePhase(result)
-        statuses = (
+        rows = (
             await self.db.execute(
-                select(ResultField.status).where(ResultField.resultId == resultId)
+                select(ResultField.fieldId, ResultField.fieldNo, ResultField.status)
+                .where(ResultField.resultId == resultId)
+                .order_by(ResultField.fieldNo)
             )
-        ).scalars().all()
-        undecided = sum(s == FieldStatus.ANALYZED for s in statuses)
+        ).all()
+        statuses = [fieldStatus for _fieldId, _fieldNo, fieldStatus in rows]
+        undecided = [
+            (fieldId, fieldNo)
+            for fieldId, fieldNo, fieldStatus in rows
+            if fieldStatus == FieldStatus.ANALYZED
+        ]
         if undecided:
             raise FieldsUndecidedError(undecided)
         accepted = sum(s == FieldStatus.ACCEPTED for s in statuses)

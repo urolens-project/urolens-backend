@@ -157,7 +157,7 @@ async def test_searchPatientsAtMinLengthReturnsSlimShapeOnly():
     db = _makeSearchDb([_row(patientId, "Jane", "Doe")])
     service = PatientService(db=db, auditLogger=AsyncMock())
 
-    results = await service.searchPatients("Jan")
+    results = await service.searchPatients(f"PAT-{patientId.hex[:6]}")
 
     assert len(results) == 1
     item = results[0]
@@ -175,10 +175,32 @@ async def test_searchPatientsAtMinLengthReturnsSlimShapeOnly():
 
 @pytest.mark.asyncio
 async def test_searchPatientsNoMatchReturnsEmpty():
-    db = _makeSearchDb([_row(uuid.uuid4(), "Jane", "Doe")])
+    db = _makeSearchDb([])
     service = PatientService(db=db, auditLogger=AsyncMock())
 
-    assert await service.searchPatients("xyz") == []
+    assert await service.searchPatients("000999") == []
+
+
+@pytest.mark.asyncio
+async def test_searchPatientsOnlyFiltersOnPatientUidNeverName():
+    """Confirms the name-matching path is fully removed, not just
+    deprioritized: the compiled SQL filters on patient_uid only — searching
+    by a first/last name (old behavior) finds nothing, structurally, not
+    just because this particular mocked row happens not to match. Mirrors
+    tests/test_physician_service.py's equivalent for the already-converted
+    physician-portal search.
+    """
+    db = _makeSearchDb([])
+
+    results = await PatientService(db=db, auditLogger=AsyncMock()).searchPatients("Jane")
+
+    assert results == []
+    stmt = db.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    whereClause = compiled.split("WHERE", 1)[1]
+    assert "patient_uid" in whereClause
+    assert "first_name" not in whereClause
+    assert "last_name" not in whereClause
 
 
 # ── Service: create / duplicate detection ───────────────────────────────────
