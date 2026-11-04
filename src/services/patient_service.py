@@ -164,7 +164,8 @@ class PatientService:
         )
 
     async def searchPatients(self, q: str) -> list[PatientSearchItem]:
-        """Search patients by decrypted first/last name substring match.
+        """Search patients by patient UID or by decrypted first/last name
+        substring match.
 
         Returns a deliberately minimal shape (`patientId`/`patientUid` only)
         — RA 10173 data minimization: a name/DOB/contact match off a single
@@ -173,25 +174,55 @@ class PatientService:
         Only first/last name are decrypted (for the match itself); DOB,
         contact, and address are never touched for this path.
 
+        `patientUid` is plaintext (not Fernet-encrypted, unlike name/DOB/etc.
+        — see `Patient`), so it's matched directly in SQL rather than via the
+        decrypt-and-filter-in-Python approach name matching needs. This is
+        also what lets a UID match bypass `_SEARCH_LIMIT`'s name-scan window:
+        the intake screens all prompt for "Patient ID" specifically (the ID
+        printed on a patient's registration receipt), so a receptionist
+        typing that ID back in must find the exact patient regardless of how
+        many newer patients have been registered since.
+
         Args:
-            q: Case-insensitive substring to match against first or last
-                name. Below `_SEARCH_MIN_QUERY_LENGTH` chars, this is a
-                no-op (empty result) rather than a broad/unfiltered scan —
-                enforced here as well as by the route's `Query(min_length=...)`,
-                since this method can be called directly, not only via HTTP.
+            q: Case-insensitive substring to match against the patient UID,
+                or against first or last name. Below `_SEARCH_MIN_QUERY_LENGTH`
+                chars, this is a no-op (empty result) rather than a broad/
+                unfiltered scan — enforced here as well as by the route's
+                `Query(min_length=...)`, since this method can be called
+                directly, not only via HTTP.
 
         Returns:
-            Matching patients, most-recently-created-first is not guaranteed
-            (same unordered-scan behavior as the prior implementation).
+            Matching patients. UID matches are exact-window (SQL `ILIKE`, no
+            row cap beyond `_SEARCH_LIMIT` results). Name matches are scanned
+            over the `_SEARCH_LIMIT` most-recently-created patients only —
+            an older patient whose name matches but who falls outside that
+            window won't surface; searching by UID has no such gap.
         """
         if len(q) < _SEARCH_MIN_QUERY_LENGTH:
             return []
 
-        rows = (await self.db.execute(select(Patient).limit(_SEARCH_LIMIT))).scalars().all()
         qLower = q.lower()
+        results: dict[uuid.UUID, PatientSearchItem] = {}
 
-        results: list[PatientSearchItem] = []
-        for row in rows:
+        uidRows = (
+            await self.db.execute(
+                select(Patient)
+                .where(Patient.patientUid.ilike(f"%{q}%"))
+                .order_by(Patient.createdAt.desc())
+                .limit(_SEARCH_LIMIT)
+            )
+        ).scalars().all()
+        for row in uidRows:
+            results[row.patientId] = PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid)
+
+        nameRows = (
+            await self.db.execute(
+                select(Patient).order_by(Patient.createdAt.desc()).limit(_SEARCH_LIMIT)
+            )
+        ).scalars().all()
+        for row in nameRows:
+            if row.patientId in results:
+                continue
             try:
                 first = decryptPii(row.firstName)
                 last = decryptPii(row.lastName)
@@ -200,8 +231,9 @@ class PatientService:
                 continue
 
             if qLower in first.lower() or qLower in last.lower():
-                results.append(PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid))
-        return results
+                results[row.patientId] = PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid)
+
+        return list(results.values())[:_SEARCH_LIMIT]
 
     async def getPatientByUserId(self, userId: str) -> PatientResponse:
         """Look up the patient record linked to a portal account.
