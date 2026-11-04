@@ -5,6 +5,9 @@ convention (no raw `detail=str(e)` to the client).
 """
 from __future__ import annotations
 
+import uuid
+from collections.abc import Sequence
+
 from fastapi import HTTPException, status
 
 
@@ -289,12 +292,22 @@ class LegacyNoFindingsError(ConflictException):
 
 
 class FieldsUndecidedError(ConflictException):
-    """409 `FIELDS_UNDECIDED` — fields are still waiting for Proceed or Discard."""
+    """409 `FIELDS_UNDECIDED` — fields are still waiting for Proceed or Discard.
 
-    def __init__(self, count: int) -> None:
-        """Build the 409; `count` is the number of fields not reviewed."""
+    `errorDetails` names them (`undecidedFields`: `fieldId`, `fieldNo`), so the app can
+    fetch a field it doesn't have yet instead of waiting for its next sync to bring it.
+    """
+
+    def __init__(self, undecided: Sequence[tuple[uuid.UUID, int]]) -> None:
+        """Build the 409 from the undecided fields' ids and numbers, in field order."""
+        count = len(undecided)
         noun = "field" if count == 1 else "fields"
         super().__init__(code="FIELDS_UNDECIDED", message=f"{count} {noun} not reviewed.")
+        self.errorDetails = {
+            "undecidedFields": [
+                {"fieldId": str(fieldId), "fieldNo": fieldNo} for fieldId, fieldNo in undecided
+            ]
+        }
 
 
 class FieldsBelowMinimumError(ConflictException):
