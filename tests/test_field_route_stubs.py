@@ -29,6 +29,7 @@ REVERT = {"particleType": "crystals", "rationale": "box count was right"}
 ROUTES = [
     ("POST", f"/api/v1/fields/{ID}/accept", MEDTECH, None),
     ("POST", f"/api/v1/fields/{ID}/discard", MEDTECH, None),
+    ("POST", f"/api/v1/fields/{ID}/restore", MEDTECH, None),
     ("POST", f"/api/v1/results/{ID}/fields/submit", MEDTECH, None),
     ("GET", f"/api/v1/results/{ID}/fields", BOTH, None),
     ("GET", f"/api/v1/fields/{ID}", BOTH, None),

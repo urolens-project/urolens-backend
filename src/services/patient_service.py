@@ -164,76 +164,41 @@ class PatientService:
         )
 
     async def searchPatients(self, q: str) -> list[PatientSearchItem]:
-        """Search patients by patient UID or by decrypted first/last name
-        substring match.
+        """Search patients by Patient ID (patient_uid) substring match only.
 
-        Returns a deliberately minimal shape (`patientId`/`patientUid` only)
-        — RA 10173 data minimization: a name/DOB/contact match off a single
-        query is enough to *find* a patient, but the full decrypted record
-        shouldn't be handed out for every candidate a broad search surfaces.
-        Only first/last name are decrypted (for the match itself); DOB,
-        contact, and address are never touched for this path.
+        Deliberately does NOT match on name: letting staff type an arbitrary
+        name and see whether that person has a record here is exactly the
+        kind of "does this named individual have a record" privacy leak a
+        Patient-ID-only search is meant to prevent (RA 10173) — matches the
+        already-converted `physician_service.searchPatients` and
+        `labeling_service.searchReceivedSpecimens`, which this brings
+        `PatientService` in line with. A receptionist attaching a lab
+        request or specimen to a patient is expected to have that patient's
+        ID on hand (from their registration receipt or portal login), not
+        to browse by name.
 
-        `patientUid` is plaintext (not Fernet-encrypted, unlike name/DOB/etc.
-        — see `Patient`), so it's matched directly in SQL rather than via the
-        decrypt-and-filter-in-Python approach name matching needs. This is
-        also what lets a UID match bypass `_SEARCH_LIMIT`'s name-scan window:
-        the intake screens all prompt for "Patient ID" specifically (the ID
-        printed on a patient's registration receipt), so a receptionist
-        typing that ID back in must find the exact patient regardless of how
-        many newer patients have been registered since.
+        `patientUid` is plaintext (not Fernet-encrypted, unlike name/DOB/
+        etc. — see `Patient`), so this filters in SQL directly; no
+        decrypt-and-scan needed. Returns a deliberately minimal shape
+        (`patientId`/`patientUid` only) — RA 10173 data minimization.
 
         Args:
-            q: Case-insensitive substring to match against the patient UID,
-                or against first or last name. Below `_SEARCH_MIN_QUERY_LENGTH`
-                chars, this is a no-op (empty result) rather than a broad/
-                unfiltered scan — enforced here as well as by the route's
+            q: Case-insensitive substring to match against the patient UID.
+                Below `_SEARCH_MIN_QUERY_LENGTH` chars, this is a no-op
+                (empty result) rather than a broad/unfiltered scan —
+                enforced here as well as by the route's
                 `Query(min_length=...)`, since this method can be called
                 directly, not only via HTTP.
 
         Returns:
-            Matching patients. UID matches are exact-window (SQL `ILIKE`, no
-            row cap beyond `_SEARCH_LIMIT` results). Name matches are scanned
-            over the `_SEARCH_LIMIT` most-recently-created patients only —
-            an older patient whose name matches but who falls outside that
-            window won't surface; searching by UID has no such gap.
+            Up to `_SEARCH_LIMIT` matching patients.
         """
         if len(q) < _SEARCH_MIN_QUERY_LENGTH:
             return []
 
-        qLower = q.lower()
-        results: dict[uuid.UUID, PatientSearchItem] = {}
-
-        uidRows = (
-            await self.db.execute(
-                select(Patient)
-                .where(Patient.patientUid.ilike(f"%{q}%"))
-                .order_by(Patient.createdAt.desc())
-                .limit(_SEARCH_LIMIT)
-            )
-        ).scalars().all()
-        for row in uidRows:
-            results[row.patientId] = PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid)
-
-        nameRows = (
-            await self.db.execute(
-                select(Patient).order_by(Patient.createdAt.desc()).limit(_SEARCH_LIMIT)
-            )
-        ).scalars().all()
-        for row in nameRows:
-            if row.patientId in results:
-                continue
-            try:
-                first = decryptPii(row.firstName)
-                last = decryptPii(row.lastName)
-            except Exception:
-                logger.exception("PII decrypt failed for patient row %s", row.patientId)
-                continue
-
-            if qLower in first.lower() or qLower in last.lower():
-                results[row.patientId] = PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid)
-
-        return list(results.values())[:_SEARCH_LIMIT]
+        stmt = select(Patient).where(Patient.patientUid.ilike(f"%{q}%")).limit(_SEARCH_LIMIT)
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return [PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid) for row in rows]
 
     async def getPatientByUserId(self, userId: str) -> PatientResponse:
         """Look up the patient record linked to a portal account.
