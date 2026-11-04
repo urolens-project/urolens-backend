@@ -177,3 +177,15 @@ def clearLoginRateLimits():
     yield
     rate_limit._accountLimiter.clear()
     rate_limit._ipLimiter.clear()
+
+
+@pytest.fixture(autouse=True)
+def noRealEnginePreload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Starting the app (TestClient) must not load the real YOLO weights in every test.
+
+    The preload tests in test_health_ready.py hold the real `preloadEngine` from
+    import time and patch the engine itself instead.
+    """
+    from src.core import engine_preload
+
+    monkeypatch.setattr(engine_preload, "preloadEngine", lambda: False)
