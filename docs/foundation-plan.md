@@ -236,7 +236,7 @@ Same shape as the existing classes (`HTTPException` subclass with `errorCode`); 
 | `AppUpdateRequiredError` | APP_UPDATE_REQUIRED (message "Update UroLens to continue") | 410 |
 | `FieldNotOpenedError` | FIELD_NOT_OPENED | 409 |
 | `FieldVersionConflictError` | FIELD_VERSION_CONFLICT | 409 |
-| `FieldsUndecidedError(count)` | FIELDS_UNDECIDED ("N fields not reviewed") | 409 |
+| `FieldsUndecidedError(undecided)` | FIELDS_UNDECIDED ("N fields not reviewed"; `details.undecidedFields` names them) | 409 |
 | `FieldsBelowMinimumError(accepted, minimum)` | FIELDS_BELOW_MINIMUM | 409 |
 | `FieldsNotVerifiedError` | FIELDS_NOT_VERIFIED | 409 |
 | `FeatureDisabledError` | FEATURE_DISABLED | 404 |
