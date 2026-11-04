@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -12,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from src.api import (
     auth,
@@ -34,8 +37,10 @@ from src.api.results import router as results_router
 # Web developer routers
 from src.api.specimens import router as src_specimens_router
 from src.api.sync import router as sync_router
+from src.core import engine_preload
 from src.core.config import engineFileProblems, settings
-from src.schemas.system import HealthCheckResponse
+from src.core.database import AsyncSessionLocal
+from src.schemas.system import HealthCheckResponse, ReadinessResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +66,29 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             "FIELD_WORKFLOW_ENABLED is on but the AI engine is not ready; fix the "
             "'AI engine:' errors above (or turn the flag off) and restart."
         )
+    # Load the model now rather than on the first upload. Never raises: on failure
+    # the app starts and /health/ready reports the model as not ready.
+    await asyncio.to_thread(engine_preload.preloadEngine)
     yield
+
+
+def parseCorsOrigins(raw: str | None) -> list[str]:
+    """Split a comma-separated `CORS_ALLOWED_ORIGINS` value into origins.
+
+    Whitespace around each origin is dropped, and so are empty entries. Unset or
+    blank gives an empty list: no browser origin is allowed (the mobile app is not
+    a browser and sends no `Origin`, so it is unaffected).
+    """
+    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
 
 
 app = FastAPI(title="UroLens LIS Engine", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=parseCorsOrigins(os.getenv("CORS_ALLOWED_ORIGINS")),
     # Auth is Bearer-token-in-header (see apiClient.ts / src.core.rbac), never
-    # cookies — allow_credentials=True is not needed and must stay False, since
-    # combining it with allow_origins=["*"] lets any origin read authenticated
-    # responses made with the browser's ambient credentials.
+    # cookies — allow_credentials=True is not needed and must stay False.
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
@@ -162,3 +178,36 @@ app.include_router(notifications_router)
 def rootHealthCheck() -> HealthCheckResponse:
     """Liveness check — confirms the process is up, not that its dependencies are."""
     return HealthCheckResponse(status="healthy", service="UroLens Core Platform Architecture")
+
+
+_DB_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+async def _dbReachable() -> bool:
+    """`SELECT 1` on a pooled connection, giving up after 2 seconds."""
+    try:
+        async with AsyncSessionLocal() as session:
+            await asyncio.wait_for(session.execute(text("SELECT 1")), _DB_PROBE_TIMEOUT_SECONDS)
+        return True
+    except Exception:
+        logger.warning("Readiness: database check failed", exc_info=True)
+        return False
+
+
+@app.get(
+    "/health/ready",
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse, "description": "Database or model not ready."}},
+    tags=["health"],
+)
+async def readinessCheck() -> JSONResponse:
+    """Readiness check — 200 only when the database answers and the AI model is loaded.
+
+    The body carries no detail beyond the two booleans.
+    """
+    db = await _dbReachable()
+    model = engine_preload.isModelReady()
+    return JSONResponse(
+        status_code=200 if db and model else 503,
+        content={"db": db, "model": model},
+    )

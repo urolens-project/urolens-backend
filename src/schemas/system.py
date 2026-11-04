@@ -7,3 +7,10 @@ class HealthCheckResponse(BaseModel):
 
     status: str
     service: str
+
+
+class ReadinessResponse(BaseModel):
+    """Response body for `GET /health/ready`; both true is ready (200), else 503."""
+
+    db: bool
+    model: bool
