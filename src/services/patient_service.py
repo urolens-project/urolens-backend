@@ -164,44 +164,41 @@ class PatientService:
         )
 
     async def searchPatients(self, q: str) -> list[PatientSearchItem]:
-        """Search patients by decrypted first/last name substring match.
+        """Search patients by Patient ID (patient_uid) substring match only.
 
-        Returns a deliberately minimal shape (`patientId`/`patientUid` only)
-        — RA 10173 data minimization: a name/DOB/contact match off a single
-        query is enough to *find* a patient, but the full decrypted record
-        shouldn't be handed out for every candidate a broad search surfaces.
-        Only first/last name are decrypted (for the match itself); DOB,
-        contact, and address are never touched for this path.
+        Deliberately does NOT match on name: letting staff type an arbitrary
+        name and see whether that person has a record here is exactly the
+        kind of "does this named individual have a record" privacy leak a
+        Patient-ID-only search is meant to prevent (RA 10173) — matches the
+        already-converted `physician_service.searchPatients` and
+        `labeling_service.searchReceivedSpecimens`, which this brings
+        `PatientService` in line with. A receptionist attaching a lab
+        request or specimen to a patient is expected to have that patient's
+        ID on hand (from their registration receipt or portal login), not
+        to browse by name.
+
+        `patientUid` is plaintext (not Fernet-encrypted, unlike name/DOB/
+        etc. — see `Patient`), so this filters in SQL directly; no
+        decrypt-and-scan needed. Returns a deliberately minimal shape
+        (`patientId`/`patientUid` only) — RA 10173 data minimization.
 
         Args:
-            q: Case-insensitive substring to match against first or last
-                name. Below `_SEARCH_MIN_QUERY_LENGTH` chars, this is a
-                no-op (empty result) rather than a broad/unfiltered scan —
-                enforced here as well as by the route's `Query(min_length=...)`,
-                since this method can be called directly, not only via HTTP.
+            q: Case-insensitive substring to match against the patient UID.
+                Below `_SEARCH_MIN_QUERY_LENGTH` chars, this is a no-op
+                (empty result) rather than a broad/unfiltered scan —
+                enforced here as well as by the route's
+                `Query(min_length=...)`, since this method can be called
+                directly, not only via HTTP.
 
         Returns:
-            Matching patients, most-recently-created-first is not guaranteed
-            (same unordered-scan behavior as the prior implementation).
+            Up to `_SEARCH_LIMIT` matching patients.
         """
         if len(q) < _SEARCH_MIN_QUERY_LENGTH:
             return []
 
-        rows = (await self.db.execute(select(Patient).limit(_SEARCH_LIMIT))).scalars().all()
-        qLower = q.lower()
-
-        results: list[PatientSearchItem] = []
-        for row in rows:
-            try:
-                first = decryptPii(row.firstName)
-                last = decryptPii(row.lastName)
-            except Exception:
-                logger.exception("PII decrypt failed for patient row %s", row.patientId)
-                continue
-
-            if qLower in first.lower() or qLower in last.lower():
-                results.append(PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid))
-        return results
+        stmt = select(Patient).where(Patient.patientUid.ilike(f"%{q}%")).limit(_SEARCH_LIMIT)
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return [PatientSearchItem(patientId=row.patientId, patientUid=row.patientUid) for row in rows]
 
     async def getPatientByUserId(self, userId: str) -> PatientResponse:
         """Look up the patient record linked to a portal account.

@@ -5,6 +5,7 @@ Routes
 POST /api/v1/fields                               — Capture a field (mobile lane)
 POST /api/v1/fields/{field_id}/accept             — Proceed (mobile lane)
 POST /api/v1/fields/{field_id}/discard            — Discard or exclude (shared)
+POST /api/v1/fields/{field_id}/restore            — Undo a discard/exclude (web lane)
 POST /api/v1/results/{id}/fields/submit           — Submit for Verification (mobile lane)
 GET  /api/v1/results/{id}/fields                  — Field list (web lane)
 GET  /api/v1/fields/{field_id}                    — One field in full (web lane)
@@ -165,6 +166,26 @@ async def discardField(
     return await _service.discardField(
         field_id, uuid.UUID(claims["user_id"]), body.reason if body else None, request
     )
+
+
+@router.post(
+    "/api/v1/fields/{field_id}/restore",
+    response_model=FieldActionResponse,
+    summary="Undo a discard/exclude (web lane)",
+)
+async def restoreField(
+    field_id: uuid.UUID,
+    request: Request,
+    claims: dict = Depends(_medtech),
+    _enabled: None = Depends(requireFieldWorkflow),
+    _service: ResultFieldService = Depends(getResultFieldService),
+) -> FieldActionResponse:
+    """Undo an exclude; see `ResultFieldService.restoreField`.
+
+    Web path only, while PENDING_CONFIRM or RETURNED_FOR_CORRECTION — the same
+    phase "Exclude Field" is reachable from.
+    """
+    return await _service.restoreField(field_id, uuid.UUID(claims["user_id"]), request)
 
 
 @router.post(
