@@ -67,10 +67,12 @@ class DecisionDb(CorrectionDb):
 
     async def execute(self, stmt):
         low = " ".join(str(stmt).lower().split())
-        if low.startswith("select result_fields.status from"):
+        if low.startswith("select result_fields.field_id, result_fields.field_no, result_fields.status from"):
             self.statements.append(str(stmt))
             out = MagicMock()
-            out.scalars.return_value.all.return_value = [f.status for f in self.fields]
+            out.all.return_value = [
+                (f.fieldId, f.fieldNo, f.status) for f in sorted(self.fields, key=lambda f: f.fieldNo)
+            ]
             return out
         if "from result_returns" in low:
             self.statements.append(low)
@@ -359,6 +361,11 @@ async def test_submitIsRefusedWhileAnyFieldIsUndecided():
 
     assert (excInfo.value.status_code, excInfo.value.errorCode) == (409, "FIELDS_UNDECIDED")
     assert excInfo.value.detail == "2 fields not reviewed."
+    # Named, in field order, so a phone missing one of them knows which to fetch.
+    assert excInfo.value.errorDetails == {"undecidedFields": [
+        {"fieldId": str(fields[12].fieldId), "fieldNo": 13},
+        {"fieldId": str(fields[13].fieldId), "fieldNo": 14},
+    ]}
     assert db.result.status == ResultStatus.CAPTURING
     assert [f.status for f in fields].count(FieldStatus.ANALYZED) == 2   # nothing discarded for them
     db.commit.assert_not_awaited()
@@ -491,9 +498,16 @@ def test_theSubmitRouteAnswersInTheStatusShape(routeClient):
 
 
 def test_aRefusedSubmitUsesTheErrorEnvelope(routeClient):
-    _routeTo(_fields(10, analyzed=3), _capturing(fieldCount=10))
+    fields = _fields(10, analyzed=3)
+    _routeTo(fields, _capturing(fieldCount=10))
 
     response = routeClient.post(f"/api/v1/results/{RESULT_ID}/fields/submit")
 
     assert response.status_code == 409
-    assert response.json() == {"error": {"code": "FIELDS_UNDECIDED", "message": "3 fields not reviewed."}}
+    assert response.json() == {"error": {
+        "code": "FIELDS_UNDECIDED",
+        "message": "3 fields not reviewed.",
+        "details": {"undecidedFields": [
+            {"fieldId": str(f.fieldId), "fieldNo": f.fieldNo} for f in fields[10:]
+        ]},
+    }}
