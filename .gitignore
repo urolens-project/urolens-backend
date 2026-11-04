@@ -1,10 +1,11 @@
-﻿# Core Isolation
+# Core Isolation
 venv/
 .venv/
 env/
 ENV/
 .env
 .env.*
+!.env.docker.example
 **/__pycache__/
 *.pyc
 *.db
@@ -24,3 +25,14 @@ coverage.xml
 
 # local schema-only dump of live (PG 17), used by tests/db
 live-schema-local.sql
+
+# Deploy / live-schema scratch (never commit)
+deploy/secrets.local.env
+docs/live-schema*.json
+
+# Ad-hoc SQL dumps. Alembic migrations are .py, so none is hidden by this; files
+# already tracked (migration_sql.sql) stay tracked.
+*.sql
+
+# Shell crash dumps
+*.stackdump
