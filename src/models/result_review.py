@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from .base import Base
+
+if TYPE_CHECKING:
+    from .user import User
 
 
 class ResultReview(Base):
@@ -61,6 +64,11 @@ class ResultReview(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    # ── Relationships ────────────────────────────────────────────────────────
+    # One-directional — lets getFullResult eager-load the reviewer's role
+    # alongside the review row itself, instead of a separate batch User query.
+    reviewer: Mapped[User] = relationship(foreign_keys=[reviewedBy])
 
     @property
     def id(self) -> uuid.UUID:

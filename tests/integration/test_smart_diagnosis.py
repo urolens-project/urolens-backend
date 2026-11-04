@@ -14,22 +14,24 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Select
 
 from src.core.audit_logger import AuditLogger
 from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.engine_error_log import EngineErrorLog
 from src.models.image import Image  # noqa: F401
 from src.models.manual_override import ManualOverride  # noqa: F401
-from src.models.result_confirmation import ResultConfirmation  # noqa: F401
+from src.models.result_confirmation import ResultConfirmation
 from src.models.result_view import ResultView  # noqa: F401
 from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 
 # Import every model that shares the SQLAlchemy registry so all forward-reference
 # strings (e.g. "Specimen") are resolvable before mapper configuration is triggered.
-from src.models.specimen import Specimen  # noqa: F401
+from src.models.specimen import Specimen
 from src.services.notification_service import NotificationService
 from src.services.result_confirmation_service import ResultConfirmationService
 from src.services.smart_diagnosis_service import (
@@ -85,9 +87,22 @@ def _makeAllLowOutput() -> MagicMock:
 def _makeDbMock(result: AnalysisResult) -> AsyncMock:
     """Returns a mock AsyncSession that yields the given AnalysisResult on SELECT."""
     db = AsyncMock()
-    executeResult = MagicMock()
-    executeResult.scalar_one_or_none.return_value = result
-    db.execute = AsyncMock(return_value=executeResult)
+
+    def _execute(stmt: Select) -> MagicMock:
+        # A result query returns the result; the "existing confirmation?"
+        # lookup finds none, as on a first confirmation.
+        entity = stmt.column_descriptions[0].get("entity")
+        executeResult = MagicMock()
+        executeResult.scalar_one_or_none.return_value = None if entity is ResultConfirmation else result
+        return executeResult
+
+    db.execute = AsyncMock(side_effect=_execute)
+    # confirmResult's ownership check (SEC-2) loads the specimen: make it the
+    # confirming MedTech's own.
+    specimen = MagicMock(spec=Specimen)
+    specimen.medtechId = MEDTECH_ID
+    specimen.status = "PROCESSING"
+    db.get = AsyncMock(return_value=specimen)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
@@ -114,14 +129,102 @@ def _makeResult(
     result.specimenId = specimenId
     result.status = status
     result.aiFindings = aiFindings or {"uric_acid_crystals": 15, "rbc_casts": 3}
+    result.particleClasses = {}
     result.smartDiagnosisUnavailable = False
+    result.smartDiagnosisOutput = None  # first confirmation: no output row yet
     result.image = None
+    # confirmResult also checks requireNoPendingRetake — no image attached
+    # means "not mid-retake" without a db.get(Image, ...) call.
+    result.imageId = None
     result.confirmedBy = None
     result.confirmedAt = None
     return result
 
 
 # ── SmartDiagnosisService.run() tests ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_runUsesConfirmedCountsWithIntegerNormalization() -> None:
+    result = _makeResult(aiFindings={"crystals": 60, "erythrocytes": 8})
+    result.particleClasses = {"crystals": 0.0}
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=MagicMock())
+
+    def evaluate(classification: dict[str, int]) -> MagicMock:
+        assert classification == {"crystals": 0, "erythrocytes": 8}
+        assert all(type(count) is int for count in classification.values())
+        return _makeAllLowOutput()
+
+    with patch.object(service, "_loadResult", AsyncMock(return_value=result)), patch(
+        "urolens_ai.generate_smart_diagnosis", side_effect=evaluate
+    ):
+        output = await service.run(resultId=RESULT_ID, db=db)
+
+    assert output is not None
+    assert output.goutScore == "LOW"
+    assert result.smartDiagnosis["gout"]["level"] == "LOW"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1.5, -1, float("nan"), float("inf"), True])
+async def test_runRejectsInvalidCorrectedCountsWithoutTruncating(count: float) -> None:
+    result = _makeResult(aiFindings={"crystals": 60})
+    result.particleClasses = {"crystals": count}
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    service = SmartDiagnosisService(auditLogger=auditLogger, _notifService=MagicMock())
+
+    with patch.object(service, "_loadResult", AsyncMock(return_value=result)), patch.object(
+        service, "_handleFailure", AsyncMock()
+    ) as failure, patch("urolens_ai.generate_smart_diagnosis") as engine:
+        output = await service.run(resultId=RESULT_ID, db=db)
+
+    assert output is None
+    engine.assert_not_called()
+    assert _classifyError(failure.call_args.args[1]) == "INVALID_CLASSIFICATION"
+
+@pytest.mark.asyncio
+async def test_confirmationWithOverrideRunsRealEngine() -> None:
+    from urolens_ai import generate_smart_diagnosis
+    from urolens_ai.smart_diagnosis import rule_engine
+
+    # Exercise the real loader and rules with test data, independent of a local
+    # .env or the clinical YAML omitted from the installed AI package.
+    configPath = Path(__file__).resolve().parents[1] / "fixtures" / "smart_diagnosis_config.yaml"
+    result = _makeResult(aiFindings={"crystals": 60})
+    override = MagicMock(spec=ManualOverride)
+    override.parameterName = "crystals"
+    override.correctedValue = "0.0"
+    result.manualOverrides = [override]
+    db = _makeDbMock(result)
+    auditLogger = MagicMock(spec=AuditLogger)
+    auditLogger.record = AsyncMock()
+    notifications = MagicMock(spec=NotificationService)
+    notifications.notifySupervisorResultReady = AsyncMock()
+    notifications.notifySupervisorDiagnosisUnavailable = AsyncMock()
+    diagnosis = SmartDiagnosisService(auditLogger=auditLogger, _notifService=notifications)
+    service = ResultConfirmationService(
+        db=db, auditLogger=auditLogger, _smartDiagnosisService=diagnosis,
+        _notifService=notifications,
+    )
+    with patch.object(service, "_getResult", AsyncMock(return_value=result)), patch(
+        "src.services.result_confirmation_service.requireNoPendingRetake", AsyncMock()
+    ), patch.object(diagnosis, "_loadResult", AsyncMock(return_value=result)), patch.object(
+        rule_engine, "_CONFIG_PATH", str(configPath)
+    ):
+        assert generate_smart_diagnosis(result.aiFindings).gout.level.value == "HIGH"
+        await service.confirmResult(resultId=RESULT_ID, medtechId=MEDTECH_ID, request=MagicMock())
+
+    assert result.particleClasses == {"crystals": 0.0}
+    assert result.smartDiagnosisUnavailable is False
+    assert result.smartDiagnosis["gout"]["level"] == "LOW"
+    assert result.smartDiagnosis["no_significant_indicators"] is True
+    notifications.notifySupervisorDiagnosisUnavailable.assert_not_awaited()
+    db.commit.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 async def test_runSuccessPersistsOutput():
@@ -318,7 +421,7 @@ async def test_confirmResultTriggersSmartDiagnosis():
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.requireNoPendingRetake",
         new_callable=AsyncMock,
     ):
         await _service.confirmResult(
@@ -360,7 +463,7 @@ async def test_confirmResultSucceedsEvenWhenSmartDiagnosisFails():
         new_callable=AsyncMock,
         return_value=result,
     ), patch(
-        "src.services.result_confirmation_service.ResultConfirmationService._validateNoPendingRetake",
+        "src.services.result_confirmation_service.requireNoPendingRetake",
         new_callable=AsyncMock,
     ):
         # Must NOT raise even though smart diagnosis returned None

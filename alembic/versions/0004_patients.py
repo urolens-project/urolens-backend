@@ -1,7 +1,7 @@
 """create patients table
 
 Revision ID: 0004
-Revises:
+Revises: 0000
 Create Date: 2026-05-23
 """
 import sqlalchemy as sa
@@ -10,7 +10,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "0004"
-down_revision = None
+down_revision = "0000"
 branch_labels = None
 depends_on = None
 

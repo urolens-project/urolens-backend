@@ -16,6 +16,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
+    from .result_field import ResultField
     from .specimen import Specimen
 
 
@@ -89,6 +90,10 @@ class Image(Base):
     specimen: Mapped[Specimen] = relationship(back_populates="images")
     analysisResult: Mapped[AnalysisResult | None] = relationship(
         back_populates="image", uselist=False
+    )
+
+    field: Mapped[ResultField | None] = relationship(
+        back_populates="image", uselist=False, lazy="raise"
     )
 
     # ── Helpers ──────────────────────────────────────────────────────────────

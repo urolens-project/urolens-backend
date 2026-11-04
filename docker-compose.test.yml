@@ -1,0 +1,19 @@
+# Throwaway local Postgres for fresh-build tests and seeding. Data lives in tmpfs
+# and is lost on `down`. Never point real credentials or Supabase at this.
+services:
+  scratch-db:
+    image: postgres:17
+    container_name: urolens-scratch
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: scratch
+      POSTGRES_DB: urolens_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d urolens_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

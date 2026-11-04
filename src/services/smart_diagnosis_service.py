@@ -3,8 +3,11 @@ result's findings and persists the output — or, on any failure, logs the
 error and marks the result diagnosis-unavailable without propagating (T3.1).
 """
 import logging
+import math
 import traceback
 import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,8 +49,17 @@ class SmartDiagnosisService:
         self,
         resultId: uuid.UUID,
         db: AsyncSession,
+        counts: Mapping[str, int | float] | None = None,
+        allowDecimal: bool = False,
     ) -> SmartDiagnosisOutput | None:
         """Runs Smart Diagnosis for the given result.
+
+        `counts`, when given, is the input to the engine instead of the result's
+        stored findings: multi-field confirmation passes the exact mean counts, which
+        are decimals, with `allowDecimal=True`. Without `allowDecimal` a fractional
+        count is refused as it always was. The engine accepts decimals since v0.2.0;
+        any engine failure takes the normal path below (the diagnosis is marked
+        unavailable and confirmation still succeeds).
 
         Runs inside a SAVEPOINT nested in the caller's transaction (`db`), so
         an engine failure rolls back only the diagnosis work, not the
@@ -68,13 +80,17 @@ class SmartDiagnosisService:
             # without aborting the parent transaction.
             async with db.begin_nested():
                 result = await self._loadResult(resultId, db)
-                classification: dict = result.aiFindings or {}
+                if counts is not None:
+                    classification = _normalizeCounts(counts, allowDecimal=allowDecimal)
+                else:
+                    effectiveCounts = {**(result.aiFindings or {}), **(result.particleClasses or {})}
+                    classification = _normalizeCounts(effectiveCounts)
 
                 # Call the AI Engineer's function — owned by urolens_ai package
                 from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
                 engineOutput = generate_smart_diagnosis(classification)
 
-                dbRecord = await self._persistOutput(engineOutput, resultId, db)
+                dbRecord = await self._persistOutput(engineOutput, result, db)
 
                 await self.auditLogger.record(
                     eventType="SMART_DIAGNOSIS_GENERATED",
@@ -101,6 +117,27 @@ class SmartDiagnosisService:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def previewDiagnosis(counts: Mapping[str, int | float]) -> tuple[dict | None, bool]:
+        """The diagnosis for `counts`, without saving anything, and whether it is unavailable.
+
+        Used by the verification summary to preview the final diagnosis on the exact
+        mean counts. Any engine failure gives `(None, True)`; empty counts give `(None, False)`: nothing to diagnose.
+        """
+        if not counts:
+            return None, False
+        try:
+            from urolens_ai import generate_smart_diagnosis  # type: ignore[import]
+
+            engineOutput = generate_smart_diagnosis(_normalizeCounts(counts, allowDecimal=True))
+            return {
+                **_buildEvidenceMap(engineOutput),
+                "no_significant_indicators": engineOutput.no_significant_indicators,
+            }, False
+        except Exception as exc:
+            logger.warning("Smart Diagnosis preview failed: %s", exc)
+            return None, True
+
     async def _loadResult(
         self, resultId: uuid.UUID, db: AsyncSession
     ) -> AnalysisResult:
@@ -123,36 +160,38 @@ class SmartDiagnosisService:
         return result
 
     async def _persistOutput(
-        self, engineOutput, resultId: uuid.UUID, db: AsyncSession
+        self, engineOutput, result: AnalysisResult, db: AsyncSession
     ) -> SmartDiagnosisOutput:
-        # Persists a SmartDiagnosisOutput row and denormalizes a summary onto
-        # analysis_results.smart_diagnosis for the mobile sync path to read.
+        """Save the diagnosis as the result's one output row, and denormalize it.
+
+        `smart_diagnosis_outputs` holds one row per result (UNIQUE `result_id`),
+        so a re-confirmation (after a supervisor return) updates the existing
+        row. Inserting a second one failed on that constraint, which marked
+        every resubmitted result's diagnosis unavailable (UROLENS-230).
+        `analysis_results.smart_diagnosis` gets a summary for the mobile sync.
+        """
         evidenceMap = _buildEvidenceMap(engineOutput)
-        record = SmartDiagnosisOutput(
-            resultId=resultId,
-            goutScore=engineOutput.gout.level.value,
-            gnScore=engineOutput.glomerulonephritis.level.value,
-            nephroScore=engineOutput.nephrolithiasis.level.value,
-            noSignificantIndicators=engineOutput.no_significant_indicators,
-            evidenceMap=evidenceMap,
-            engineVersion=engineOutput.engine_version,
-            status="ATTACHED",
-        )
-        db.add(record)
+        record = result.smartDiagnosisOutput  # loaded by _loadResult
+        if record is None:
+            record = SmartDiagnosisOutput(resultId=result.resultId)
+            db.add(record)
+        record.goutScore = engineOutput.gout.level.value
+        record.gnScore = engineOutput.glomerulonephritis.level.value
+        record.nephroScore = engineOutput.nephrolithiasis.level.value
+        record.noSignificantIndicators = engineOutput.no_significant_indicators
+        record.evidenceMap = evidenceMap
+        record.engineVersion = engineOutput.engine_version
+        record.status = "ATTACHED"
+        record.generatedAt = datetime.now(UTC)
 
-        # Denormalize into analysis_results.smart_diagnosis so that the
-        # mobile sync (which queries analysis_results directly) can read it.
-        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
-        row = await db.execute(stmt)
-        result = row.scalar_one_or_none()
-        if result is not None:
-            result.smartDiagnosis = {
-                "gout":               evidenceMap["gout"],
-                "glomerulonephritis": evidenceMap["glomerulonephritis"],
-                "nephrolithiasis":    evidenceMap["nephrolithiasis"],
-                "no_significant_indicators": engineOutput.no_significant_indicators,
-            }
-
+        result.smartDiagnosis = {
+            "gout":               evidenceMap["gout"],
+            "glomerulonephritis": evidenceMap["glomerulonephritis"],
+            "nephrolithiasis":    evidenceMap["nephrolithiasis"],
+            "no_significant_indicators": engineOutput.no_significant_indicators,
+        }
+        # A diagnosis that failed earlier (e.g. before a return) is available now.
+        result.smartDiagnosisUnavailable = False
         return record
 
     async def _handleFailure(
@@ -180,6 +219,15 @@ class SmartDiagnosisService:
                 result = row.scalar_one_or_none()
                 if result:
                     result.smartDiagnosisUnavailable = True
+                # An earlier diagnosis (e.g. from before a return) no longer
+                # describes this result, so it mustn't keep showing as attached.
+                previous = (
+                    await db.execute(
+                        select(SmartDiagnosisOutput).where(SmartDiagnosisOutput.resultId == resultId)
+                    )
+                ).scalar_one_or_none()
+                if previous is not None:
+                    previous.status = "FLAGGED_UNAVAILABLE"
 
                 await self.auditLogger.record(
                     eventType="ENGINE_FAILED",
@@ -206,6 +254,47 @@ def _classifyError(exc: Exception) -> str:
     if code in _RULE_ENGINE_ERROR_CODES:
         return code
     return "RULE_EVALUATION_FAILED"
+
+
+def _normalizeCounts(
+    counts: Mapping[str, int | float], allowDecimal: bool = False
+) -> dict[str, int | float]:
+    # Overrides are stored as integral floats; never truncate fractional counts.
+    # `allowDecimal` (multi-field mean counts) lets a finite, non-negative float
+    # through exactly as given; the default stays integers only.
+    from urolens_ai.utils.exceptions import RuleEngineError
+
+    classification: dict[str, int | float] = {}
+    for particle, count in counts.items():
+        if allowDecimal:
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, (int, float))
+                or count < 0
+                or (isinstance(count, float) and not math.isfinite(count))
+            ):
+                raise RuleEngineError(
+                    code="INVALID_CLASSIFICATION",
+                    message="Particle counts must be finite, non-negative numbers.",
+                )
+            # A whole-number float goes to the engine as an int (the same value); only
+            # genuinely fractional means stay floats.
+            classification[particle] = (
+                int(count) if isinstance(count, float) and count.is_integer() else count
+            )
+            continue
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, (int, float))
+            or count < 0
+            or (isinstance(count, float) and not count.is_integer())
+        ):
+            raise RuleEngineError(
+                code="INVALID_CLASSIFICATION",
+                message="Particle counts must be non-negative integers.",
+            )
+        classification[particle] = int(count)
+    return classification
 
 
 def _buildEvidenceMap(engineOutput) -> dict:

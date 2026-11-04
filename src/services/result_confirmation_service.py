@@ -8,25 +8,52 @@ import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..core.audit_logger import AuditLogger
-from ..core.encryption import decryptPii
+from ..core.config import settings
+from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
+    FieldsBelowMinimumError,
+    FieldsNotVerifiedError,
+    LegacyNoFieldError,
+    LegacyNoFindingsError,
     NotFoundException,
-    UnprocessableException,
 )
+from ..core.rule_thresholds import loadNormalMax
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.patient import Patient
 from ..models.result_confirmation import ResultConfirmation
+from ..models.result_field import FieldStatus, ResultField
 from ..models.result_return import ResultReturn
 from ..models.specimen import Specimen
+from ..schemas.result_review import (
+    ConfirmResultResponse,
+    MedtechQueueSort,
+    MedtechQueueStatus,
+)
+from .consent_check import requireProcessingConsent
+from .field_access import LEGACY_CONFIRMABLE_RESULT_STATUSES
+from .field_aggregation_service import (
+    AcceptedField,
+    FieldCounts,
+    aggregate,
+    classMeans,
+    exactAiMeans,
+    exactMeans,
+    fieldBlockingReason,
+    flagsFor,
+    settledParticleClasses,
+    storedFieldSummary,
+)
 from .notification_service import NotificationService
+from .result_field_service import flagThresholds, legacyCounts, loadAcceptedFields
 from .smart_diagnosis_service import SmartDiagnosisService
+from .specimen_access import getAssignedSpecimen, requireNoPendingRetake
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +62,15 @@ logger = logging.getLogger(__name__)
 _CONFIRMABLE_STATUSES = {
     ResultStatus.PENDING_CONFIRM,
     ResultStatus.RETURNED_FOR_CORRECTION,
+}
+
+# Statuses a confirmation has already moved the result into (or past). Only
+# these answer RESULT_ALREADY_CONFIRMED, which clients treat as success.
+_ALREADY_CONFIRMED_STATUSES = {
+    ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+    ResultStatus.CRITICAL_ESCALATED,
+    ResultStatus.APPROVED,
+    ResultStatus.RELEASED,
 }
 
 
@@ -49,13 +85,8 @@ def _computeAge(dobStr: str | None) -> int | None:
         return None
 
 
-def _decryptOrNone(ciphertext: str | None) -> str | None:
-    if not ciphertext:
-        return None
-    try:
-        return decryptPii(ciphertext)
-    except Exception:
-        return None
+# Statuses in which a result is waiting on its MedTech — the confirmation queue.
+_MEDTECH_QUEUE_STATUSES = (ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION)
 
 
 class ResultConfirmationService:
@@ -84,47 +115,94 @@ class ResultConfirmationService:
         resultId: uuid.UUID,
         medtechId: uuid.UUID,
         request: Request,
-    ) -> ResultConfirmation:
+        interpretationNotes: str | None = None,
+    ) -> ConfirmResultResponse:
         """Confirms an analysis result and triggers Smart Diagnosis.
 
         Args:
-            medtech_id: the authenticated user recorded as `confirmed_by`.
+            medtechId: the authenticated user recorded as `confirmed_by`.
+            interpretation_notes: optional lab notes, written straight to
+                `AnalysisResult.interpretation` (UROLENS-156) — previously
+                nothing in this flow ever wrote that column, so the patient
+                portal's "Laboratory notes" and the result PDF's
+                Interpretation section always fell back to "Pending review".
+                Write-once, MedTech-only: overwritten on every confirm call
+                (including a re-confirm after a Supervisor return), same as
+                `confirmed_by`/`confirmed_at` below — there is deliberately
+                no Supervisor-side edit path for this field.
 
         Returns:
-            The persisted `ResultConfirmation` row.
+            The confirmation, with `resubmitted` telling a re-confirmation of
+            a supervisor-returned result apart from a first confirmation (the
+            app words its success message differently — UROLENS-146).
 
         Raises:
-            NotFoundException: result_id does not exist.
-            ConflictException: result isn't in a confirmable status — either
-                because it already passed confirmation, or because a
-                concurrent double-submit hit the DB's unique constraint
-                first.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` does not exist.
+            ConflictException: `RESULT_ALREADY_CONFIRMED`, if the result is
+                already with or past the supervisor (or a concurrent
+                double-submit hit the unique constraint first);
+                `RESULT_NOT_CONFIRMABLE`, if it's in any other status that
+                can't be confirmed.
             ConflictException: (`SPECIMEN_REJECTED`) the result's specimen has
                 been rejected.
-            UnprocessableException: a pending image retake blocks confirmation.
+            UnprocessableException: `PENDING_RETAKE`, if an image retake is
+                pending — including when the result's image was discarded and
+                no new one uploaded yet.
+            SpecimenNotFoundError: `SPECIMEN_NOT_FOUND`, if the result's
+                specimen no longer exists.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if the specimen isn't
+                assigned to `medtechId`.
+            ConflictException: `CONSENT_REFUSED`, if the patient refused
+                consent to processing (a missing consent record is audited as
+                `CONSENT_NOT_ON_FILE`, not refused).
         """
         result = await self._getResult(resultId)
+        # Guard: only the MedTech the specimen is assigned to may confirm it.
+        # Checked before any state guard so a non-owner learns nothing about
+        # the result's status.
+        specimen = await getAssignedSpecimen(self.db, result.specimenId, medtechId)
+        # Re-read now that the specimen is locked: the first read only told us
+        # which specimen to lock, and a concurrent upload may have reset the
+        # result since.
+        result = await self._getResult(resultId, fresh=True)
+
+        # Multi-field workflow (flag on): the result's fields decide what can be
+        # confirmed. A result from before multi-field (`is_legacy_single_field`)
+        # with at most one accepted field keeps the single-image rules.
+        fieldMode = settings.fieldWorkflowEnabled
+        accepted = await loadAcceptedFields(self.db, resultId) if fieldMode else []
+        legacy = fieldMode and bool(result.isLegacySingleField) and len(accepted) <= 1
 
         # Guard: pending retake blocks confirmation (checked first so this
-        # specific message wins over the generic one below).
-        await self._validateNoPendingRetake(result)
+        # specific message wins over the generic one below) — shared with
+        # saveAnnotation/overrideParameter, see specimen_access.py. Not with the
+        # multi-field workflow: a discarded field's image is not a pending retake.
+        if not fieldMode:
+            await requireNoPendingRetake(self.db, result, action="confirm")
 
         # Guard: only PENDING_CONFIRM or a supervisor-returned result can be
         # confirmed. A positive allow-list (rather than enumerating "already
         # confirmed" statuses) so a status this doesn't recognise — e.g.
         # FAILED — is rejected by default instead of silently allowed through.
-        if result.status not in _CONFIRMABLE_STATUSES:
+        confirmable = LEGACY_CONFIRMABLE_RESULT_STATUSES if legacy else _CONFIRMABLE_STATUSES
+        if result.status not in confirmable:
+            # Mobile treats RESULT_ALREADY_CONFIRMED as success (double tap /
+            # replayed offline confirm), so it must only mean what it says.
+            if result.status in _ALREADY_CONFIRMED_STATUSES:
+                raise ConflictException(
+                    code="RESULT_ALREADY_CONFIRMED",
+                    message="This result has already been confirmed.",
+                )
             raise ConflictException(
-                code="RESULT_ALREADY_CONFIRMED",
-                message="This result has already been confirmed.",
+                code="RESULT_NOT_CONFIRMABLE",
+                message="This result can't be confirmed in its current status.",
             )
 
         # Guard: a rejected specimen must never reach the supervisor. Without
         # this, a MedTech who rejects the specimen after the AI ran could still
         # confirm (or replay a queued offline confirm of) its result, putting it
         # in the approval queue for a specimen the lab has thrown out.
-        specimen = await self.db.get(Specimen, result.specimenId)
-        if specimen is not None and specimen.status == "REJECTED":
+        if specimen.status == "REJECTED":
             raise ConflictException(
                 code="SPECIMEN_REJECTED",
                 message=(
@@ -132,6 +210,12 @@ class ResultConfirmationService:
                     "or sent for supervisor approval."
                 ),
             )
+        await requireProcessingConsent(
+            self.db, specimen, medtechId, self.auditLogger, action="RESULT_CONFIRM", request=request
+        )
+
+        if fieldMode:
+            self._requireFieldsConfirmable(result, accepted, legacy)
 
         wasReturned = result.status == ResultStatus.RETURNED_FOR_CORRECTION
 
@@ -147,11 +231,19 @@ class ResultConfirmationService:
         )
         confirmation = existing.scalar_one_or_none()
 
+        if fieldMode:
+            # After a reopen the status no longer says "returned", so ask the
+            # returns: was there one after the confirmation being replaced?
+            wasReturned = await self._returnedSince(
+                resultId, confirmation.confirmedAt if confirmation is not None else None
+            )
+
         if confirmation is not None:
             confirmation.medtechId = medtechId
             confirmation.confirmedAt = now
         else:
             confirmation = ResultConfirmation(
+                confirmationId=uuid.uuid4(),  # known before flush, for the response
                 resultId=resultId,
                 medtechId=medtechId,
                 confirmedAt=now,
@@ -172,22 +264,63 @@ class ResultConfirmationService:
 
         # Settle particle_classes = ai_findings merged with any MedTech overrides.
         # If no overrides exist this is a straight copy of ai_findings.
-        overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
-        result.particleClasses = {**result.aiFindings, **overrides}
+        # `manualOverrides` is ordered oldest first, so a parameter corrected
+        # more than once ends up with its latest value.
+        decimalCounts: dict[str, float] | None = None
+        if fieldMode and not legacy:
+            # Final values come from the accepted fields: exact means. The AI means go in
+            # `ai_findings`, whole numbers (never 0 for a seen class) in `particle_classes`,
+            # and the diagnosis below runs on the exact means.
+            totals = aggregate(
+                [
+                    AcceptedField(
+                        fieldNo=f.fieldNo, aiFindings=f.aiFindings or {},
+                        effectiveCounts=f.effectiveCounts or {},
+                    )
+                    for f in accepted
+                ],
+                loadNormalMax(),
+            )
+            result.fieldCount = totals.fieldCount
+            result.fieldSummary = storedFieldSummary(totals)
+            result.aiFindings = exactAiMeans(totals)
+            result.particleClasses = settledParticleClasses(totals)
+            result.imageId = accepted[0].imageId
+            decimalCounts = exactMeans(totals)
+        elif legacy:
+            # A single-image result settles as it always did: AI counts with its
+            # result-level overrides, whole numbers.
+            result.particleClasses = legacyCounts(result.aiFindings, result.manualOverrides)
+            result.fieldCount = len(accepted)
+            result.fieldSummary = None
+        else:
+            overrides = {o.parameterName: float(o.correctedValue) for o in result.manualOverrides}
+            result.particleClasses = {**result.aiFindings, **overrides}
 
         # Transition result status
         result.status = ResultStatus.PENDING_SUPERVISOR_APPROVAL
         result.confirmedBy = medtechId
         result.confirmedAt = now
+        result.interpretation = interpretationNotes
 
         # Cache before SmartDiagnosis: savepoint rollbacks expire ORM object
         # attributes, and async SQLAlchemy cannot lazy-reload them outside a
         # greenlet context (raises MissingGreenlet).
         specimenId = result.specimenId
+        auditDetail: dict = {"specimen_id": str(specimenId)}
+        if fieldMode:
+            auditDetail["field_count"] = len(accepted)
+            if legacy:
+                auditDetail["legacy_single_field"] = True
 
         # Trigger Smart Diagnosis — failure MUST NOT break confirmation (ISP)
         # smart_diagnosis_service.run() catches all exceptions internally
-        await self._smartDiagnosis.run(resultId=resultId, db=self.db)
+        if decimalCounts is not None:
+            await self._smartDiagnosis.run(
+                resultId=resultId, db=self.db, counts=decimalCounts, allowDecimal=True
+            )
+        else:
+            await self._smartDiagnosis.run(resultId=resultId, db=self.db)
 
         # Notify the Supervisor — best-effort, same as Smart Diagnosis above:
         # a transient notification failure (e.g. push/email provider down)
@@ -209,41 +342,108 @@ class ResultConfirmationService:
             entityType="analysis_result",
             entityId=resultId,
             userId=medtechId,
-            detailJson={"specimen_id": str(specimenId)},
+            detailJson=auditDetail,
             db=self.db,
             request=request,
         )
 
         await self.db.commit()
         await self.db.refresh(confirmation)
-        return confirmation
+        return ConfirmResultResponse(
+            id=confirmation.confirmationId,
+            resultId=resultId,
+            confirmedBy=medtechId,
+            confirmedAt=now,
+            resubmitted=wasReturned,
+            status=ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+        )
 
     async def listPendingForMedtech(
-        self, medtechId: uuid.UUID, page: int, pageSize: int
+        self,
+        medtechId: uuid.UUID,
+        page: int,
+        pageSize: int,
+        request: Request | None = None,
+        status: MedtechQueueStatus | None = None,
+        sort: MedtechQueueSort = "oldest",
     ) -> dict:
-        """Lists results awaiting this MedTech's confirmation: their own
-        specimens with status PENDING_CONFIRM or RETURNED_FOR_CORRECTION,
-        oldest first. Returned-for-correction results carry the
-        supervisor's `returnReason` so the MedTech knows what to fix.
+        """List results awaiting this MedTech's confirmation, recording the view.
+
+        When the page shows any results (patient names included), the view is
+        recorded as `PENDING_RESULTS_VIEWED` with the result IDs shown, in the
+        same transaction (RA 10173). See `_queryPendingForMedtech` for the
+        listing itself.
+
+        Args:
+            medtechId: the MedTech whose queue this is.
+            page: 1-based page number.
+            pageSize: rows per page.
+            request: the inbound request, for the audit row's client IP.
+            status: only results in this status; both queue statuses when `None`.
+            sort: `"oldest"` or `"newest"` by specimen received time.
+
+        Returns:
+            A dict with `items`, `total`, `page`, `pageSize`.
+        """
+        listing = await self._queryPendingForMedtech(medtechId, page, pageSize, status, sort)
+        if listing["items"]:
+            await self.auditLogger.record(
+                eventType="PENDING_RESULTS_VIEWED",
+                entityType="user",
+                entityId=medtechId,
+                userId=medtechId,
+                db=self.db,
+                detailJson={"result_ids": [str(item["resultId"]) for item in listing["items"]]},
+                request=request,
+            )
+            await self.db.commit()
+        return listing
+
+    async def _queryPendingForMedtech(
+        self,
+        medtechId: uuid.UUID,
+        page: int,
+        pageSize: int,
+        status: MedtechQueueStatus | None = None,
+        sort: MedtechQueueSort = "oldest",
+    ) -> dict:
+        """List results awaiting this MedTech's confirmation.
+
+        Their own specimens whose result is PENDING_CONFIRM or
+        RETURNED_FOR_CORRECTION (or just `status`, if given).
+        Returned-for-correction results come first — they're already late —
+        then by when the specimen was received (`sort`), then by result ID so
+        paging is stable. Returned results carry the supervisor's latest
+        `returnReason` so the MedTech knows what to fix.
 
         Returns:
             A dict with `items`, `total`, `page`, `pageSize`.
         """
         offset = (page - 1) * pageSize
-        statuses = (ResultStatus.PENDING_CONFIRM, ResultStatus.RETURNED_FOR_CORRECTION)
-
-        countStmt = (
-            select(AnalysisResult.resultId)
-            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-            .where(Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
+        statuses = (status,) if status else _MEDTECH_QUEUE_STATUSES
+        # A rejected specimen's result can never be confirmed (UROLENS-238).
+        inQueue = (
+            Specimen.medtechId == medtechId,
+            AnalysisResult.status.in_(statuses),
+            Specimen.status != "REJECTED",
         )
-        total = len((await self.db.execute(countStmt)).all())
 
+        total = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(AnalysisResult)
+                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+                .where(*inQueue)
+            )
+        ).scalar_one()
+
+        returnedFirst = case((AnalysisResult.status == ResultStatus.RETURNED_FOR_CORRECTION, 0), else_=1)
+        byReceived = Specimen.receivedAt.asc() if sort == "oldest" else Specimen.receivedAt.desc()
         stmt = (
             select(AnalysisResult, Specimen)
             .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-            .where(Specimen.medtechId == medtechId, AnalysisResult.status.in_(statuses))
-            .order_by(AnalysisResult.status.desc(), AnalysisResult.resultId)
+            .where(*inQueue)
+            .order_by(returnedFirst, byReceived.nulls_last(), AnalysisResult.resultId)
             .offset(offset)
             .limit(pageSize)
         )
@@ -253,6 +453,7 @@ class ResultConfirmationService:
 
         returnedResultIds = {ar.resultId for ar, _ in rows if ar.status == ResultStatus.RETURNED_FOR_CORRECTION}
         reasonMap: dict[uuid.UUID, str] = {}
+        returnPointers: dict[uuid.UUID, dict[str, object]] = {}
         if returnedResultIds:
             retRows = (
                 await self.db.execute(
@@ -263,6 +464,17 @@ class ResultConfirmationService:
             ).scalars().all()
             for ret in retRows:
                 reasonMap.setdefault(ret.resultId, ret.reason)
+                if settings.fieldWorkflowEnabled and ret.resultId not in returnPointers:
+                    # The latest return first (ordered newest first), same query as the reason.
+                    returnPointers[ret.resultId] = {
+                        "returnFieldId": ret.fieldId, "returnParticleType": ret.particleType,
+                    }
+
+        fieldCounts = (
+            await self._fieldCountsFor([ar.resultId for ar, _ in rows])
+            if settings.fieldWorkflowEnabled
+            else {}
+        )
 
         patientUids = list({s.patientUid for _, s in rows if s.patientUid})
         patMap: dict[str, Patient] = {}
@@ -275,34 +487,131 @@ class ResultConfirmationService:
         items = []
         for ar, spec in rows:
             pat = patMap.get(spec.patientUid) if spec.patientUid else None
-            name = (_decryptOrNone(spec.patientName) or "") if spec else ""
-            age = _computeAge(_decryptOrNone(pat.dateOfBirth)) if pat else None
+            age = _computeAge(decryptStoredPii(pat.dateOfBirth)) if pat else None
             sex = pat.sex if pat else None
             items.append(
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid,
+                    "testType": spec.testType,
+                    "priorityLevel": spec.priorityLevel,
+                    "receivedAt": spec.receivedAt,
                     "patientUid": spec.patientUid or "",
-                    "patientName": name,
                     "patientAge": age,
                     "patientSex": sex,
                     "status": ar.status,
                     "returnReason": reasonMap.get(ar.resultId),
+                    **fieldCounts.get(ar.resultId, {}),
+                    **returnPointers.get(ar.resultId, {}),
                 }
             )
 
         return {"items": items, "total": total, "page": page, "pageSize": pageSize}
 
+    async def _fieldCountsFor(self, resultIds: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
+        """Accepted, verified and flagged field counts for a page of results.
+
+        One query for the whole page (the accepted fields' counts and verification,
+        never their detections); flags are computed in Python against each
+        result's own field means. A result with no fields gets zeros.
+        """
+        fieldRows = (
+            await self.db.execute(
+                select(
+                    ResultField.resultId,
+                    ResultField.verifiedBy,
+                    ResultField.aiFindings,
+                    ResultField.effectiveCounts,
+                    ResultField.confidenceScores,
+                ).where(
+                    ResultField.resultId.in_(resultIds),
+                    ResultField.status == FieldStatus.ACCEPTED,
+                )
+            )
+        ).all()
+        byResult: dict[uuid.UUID, list] = {}
+        for row in fieldRows:
+            byResult.setdefault(row.resultId, []).append(row)
+
+        thresholds = flagThresholds()
+        counts: dict[uuid.UUID, dict[str, int]] = {}
+        for resultId in resultIds:
+            fields = byResult.get(resultId, [])
+            means = classMeans([f.effectiveCounts or {} for f in fields])
+            counts[resultId] = {
+                "fieldCount": len(fields),
+                "verifiedFieldCount": sum(f.verifiedBy is not None for f in fields),
+                "flaggedFieldCount": sum(
+                    bool(
+                        flagsFor(
+                            FieldCounts(
+                                aiFindings=f.aiFindings or {},
+                                effectiveCounts=f.effectiveCounts or {},
+                                confidenceScores=f.confidenceScores or {},
+                            ),
+                            means,
+                            thresholds,
+                        )
+                    )
+                    for f in fields
+                ),
+            }
+        return counts
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _getResult(self, resultId: uuid.UUID) -> AnalysisResult:
+    def _requireFieldsConfirmable(
+        self, result: AnalysisResult, accepted: list[ResultField], legacy: bool
+    ) -> None:
+        # The multi-field guards, decided by the same function the verification
+        # summary uses. A legacy result needs its one field and findings (the AI's, or
+        # a result-level override); anything else needs the minimum, all verified.
+        legacyHasFindings = bool(accepted and accepted[0].aiFindings) or any(
+            o.fieldId is None for o in result.manualOverrides
+        )
+        reason = fieldBlockingReason(
+            legacy=legacy,
+            acceptedCount=len(accepted),
+            verifiedCount=sum(f.verifiedBy is not None for f in accepted),
+            legacyHasFindings=legacyHasFindings,
+            minFields=settings.minFieldsPerSpecimen,
+        )
+        if reason == "LEGACY_NO_FIELD":
+            raise LegacyNoFieldError()
+        if reason == "LEGACY_NO_FINDINGS":
+            raise LegacyNoFindingsError()
+        if reason == "FIELDS_BELOW_MINIMUM":
+            raise FieldsBelowMinimumError(len(accepted), settings.minFieldsPerSpecimen)
+        if reason == "FIELDS_NOT_VERIFIED":
+            raise FieldsNotVerifiedError()
+
+    async def _returnedSince(self, resultId: uuid.UUID, confirmedAt: datetime | None) -> bool:
+        # A resubmission is a confirmation after a supervisor return: there is a
+        # return later than the confirmation this one replaces. Without an earlier
+        # confirmation this is a first confirmation.
+        if confirmedAt is None:
+            return False
+        count = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(ResultReturn)
+                .where(ResultReturn.resultId == resultId, ResultReturn.returnedAt > confirmedAt)
+            )
+        ).scalar_one()
+        return count > 0
+
+    async def _getResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
         # Loads the result with manual_overrides eagerly, or raises
-        # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist.
+        # NotFoundException (RESULT_NOT_FOUND) if it doesn't exist. `fresh`
+        # overwrites the already-loaded object with the current DB state.
         stmt = select(AnalysisResult).options(
             selectinload(AnalysisResult.manualOverrides)
         ).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
         row = await self.db.execute(stmt)
         result = row.scalar_one_or_none()
         if result is None:
@@ -312,10 +621,3 @@ class ResultConfirmationService:
             )
         return result
 
-    async def _validateNoPendingRetake(self, result: AnalysisResult) -> None:
-        """A result with status IMAGE_RETAKE_REQUESTED cannot be confirmed."""
-        if result.status == ResultStatus.IMAGE_RETAKE_REQUESTED:
-            raise UnprocessableException(
-                code="PENDING_RETAKE",
-                message="Cannot confirm a result while an image retake is pending.",
-            )
