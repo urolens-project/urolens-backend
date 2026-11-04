@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- **A refused Submit for Verification names the fields still waiting for a decision (behind
+  `FIELD_WORKFLOW_ENABLED`).** The 409 `FIELDS_UNDECIDED` from
+  `POST /api/v1/results/{id}/fields/submit` now carries
+  `details.undecidedFields`: `[{"fieldId": "...", "fieldNo": 3}, ...]`, in field order. The
+  code and message are unchanged ("2 fields not reviewed."). The phone can fetch a field it
+  doesn't have (stored on the server, but the phone lost the answer to its upload) instead of
+  waiting for its next sync to bring it. To carry it, `main.py`'s error handler adds a
+  `details` key for any exception that sets `errorDetails`; every other error's body is
+  unchanged. No migration, no new route or setting.
 - **A retried field upload no longer adds the same photo twice (behind `FIELD_WORKFLOW_ENABLED`;
   an app that sends no capture id is unaffected).** `POST /api/v1/fields` takes an optional
   multipart `capture_id`: the phone's name for a photo, sent with every upload of it (8–64
