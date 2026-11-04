@@ -112,9 +112,14 @@ _STATUS_TO_CODE = {
 @app.exception_handler(HTTPException)
 async def httpExceptionHandler(request: Request, exc: HTTPException) -> JSONResponse:
     code = getattr(exc, "errorCode", None) or _STATUS_TO_CODE.get(exc.status_code, "ERROR")
+    error = {"code": code, "message": exc.detail}
+    # Only exceptions that set `errorDetails` (e.g. FieldsUndecidedError) add "details".
+    details = getattr(exc, "errorDetails", None)
+    if details:
+        error["details"] = details
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": code, "message": exc.detail}},
+        content={"error": error},
         headers=getattr(exc, "headers", None),  # e.g. Retry-After on a 429
     )
 

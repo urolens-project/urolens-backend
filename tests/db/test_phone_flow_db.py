@@ -9,6 +9,8 @@ The real services run on a real session; only the AI engine and storage are stub
 - Sync: a full pull carries the fields, `minFields` and a null `field_summary`; after
   Proceed and Discard, a delta pull carries exactly the decided fields (their
   `updated_at` really moved).
+- Submit is refused while a field waits for a decision, and the refusal names that
+  field (`details.undecidedFields`) so a phone missing it can fetch it.
 - Submit moves the result to `PENDING_CONFIRM`; after the website checks every field
   and confirms, a delta pull shows `PENDING_SUPERVISOR_APPROVAL` and the averages.
 - Supervisor return → website Capture More Fields → a CAPTURE_REOPENED notification
@@ -24,6 +26,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,6 +94,25 @@ async def _confirmedOnTheWebsite(db: AsyncSession, ids: SimpleNamespace, fields:
     )
     response = await confirmation.confirmResult(fields[0].resultId, ids.medtechId, None)
     assert response.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL
+
+
+@pytest.mark.asyncio
+async def test_aRefusedSubmitNamesTheUndecidedFields(db: AsyncSession) -> None:
+    ids = await seedAssignedSpecimen(db)
+    fields = [await capture(db, ids) for _ in range(11)]
+    service = fieldService(db)
+    for field in fields[:4] + fields[5:10]:
+        await service.acceptField(field.fieldId, ids.medtechId, None)
+
+    with pytest.raises(HTTPException) as excInfo:
+        await service.submitFields(fields[0].resultId, ids.medtechId, None)
+
+    assert excInfo.value.errorCode == "FIELDS_UNDECIDED"
+    assert excInfo.value.detail == "2 fields not reviewed."
+    assert excInfo.value.errorDetails == {"undecidedFields": [
+        {"fieldId": str(fields[4].fieldId), "fieldNo": fields[4].fieldNo},
+        {"fieldId": str(fields[10].fieldId), "fieldNo": fields[10].fieldNo},
+    ]}
 
 
 @pytest.mark.asyncio
