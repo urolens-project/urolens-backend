@@ -129,16 +129,16 @@
 
 ### Changed
 - **Smart Diagnosis no longer rates glomerulonephritis or nephrolithiasis HIGH on red blood
-  cells alone.** `requirements.txt` pins `urolens-ai-engine` to `16692c5` (engine PR #21,
-  rules config v1.1; the package still says 0.2.0 and the commit has no tag). Before it, a
+  cells alone.** `requirements.txt` pins `urolens-ai-engine` to `6598912` (tag `v0.2.1`:
+  engine PR #21, rules config v1.1, and the version bump in PR #22). Before it, a
   high erythrocyte count reached HIGH by itself (about 179 per field for glomerulonephritis,
   354 for nephrolithiasis). Now HIGH also needs casts above normal for glomerulonephritis and
   crystals above normal for nephrolithiasis; without them the level stops at MODERATE. Gout is
   unchanged. Applies to new analyses, confirms and verification summaries; stored diagnoses
-  are not recalculated. No migration, route or setting. The engine marks v1.1 as pending
-  MedTech re-review. Deploy: reinstall the engine at the pin (`--reinstall`, since the version
-  is unchanged) and restart; `RULE_ENGINE_CONFIG_PATH` must stay unset, or the old copy of the
-  rules keeps running (the startup check reports it).
+  are not recalculated. No migration, route or setting. Deploy: `pip install -r
+  requirements.txt` (the version changed, so it upgrades without `--reinstall`) and restart;
+  `RULE_ENGINE_CONFIG_PATH` must stay unset, or the old copy of the rules keeps running (the
+  startup check reports it).
 - **The AI engine is now v0.2.0, and the server refuses to start the multi-field workflow
   on anything else.** `requirements.txt` pins `urolens-ai-engine` to `c1b2d11` (tag
   `v0.2.0`): its install ships the weights (no more Git LFS pointers), the rules config and
