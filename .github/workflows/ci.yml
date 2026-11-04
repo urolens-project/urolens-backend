@@ -4,7 +4,7 @@ name: CI
   push:
     branches: ["**"]
   pull_request:
-    branches: [main, development, v1.0.0]
+    branches: [main, development, v1.0.0, v1.1.0]
 
 jobs:
   ci:
@@ -21,6 +21,10 @@ jobs:
       JWT_SIGNING_KEY: ci-only-signing-key-not-used-in-production-1234567890
       SUPABASE_URL: https://ci-placeholder.supabase.co
       SUPABASE_SERVICE_KEY: ci-placeholder-service-key
+      # Unlike ENCRYPTION_KEY, this only needs to be non-empty (config.py does
+      # no format validation on it), so it's a static placeholder like
+      # JWT_SIGNING_KEY rather than a generated step.
+      DEDUP_HASH_KEY: ci-only-dedup-hash-key-not-used-in-production-1234567890
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +81,16 @@ jobs:
         # No known-failure baseline, no tolerance for a partial pass — the
         # suite is fully green (108 passed, 0 failed, twice-verified stable).
         # Any failure here is a real regression.
+        run: pytest -q
+
+      - name: Run tests with the multi-field flag on
+        # The step above runs with FIELD_WORKFLOW_ENABLED unset (off), the way
+        # most tests were written. This runs the same suite the way production
+        # will run once the multi-field release ships, so a test, or code, that
+        # silently assumes the flag is off shows up here. It gates like the step
+        # above: the suite passes with the flag on (1746 passed, 0 failed).
+        env:
+          FIELD_WORKFLOW_ENABLED: "true"
         run: pytest -q
 
       - name: OpenAPI sanity check

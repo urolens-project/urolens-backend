@@ -24,29 +24,49 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from fastapi import Request
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
+from ..core.audit_logger import AuditLogger
 from ..core.config import settings
-from ..core.encryption import decryptPii
+from ..core.encryption import decryptStoredPii
 from ..core.exceptions import (
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     UnprocessableException,
 )
+from ..core.particle_counts import toWholeCount
+from ..core.storage import signedImageUrl
 from ..core.supabase import supabase
 from ..models.analysis_result import AnalysisResult, ResultStatus
 from ..models.escalation import Escalation
-from ..models.image import Image
+from ..models.image import ImageStatus
 from ..models.manual_override import ManualOverride
 from ..models.patient import Patient
 from ..models.result_approval import ResultApproval
+from ..models.result_field import FieldStatus, ResultField
 from ..models.result_return import ResultReturn
 from ..models.result_review import ResultReview
 from ..models.smart_diagnosis_output import SmartDiagnosisOutput
 from ..models.specimen import Specimen
 from ..models.user import User
+from ..schemas.patient_portal import PARTICLE_LABELS
 from ..schemas.result_review import VALID_ESCALATION_PATHS
+from .field_aggregation_service import toContractFieldSummary
+from .notification_service import NotificationService
+from .result_field_service import buildFieldSummaries
+from .smart_diagnosis_service import SmartDiagnosisService
+from .specimen_access import (
+    getAssignedSpecimen,
+    isMedtech,
+    requireNoPendingRetake,
+    requireResultEditable,
+    requireSpecimenAssigned,
+    requireSpecimenNotRejected,
+)
 
 _PHT = timezone(timedelta(hours=8))
 _ALLOWED_STATUSES_FOR_ACTION = {ResultStatus.PENDING_SUPERVISOR_APPROVAL}
@@ -64,25 +84,6 @@ def _computeAge(dobStr: str | None) -> int | None:
         return None
 
 
-def _imagePublicUrl(storageKey: str | None) -> str | None:
-    # Builds the public Supabase storage URL for a specimen image; returns
-    # None if there's no storage key or no configured Supabase URL.
-    if not storageKey or not settings.supabaseUrl:
-        return None
-    base = settings.supabaseUrl.rstrip("/")
-    return f"{base}/storage/v1/object/public/{settings.supabaseImageBucket}/{storageKey}"
-
-
-def _decryptOrNone(ciphertext: str | None) -> str | None:
-    # Decrypts PII, returning None (rather than raising) for an unset or
-    # undecryptable value.
-    if not ciphertext:
-        return None
-    try:
-        return decryptPii(ciphertext)
-    except Exception:
-        return None
-
 
 class ResultReviewService:
     """Owns the supervisor review/approval workflow: pending queue, approved/
@@ -90,8 +91,17 @@ class ResultReviewService:
     approve/return/escalate transitions.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        auditLogger: AuditLogger | None = None,
+        _notifService: NotificationService | None = None,
+        _smartDiagnosisService: SmartDiagnosisService | None = None,
+    ) -> None:
         self.db = db
+        self.auditLogger = auditLogger
+        self._notifService = _notifService or NotificationService(db=db)
+        self._smartDiagnosisService = _smartDiagnosisService
 
     # ── Private helpers ──────────────────────────────────────────────────
 
@@ -111,6 +121,71 @@ class ResultReviewService:
                 message=f"Action not allowed in status '{result.status}'.",
             )
         return result
+
+    async def _auditAction(
+        self,
+        eventType: str,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        specimenId: uuid.UUID,
+        request: Request | None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        # One audit row for a supervisor action, in the action's transaction (the
+        # caller commits). Ids and the escalation path only: the approval notes,
+        # return reason and escalation note stay out of the audit log.
+        if self.auditLogger is None:
+            return
+        await self.auditLogger.record(
+            eventType=eventType,
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=userId,
+            detailJson={"specimen_id": str(specimenId), **(extra or {})},
+            db=self.db,
+            request=request,
+        )
+
+    async def _transitionIfPending(self, resultId: uuid.UUID, newStatus: ResultStatus) -> None:
+        """The actual race-safety gate behind approve/return/escalate
+        (UROLENS-151, mirrors UROLENS-142/143's conditional-UPDATE-plus-
+        rowcount pattern).
+
+        `_requirePending`'s read-then-check above is not race-safe alone:
+        two concurrent actions on the same result — any mix of approve,
+        return, and escalate, not just two calls to the same action — could
+        both read PENDING_SUPERVISOR_APPROVAL and both pass that check before
+        either writes. This conditional UPDATE is the real gate: it only
+        moves the row if it is *still* PENDING_SUPERVISOR_APPROVAL at the
+        moment of the write, and Postgres serializes concurrent UPDATEs
+        against the same row, so at most one of any number of competing
+        actions can ever see `rowcount == 1`. No unique constraint or new
+        migration is needed here (unlike 142/143): those each protect a
+        single action against itself via a child-table constraint, but the
+        shared resource three *different* actions actually contend for is
+        `analysis_results.status` itself, which this UPDATE already guards
+        directly for every combination.
+
+        Raises:
+            ConflictException: `INVALID_RESULT_STATUS` — the same code
+                `_requirePending` raises in the non-race case, since neither
+                the caller nor the frontend can (or needs to) tell the two
+                apart — if another action won the race first.
+        """
+        result = await self.db.execute(
+            update(AnalysisResult)
+            .where(
+                AnalysisResult.resultId == resultId,
+                AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            )
+            .values(status=newStatus)
+        )
+        if result.rowcount == 0:
+            await self.db.rollback()
+            raise ConflictException(
+                code="INVALID_RESULT_STATUS",
+                message="Another action has already changed this result's status.",
+            )
 
     async def _batchPatientContext(
         self, specimenIds: list[uuid.UUID]
@@ -149,60 +224,99 @@ class ResultReviewService:
         """Returns (patient_name, patient_age, patient_sex) for a list row."""
         if spec is None:
             return "", None, None
-        patientName = _decryptOrNone(spec.patientName) or ""
+        patientName = decryptStoredPii(spec.patientName) or ""
         pat = patMap.get(spec.patientUid) if spec.patientUid else None
-        age = _computeAge(_decryptOrNone(pat.dateOfBirth)) if pat else None
+        age = _computeAge(decryptStoredPii(pat.dateOfBirth)) if pat else None
         sex = pat.sex if pat else None
         return patientName, age, sex
+
+    # ── Shared filters (kept in one place so the dashboard counts can never
+    # drift from the queue list endpoints they summarize — see UROLENS-142's
+    # workload-count bug and UROLENS-143's release-race bug, both caused by
+    # the same definition living in two places) ─────────────────────────────
+
+    @staticmethod
+    def _pendingApprovalFilter() -> tuple[Any, ...]:
+        # Rejected specimens' results never show up for approval —
+        # shared by get_pending and get_supervisor_stats.
+        return (
+            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
+            Specimen.status != "REJECTED",
+        )
+
+    @staticmethod
+    def _escalatedFilter() -> tuple[Any, ...]:
+        return (AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED,)
+
+    @staticmethod
+    def _todayWindowPht() -> tuple[datetime, datetime]:
+        """The [start, end) instant bounds of "today" in Philippine time,
+        as timezone-aware datetimes.
+
+        Deliberately NOT a bare `date` compared against a `timestamptz`
+        column: asyncpg encodes a plain `datetime.date` using Postgres'
+        `date` OID, and comparing that to `timestamptz` triggers an
+        implicit cast that reinterprets the date's midnight in the
+        session's timezone (UTC here, unconfigured) rather than PHT —
+        silently shifting the "day" boundary to 8am PHT instead of
+        midnight PHT. Passing tz-aware datetimes instead makes the bound
+        an absolute instant, so the comparison is correct regardless of
+        the session's timezone setting.
+        """
+        nowPht = datetime.now(_PHT)
+        startPht = nowPht.replace(hour=0, minute=0, second=0, microsecond=0)
+        return startPht, startPht + timedelta(days=1)
+
+    @staticmethod
+    def _approvedTodayFilter(startPht: datetime, endPht: datetime) -> tuple[Any, ...]:
+        # Global across all supervisors, not per-approver — matches
+        # get_approved_today, which has no approved_by filter either.
+        return (
+            ResultApproval.approvedAt >= startPht,
+            ResultApproval.approvedAt < endPht,
+        )
 
     # ── Supervisor dashboard stats ───────────────────────────────────────
 
     async def getSupervisorStats(self) -> dict[str, int]:
-        """Dashboard counts for the supervisor's review queue.
+        """Dashboard counts for the supervisor's review queue, in one
+        round trip (three scalar subqueries in a single SELECT — this
+        endpoint is polled on an interval).
 
         Returns:
             A dict with `pendingCount` (results awaiting approval),
-            `approvedToday` (approvals recorded today, PHT), and
-            `escalatedCount` (results currently `CRITICAL_ESCALATED`).
+            `approvedToday` (approvals recorded today, PHT, across all
+            supervisors), and `escalatedCount` (results currently
+            `CRITICAL_ESCALATED`).
         """
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
+        startPht, endPht = self._todayWindowPht()
 
-        pendingCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
-                .where(
-                    AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-                    Specimen.status != "REJECTED",
-                )
-            )
-        ).scalar_one()
+        pendingSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .join(Specimen, Specimen.specimenId == AnalysisResult.specimenId)
+            .where(*self._pendingApprovalFilter())
+            .scalar_subquery()
+        )
+        approvedSubq = (
+            select(func.count())
+            .select_from(ResultApproval)
+            .where(*self._approvedTodayFilter(startPht, endPht))
+            .scalar_subquery()
+        )
+        escalatedSubq = (
+            select(func.count())
+            .select_from(AnalysisResult)
+            .where(*self._escalatedFilter())
+            .scalar_subquery()
+        )
 
-        approvedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(ResultApproval)
-                .where(
-                    ResultApproval.approvedAt >= todayPht,
-                    ResultApproval.approvedAt < tomorrowPht,
-                )
-            )
-        ).scalar_one()
-
-        escalatedCount = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
-            )
-        ).scalar_one()
+        row = (await self.db.execute(select(pendingSubq, approvedSubq, escalatedSubq))).one()
 
         return {
-            "pendingCount": pendingCount,
-            "approvedToday": approvedCount,
-            "escalatedCount": escalatedCount,
+            "pendingCount": row[0],
+            "approvedToday": row[1],
+            "escalatedCount": row[2],
         }
 
     # ── Pending queue ─────────────────────────────────────────────────────
@@ -222,10 +336,7 @@ class ResultReviewService:
 
         # Results of rejected specimens never show up for approval (approveResult
         # would refuse them anyway) — same filter as getSupervisorStats.
-        awaitingApproval = (
-            AnalysisResult.status == ResultStatus.PENDING_SUPERVISOR_APPROVAL,
-            Specimen.status != "REJECTED",
-        )
+        awaitingApproval = self._pendingApprovalFilter()
 
         total = (
             await self.db.execute(
@@ -260,6 +371,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -285,10 +397,8 @@ class ResultReviewService:
             `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
-        todayPht = datetime.now(_PHT).date()
-        tomorrowPht = todayPht + timedelta(days=1)
-
-        window = (ResultApproval.approvedAt >= todayPht, ResultApproval.approvedAt < tomorrowPht)
+        startPht, endPht = self._todayWindowPht()
+        window = self._approvedTodayFilter(startPht, endPht)
 
         total = (
             await self.db.execute(
@@ -329,6 +439,7 @@ class ResultReviewService:
                 {
                     "resultId": resultId,
                     "specimenId": ar.specimenId if ar else None,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -354,19 +465,18 @@ class ResultReviewService:
             per row), `total`, `page`, and `page_size`.
         """
         offset = (page - 1) * pageSize
+        escalated = self._escalatedFilter()
 
         total = (
             await self.db.execute(
-                select(func.count())
-                .select_from(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                select(func.count()).select_from(AnalysisResult).where(*escalated)
             )
         ).scalar_one()
 
         arRows = (
             await self.db.execute(
                 select(AnalysisResult)
-                .where(AnalysisResult.status == ResultStatus.CRITICAL_ESCALATED)
+                .where(*escalated)
                 .order_by(AnalysisResult.updatedAt.desc())
                 .offset(offset)
                 .limit(pageSize)
@@ -394,6 +504,7 @@ class ResultReviewService:
                 {
                     "resultId": ar.resultId,
                     "specimenId": ar.specimenId,
+                    "sampleUid": spec.sampleUid if spec else None,
                     "patientUid": spec.patientUid if spec else "",
                     "patientName": name,
                     "patientAge": age,
@@ -408,49 +519,110 @@ class ResultReviewService:
 
     # ── Full result detail ────────────────────────────────────────────────
 
-    async def getFullResult(self, resultId: uuid.UUID) -> dict[str, Any]:
+    async def getFullResult(
+        self,
+        resultId: uuid.UUID,
+        viewerId: uuid.UUID | None = None,
+        request: Request | None = None,
+        viewerRole: str | None = None,
+    ) -> dict[str, Any]:
         """Assemble the full supervisor-review detail view for one result:
-        patient/medtech context, AI findings, manual overrides, the latest
-        annotation, and Smart Diagnosis (if attached).
+        patient/medtech context, AI findings, manual overrides, every
+        reviewer's annotation, and Smart Diagnosis (if attached).
+
+        Args:
+            resultId: the result to assemble.
+            viewerId: the caller. When given (and an `auditLogger` was
+                injected), the view is recorded as `RESULT_DETAIL_VIEWED` in
+                the same transaction — no view without an audit row.
+            request: the inbound request, for the audit row's client IP.
+            viewerRole: the caller's `role` claim. A MEDTECH may only read
+                results for specimens assigned to them (F-22); checked before
+                any patient data is decrypted.
 
         Returns:
             A dict of the assembled detail fields. `confirmation_notes` is
             always `None` — see the module docstring's schema-drift note.
+            `annotations` lists every reviewer's row (oldest first) — a
+            MedTech's and a Supervisor's annotations on the same result are
+            independent, not collapsed to whichever was saved most recently.
 
         Raises:
-            NotFoundException: `result_id` doesn't exist.
+            NotFoundException: `RESULT_NOT_FOUND`, if `resultId` doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech asks for
+                another MedTech's result.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
+        # Collapses what used to be 5 sequential round trips (ar, specimen,
+        # medtech user, image — patient is still separate, see below) into
+        # one: AnalysisResult.specimen/.image are plain to-one FK
+        # relationships, and Specimen.medtech (added alongside this fix) is
+        # the same Specimen.medtechId -> User lookup getFullResult always
+        # did, just eager-loaded instead of a second db.get(). Each of these
+        # joins is many-to-one from AnalysisResult's perspective, so no row
+        # duplication risk — .unique() is defensive, not load-bearing here.
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.resultId == resultId)
+            .options(
+                joinedload(AnalysisResult.specimen).joinedload(Specimen.medtech),
+                joinedload(AnalysisResult.image),
+            )
+        )
+        ar = (await self.db.execute(stmt)).unique().scalar_one_or_none()
         if ar is None:
             raise NotFoundException(
                 code="RESULT_NOT_FOUND", message="Analysis result not found."
             )
 
-        spec = await self.db.get(Specimen, ar.specimenId)
+        spec = ar.specimen
+        isMedtechViewer = viewerRole is not None and isMedtech(viewerRole)
+        if isMedtechViewer:
+            if spec is None:
+                raise ForbiddenException(
+                    code="SPECIMEN_NOT_ASSIGNED", message="Specimen is not assigned to you."
+                )
+            requireSpecimenAssigned(spec, viewerId)
 
+        # Patient resolution stays its own round trip, and stays keyed off
+        # Specimen.patientUid (not AnalysisResult.patientId) deliberately —
+        # the two can diverge (patientId is only backfilled from the
+        # specimen's lab request, patientUid is the MedTech-facing identity
+        # used everywhere else in this method), and this is a PHI-adjacent
+        # path not worth touching as part of a round-trip-count change.
         pat: Patient | None = None
         if spec and spec.patientUid:
             pat = (
                 await self.db.execute(select(Patient).where(Patient.patientUid == spec.patientUid))
             ).scalar_one_or_none()
 
-        medtechName = ""
-        if spec and spec.medtechId:
-            medtech = await self.db.get(User, spec.medtechId)
-            medtechName = medtech.username if medtech else ""
+        medtechName = spec.medtech.username if spec and spec.medtech else ""
 
+        # Multi-field workflow: every field of the result, and `imageUrl` is the first
+        # accepted field's image. Otherwise (flag off, or no accepted field yet) the
+        # single image, exactly as before.
+        fieldMode = settings.fieldWorkflowEnabled
+        fieldItems = await buildFieldSummaries(self.db, resultId) if fieldMode else None
+        firstAccepted = next(
+            (item for item in fieldItems or [] if item.status == FieldStatus.ACCEPTED), None
+        )
         imageUrl: str | None = None
-        if ar.imageId:
-            image = await self.db.get(Image, ar.imageId)
-            imageUrl = _imagePublicUrl(image.storageKey) if image else None
+        if firstAccepted is not None:
+            imageUrl = firstAccepted.imageUrl
+        elif ar.image:
+            imageUrl = await signedImageUrl(ar.image.storageKey)
 
-        overridesRows = (
-            await self.db.execute(
-                select(ManualOverride)
-                .where(ManualOverride.resultId == resultId)
-                .order_by(ManualOverride.overriddenAt)
-            )
-        ).scalars().all()
+        overridesStmt = (
+            select(ManualOverride)
+            .where(ManualOverride.resultId == resultId)
+            .options(joinedload(ManualOverride.medtech))
+            .order_by(ManualOverride.overriddenAt)
+        )
+        if fieldMode:
+            # Per-field overrides and reverts belong to their field (GET /fields/{id});
+            # this list stays the result-level history it always was.
+            overridesStmt = overridesStmt.where(ManualOverride.fieldId.is_(None))
+        overridesRows = (await self.db.execute(overridesStmt)).scalars().all()
+
         overrides = [
             {
                 "overrideId": o.overrideId,
@@ -459,20 +631,31 @@ class ResultReviewService:
                 "correctedValue": o.correctedValue,
                 "rationale": o.rationale,
                 "overriddenAt": o.overriddenAt,
+                "overriddenBy": o.overriddenBy,
+                "overriddenByName": o.medtech.username if o.medtech else "",
             }
             for o in overridesRows
         ]
 
-        review = (
+        reviewRows = (
             await self.db.execute(
                 select(ResultReview)
                 .where(ResultReview.resultId == resultId)
-                .order_by(ResultReview.updatedAt.desc())
-                .limit(1)
+                .options(joinedload(ResultReview.reviewer))
+                .order_by(ResultReview.updatedAt)
             )
-        ).scalar_one_or_none()
-        latestAnnotation = review.annotationNotes if review else None
-        latestSpatial = review.spatialAnnotations if review else None
+        ).scalars().all()
+
+        annotations = [
+            {
+                "reviewedBy": r.reviewedBy,
+                "reviewerRole": r.reviewer.role if r.reviewer else "",
+                "annotationNotes": r.annotationNotes,
+                "spatialAnnotations": r.spatialAnnotations,
+                "updatedAt": r.updatedAt,
+            }
+            for r in reviewRows
+        ]
 
         sdo = (
             await self.db.execute(
@@ -489,18 +672,69 @@ class ResultReviewService:
                 "evidenceMap": sdo.evidenceMap or {},
                 "engineVersion": sdo.engineVersion,
             }
+        elif sdo is None and ar.smartDiagnosis and not ar.smartDiagnosisUnavailable:
+            # Upload previews use the nested engine shape; expose the same detail
+            # contract as the formal output without reviving a failed diagnosis.
+            preview = ar.smartDiagnosis
+            smartDiagnosis = {
+                "goutScore": preview.get("gout", {}).get("level"),
+                "gnScore": preview.get("glomerulonephritis", {}).get("level"),
+                "nephroScore": preview.get("nephrolithiasis", {}).get("level"),
+                "noSignificantIndicators": preview.get("no_significant_indicators", False),
+                "evidenceMap": {
+                    condition: preview.get(condition, {})
+                    for condition in ("gout", "glomerulonephritis", "nephrolithiasis")
+                },
+            }
 
-        first = _decryptOrNone(pat.firstName) if pat else None
-        last = _decryptOrNone(pat.lastName) if pat else None
-        dob = _decryptOrNone(pat.dateOfBirth) if pat else None
+        dob = decryptStoredPii(pat.dateOfBirth) if pat else None
         sex = pat.sex if pat else None
-        patientName = f"{first or ''} {last or ''}".strip() or (
-            _decryptOrNone(spec.patientName) if spec else ""
-        ) or ""
+        # A MedTech identifies the patient by code only (the mobile app's
+        # privacy decision, UROLENS-225/226): their name isn't even decrypted.
+        patientName: str | None = None
+        if not isMedtechViewer:
+            first = decryptStoredPii(pat.firstName) if pat else None
+            last = decryptStoredPii(pat.lastName) if pat else None
+            patientName = f"{first or ''} {last or ''}".strip() or (
+                decryptStoredPii(spec.patientName) if spec else ""
+            ) or ""
 
-        return {
+        returnReason: str | None = None
+        returnFieldId: uuid.UUID | None = None
+        returnParticleType: str | None = None
+        if ar.status == ResultStatus.RETURNED_FOR_CORRECTION:
+            if fieldMode:
+                latest = (
+                    await self.db.execute(
+                        select(ResultReturn.reason, ResultReturn.fieldId, ResultReturn.particleType)
+                        .where(ResultReturn.resultId == resultId)
+                        .order_by(ResultReturn.returnedAt.desc())
+                        .limit(1)
+                    )
+                ).first()
+                if latest is not None:
+                    returnReason, returnFieldId, returnParticleType = latest
+            else:
+                returnReason = (
+                    await self.db.execute(
+                        select(ResultReturn.reason)
+                        .where(ResultReturn.resultId == resultId)
+                        .order_by(ResultReturn.returnedAt.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+
+        # Reuses the already-eager-loaded ar.image (see the combined query
+        # above) rather than calling specimen_access.isRetakePending, which
+        # would re-fetch the same image with a second round trip.
+        isRetakePending = ar.status == ResultStatus.IMAGE_RETAKE_REQUESTED or (
+            ar.image is not None and ar.image.status != ImageStatus.ACTIVE
+        )
+
+        detail = {
             "resultId": ar.resultId,
             "specimenId": ar.specimenId,
+            "sampleUid": spec.sampleUid if spec else None,
             "patientUid": spec.patientUid if spec else "",
             "patientName": patientName,
             "patientAge": _computeAge(dob),
@@ -509,17 +743,47 @@ class ResultReviewService:
             "confirmedAt": ar.confirmedAt,
             "confirmationNotes": None,  # schema drift — see module docstring
             "aiFindings": ar.aiFindings or {},
+            "aiDetections": ar.aiDetections or [],
             "flaggedAnomalies": ar.flaggedAnomalies or {},
             "particleClasses": ar.particleClasses or {},
             "modelVersion": ar.modelVersion,
             "manualOverrides": overrides,
             "imageUrl": imageUrl,
             "smartDiagnosis": smartDiagnosis,
-            "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or smartDiagnosis is None,
+            "smartDiagnosisUnavailable": ar.smartDiagnosisUnavailable or (
+                sdo is not None and sdo.status != "ATTACHED"
+            ),
             "status": ar.status,
-            "annotationNotes": latestAnnotation,
-            "spatialAnnotations": latestSpatial,
+            "returnReason": returnReason,
+            "isRetakePending": isRetakePending,
+            "annotations": annotations,
         }
+        if fieldMode:
+            fieldSummary = toContractFieldSummary(ar.fieldSummary)
+            detail.update({
+                "fields": fieldItems,
+                "fieldCount": ar.fieldCount,
+                "fieldSummary": fieldSummary,
+                "isLegacySingleField": bool(ar.isLegacySingleField),
+                "returnFieldId": returnFieldId,
+                "returnParticleType": returnParticleType,
+            })
+            if fieldSummary is not None:
+                # Field flags and focal findings replace the single-image anomalies.
+                detail["flaggedAnomalies"] = {}
+        if viewerId is not None and self.auditLogger is not None:
+            # RA 10173: record who viewed which patient's result.
+            await self.auditLogger.record(
+                eventType="RESULT_DETAIL_VIEWED",
+                entityType="analysis_result",
+                entityId=ar.resultId,
+                userId=viewerId,
+                db=self.db,
+                detailJson={"specimen_id": str(ar.specimenId)},
+                request=request,
+            )
+            await self.db.commit()
+        return detail
 
     # ── Annotation ────────────────────────────────────────────────────────
 
@@ -527,20 +791,46 @@ class ResultReviewService:
         self,
         resultId: uuid.UUID,
         userId: uuid.UUID,
+        callerRole: str,
         annotationNotes: str,
         spatialAnnotations: list | None = None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
-        """Upsert a supervisor's annotation on a result.
+        """Upsert the caller's annotation on a result.
 
-        `spatial_annotations` is only written when the caller supplies a
-        value (matching the pre-port behavior) — omitting it on a later call
-        leaves a previously-saved value in place rather than clearing it.
+        Same access rules as a manual override: a MedTech may annotate only a
+        specimen assigned to them, while the result is `PENDING_CONFIRM` or
+        `RETURNED_FOR_CORRECTION`; a Supervisor only while it is
+        `PENDING_SUPERVISOR_APPROVAL`. The audit row commits with the change
+        and never carries the note text.
+
+        `spatialAnnotations` is only written when the caller supplies a
+        value — omitting it on a later call leaves a previously-saved value in
+        place rather than clearing it.
+
+        Raises:
+            NotFoundException: `RESULT_NOT_FOUND`, if the result doesn't exist.
+            ForbiddenException: `SPECIMEN_NOT_ASSIGNED`, if a MedTech annotates
+                another MedTech's (or an unassigned) specimen.
+            UnprocessableException: `RESULT_ALREADY_FINALISED`, if the result is
+                APPROVED or RELEASED.
+            ConflictException: `SPECIMEN_REJECTED`, if a MedTech annotates a
+                rejected specimen; `RESULT_NOT_EDITABLE`, for any other status
+                the caller's role may not change.
+            UnprocessableException: `PENDING_RETAKE`, if the result's image
+                is mid-retake (UROLENS-230) — annotating it would anchor
+                boxes to an image about to be replaced.
         """
-        ar = await self.db.get(AnalysisResult, resultId)
-        if ar is None:
-            raise NotFoundException(
-                code="RESULT_NOT_FOUND", message="Analysis result not found."
-            )
+        ar = await self._getAnnotatableResult(resultId)
+        isSupervisor = not isMedtech(callerRole)
+        if not isSupervisor:
+            # Ownership before any state check, so a non-owner learns nothing;
+            # then re-read under the specimen lock (see getAssignedSpecimen).
+            specimen = await getAssignedSpecimen(self.db, ar.specimenId, userId)
+            requireSpecimenNotRejected(specimen)
+            ar = await self._getAnnotatableResult(resultId, fresh=True)
+        requireResultEditable(ar, isSupervisor)
+        await requireNoPendingRetake(self.db, ar, action="annotate")
 
         existing = (
             await self.db.execute(
@@ -550,6 +840,15 @@ class ResultReviewService:
                 )
             )
         ).scalar_one_or_none()
+
+        # The diff baseline for a reviewer's first-ever save on this result
+        # is the AI's own detected boxes, not empty — those are what the
+        # current particle counts already reflect (the canvas pre-fills
+        # from them too; see MicroscopyImageSection). Diffing against []
+        # would count every AI-seeded box as newly hand-drawn the moment
+        # someone saves the AI's suggestions untouched, double-counting on
+        # top of ai_findings.
+        previousBoxes = existing.spatialAnnotations if existing else (ar.aiDetections or [])
 
         if existing:
             existing.annotationNotes = annotationNotes
@@ -565,6 +864,35 @@ class ResultReviewService:
                 )
             )
 
+        adjustedParticles: list[str] = []
+        if spatialAnnotations is not None:
+            adjustedParticles = await self._applyBoxDrivenCountAdjustments(
+                ar=ar,
+                previousBoxes=previousBoxes or [],
+                newBoxes=spatialAnnotations,
+                userId=userId,
+            )
+
+        await self.auditLogger.record(
+            eventType="ANNOTATION_SAVED",
+            entityType="analysis_result",
+            entityId=resultId,
+            userId=userId,
+            db=self.db,
+            detailJson={
+                "resultStatus": ar.status,
+                "hasSpatialAnnotations": spatialAnnotations is not None,
+                "countsAdjustedFor": adjustedParticles,
+            },
+            request=request,
+        )
+
+        if adjustedParticles and self._smartDiagnosisService:
+            # The box edit changed particleClasses — re-derive evidence so
+            # the diagnosis panel doesn't keep showing scores computed from
+            # counts the reviewer has since corrected.
+            await self._smartDiagnosisService.run(resultId=resultId, db=self.db)
+
         await self.db.commit()
 
         return {
@@ -573,10 +901,103 @@ class ResultReviewService:
             "spatialAnnotations": spatialAnnotations,
         }
 
+    async def _applyBoxDrivenCountAdjustments(
+        self,
+        ar: AnalysisResult,
+        previousBoxes: list,
+        newBoxes: list,
+        userId: uuid.UUID,
+    ) -> list[str]:
+        """Keeps particle counts in sync with bounding-box edits.
+
+        Boxes and counts were previously two disconnected editing paths —
+        deleting or relabeling a box never touched the count shown in the
+        particle table. Diffs the box set by `id` (removed / added /
+        relabeled) and turns the net per-particle-type delta into the same
+        kind of `ManualOverride` row a human-typed correction creates, with
+        an auto-generated rationale, batched one row per affected particle
+        type rather than one per box (a dense AI-seeded set can be hundreds
+        of boxes touching only one or two types).
+
+        Returns the list of particle types adjusted, so the caller knows
+        whether a Smart Diagnosis re-run is actually warranted.
+        """
+        # Legacy boxes (saved before `id`/`particleType` existed — see
+        # SpatialAnnotationItemOut's docstring) can't be tracked across a
+        # diff at all; skip anything without both rather than guess.
+        prevById = {b["id"]: b for b in previousBoxes if b.get("id") and b.get("particleType")}
+        newById = {b["id"]: b for b in newBoxes if b.get("id") and b.get("particleType")}
+
+        delta: dict[str, int] = {}
+        removed = added = relabeled = 0
+        for boxId, prevBox in prevById.items():
+            if boxId not in newById:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                removed += 1
+        for boxId, newBox in newById.items():
+            prevBox = prevById.get(boxId)
+            if prevBox is None:
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                added += 1
+            elif prevBox["particleType"] != newBox["particleType"]:
+                delta[prevBox["particleType"]] = delta.get(prevBox["particleType"], 0) - 1
+                delta[newBox["particleType"]] = delta.get(newBox["particleType"], 0) + 1
+                relabeled += 1
+
+        if not delta:
+            return []
+
+        particleClasses = dict(ar.particleClasses or {})
+        aiFindings = ar.aiFindings or {}
+        adjusted: list[str] = []
+
+        for parameter, change in delta.items():
+            if change == 0:
+                continue
+            current = particleClasses.get(parameter, aiFindings.get(parameter, 0))
+            correctedValue = max(0, toWholeCount(current) + change)
+            if correctedValue == current:
+                continue
+
+            self.db.add(
+                ManualOverride(
+                    resultId=ar.resultId,
+                    medtechId=userId,
+                    parameterName=parameter,
+                    originalAiValue=str(float(aiFindings.get(parameter, 0))),
+                    correctedValue=str(float(correctedValue)),
+                    rationale=(
+                        f"Adjusted via bounding-box edit "
+                        f"({removed} removed, {added} added, {relabeled} relabeled)."
+                    ),
+                )
+            )
+            particleClasses[parameter] = correctedValue
+            adjusted.append(parameter)
+
+        if adjusted:
+            ar.particleClasses = particleClasses
+
+        return adjusted
+
+    async def _getAnnotatableResult(self, resultId: uuid.UUID, fresh: bool = False) -> AnalysisResult:
+        # `fresh` overwrites the already-loaded object with current DB state.
+        stmt = select(AnalysisResult).where(AnalysisResult.resultId == resultId)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        ar = (await self.db.execute(stmt)).scalar_one_or_none()
+        if ar is None:
+            raise NotFoundException(code="RESULT_NOT_FOUND", message="Analysis result not found.")
+        return ar
+
     # ── Approve ───────────────────────────────────────────────────────────
 
     async def approveResult(
-        self, resultId: uuid.UUID, userId: uuid.UUID, notes: str | None
+        self,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        notes: str | None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Approve a pending result, marking its specimen `COMPLETED`.
 
@@ -589,8 +1010,10 @@ class ResultReviewService:
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`,
-                or its specimen has been rejected (`SPECIMEN_REJECTED`).
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first;
+                `SPECIMEN_REJECTED`, if its specimen has been rejected.
         """
         ar = await self._requirePending(resultId)
 
@@ -605,12 +1028,13 @@ class ResultReviewService:
 
         now = datetime.now(_PHT)
         self.db.add(ResultApproval(resultId=resultId, approvedBy=userId, notes=notes, approvedAt=now))
-        ar.status = ResultStatus.APPROVED
+        await self._transitionIfPending(resultId, ResultStatus.APPROVED)
 
         if specimen is not None:
             specimen.status = "COMPLETED"
             specimen.completedAt = now
 
+        await self._auditAction("RESULT_APPROVED", resultId, userId, ar.specimenId, request)
         await self.db.commit()
 
         return {"resultId": resultId, "status": ResultStatus.APPROVED.value, "approvedAt": now}
@@ -618,34 +1042,122 @@ class ResultReviewService:
     # ── Return for correction ────────────────────────────────────────────
 
     async def returnResult(
-        self, resultId: uuid.UUID, userId: uuid.UUID, reason: str
+        self,
+        resultId: uuid.UUID,
+        userId: uuid.UUID,
+        reason: str,
+        request: Request | None = None,
+        fieldId: uuid.UUID | None = None,
+        particleType: str | None = None,
     ) -> dict[str, Any]:
-        """Return a pending result to the MedTech for correction.
+        """Return a pending result to the MedTech for correction, and tell them.
+
+        The specimen's assigned MedTech is notified (`RESULT_RETURNED`) in the
+        same transaction; the push goes out after the commit (UROLENS-248).
+
+        With the multi-field workflow on, the return also clears the verified mark on
+        every field of the result, so the MedTech looks at each one again, and it may
+        point at one field (and one particle class) with `fieldId` and `particleType`;
+        the reason text is stored as written. With the flag off both are ignored.
 
         Args:
-            user_id: the authenticated supervisor recorded as `returned_by`.
-            reason: required free-text explanation for the return.
+            userId: the authenticated supervisor recorded as `returned_by`.
+            reason: required free-text explanation for the return. Not put in
+                the notification, which reaches the lock screen.
+            fieldId: multi-field only; the field the return is about. Must belong
+                to this result.
+            particleType: multi-field only; needs `fieldId` and a known class.
 
         Returns:
-            A dict confirming the new status and `returned_at` timestamp.
+            A dict confirming the new status and `returned_at` timestamp (and the
+            `fieldId` / `particleType` given, with the flag on).
 
         Raises:
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
+            UnprocessableException: (flag on) `FIELD_NOT_IN_RESULT`, `FIELD_REQUIRED_FOR_PARTICLE`
+                or `INVALID_PARTICLE_TYPE`.
         """
-        ar = await self._requirePending(resultId)
+        result = await self._requirePending(resultId)
+
+        fieldMode = settings.fieldWorkflowEnabled
+        if fieldMode:
+            await self._requireValidReturnPointer(resultId, fieldId, particleType)
+        else:
+            fieldId = particleType = None
 
         now = datetime.now(_PHT)
-        self.db.add(ResultReturn(resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now))
-        ar.status = ResultStatus.RETURNED_FOR_CORRECTION
+        self.db.add(ResultReturn(
+            resultId=resultId, returnedBy=userId, reason=reason, returnedAt=now,
+            fieldId=fieldId, particleType=particleType,
+        ))
+        await self._transitionIfPending(resultId, ResultStatus.RETURNED_FOR_CORRECTION)
+        unverified = 0
+        if fieldMode:
+            unverified = (
+                await self.db.execute(
+                    update(ResultField)
+                    .where(ResultField.resultId == resultId, ResultField.verifiedBy.is_not(None))
+                    .values(verifiedBy=None, verifiedAt=None)
+                    .execution_options(synchronize_session=False)
+                )
+            ).rowcount
+        await self._notifyMedtechOfReturn(resultId, result)
 
+        extra: dict[str, Any] | None = None
+        if fieldMode:
+            extra = {"fields_unverified": unverified}
+            if fieldId is not None:
+                extra["field_id"] = str(fieldId)
+        await self._auditAction("RESULT_RETURNED", resultId, userId, result.specimenId, request, extra=extra)
         await self.db.commit()
 
-        return {
+        response: dict[str, Any] = {
             "resultId": resultId,
             "status": ResultStatus.RETURNED_FOR_CORRECTION.value,
             "returnedAt": now,
         }
+        if fieldMode:
+            response["fieldId"] = fieldId
+            response["particleType"] = particleType
+        return response
+
+    async def _requireValidReturnPointer(
+        self, resultId: uuid.UUID, fieldId: uuid.UUID | None, particleType: str | None
+    ) -> None:
+        # A return may point at one field of this result and one particle class.
+        if particleType is not None and fieldId is None:
+            raise UnprocessableException(
+                code="FIELD_REQUIRED_FOR_PARTICLE",
+                message="Name the field when a particle class is given.",
+            )
+        if particleType is not None and particleType not in PARTICLE_LABELS:
+            raise UnprocessableException(
+                code="INVALID_PARTICLE_TYPE", message="Unknown particle class."
+            )
+        if fieldId is not None:
+            owner = (
+                await self.db.execute(select(ResultField.resultId).where(ResultField.fieldId == fieldId))
+            ).scalar_one_or_none()
+            if owner != resultId:
+                raise UnprocessableException(
+                    code="FIELD_NOT_IN_RESULT", message="That field does not belong to this result."
+                )
+
+    async def _notifyMedtechOfReturn(self, resultId: uuid.UUID, result: AnalysisResult) -> None:
+        # The specimen's assigned MedTech has to correct it; whoever confirmed
+        # it is the fallback. `AnalysisResult.medtechId` is never written, so
+        # it can't be used (UROLENS-248).
+        specimen = await self.db.get(Specimen, result.specimenId)
+        medtechId = (specimen.medtechId if specimen is not None else None) or result.confirmedBy
+        if medtechId is None:
+            return
+        sampleUid = (specimen.sampleUid if specimen is not None else None) or str(result.specimenId)
+        await self._notifService.notifyMedtechResultReturned(
+            medtechId=medtechId, resultId=resultId, sampleUid=sampleUid
+        )
 
     # ── Escalate ──────────────────────────────────────────────────────────
 
@@ -655,6 +1167,7 @@ class ResultReviewService:
         userId: uuid.UUID,
         escalationPath: str,
         escalationNote: str | None,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Escalate a pending result to `CRITICAL_ESCALATED`.
 
@@ -671,7 +1184,9 @@ class ResultReviewService:
         Raises:
             UnprocessableException: `escalation_path` isn't a valid path.
             NotFoundException: `result_id` doesn't exist.
-            ConflictException: the result isn't `PENDING_SUPERVISOR_APPROVAL`.
+            ConflictException: `INVALID_RESULT_STATUS`, if the result isn't
+                `PENDING_SUPERVISOR_APPROVAL` or another action (approve,
+                return, or escalate) won a race for it first.
         """
         if escalationPath not in VALID_ESCALATION_PATHS:
             raise UnprocessableException(
@@ -691,8 +1206,12 @@ class ResultReviewService:
                 escalatedAt=now,
             )
         )
-        ar.status = ResultStatus.CRITICAL_ESCALATED
+        await self._transitionIfPending(resultId, ResultStatus.CRITICAL_ESCALATED)
 
+        await self._auditAction(
+            "RESULT_ESCALATED", resultId, userId, ar.specimenId, request,
+            extra={"escalation_path": escalationPath},
+        )
         await self.db.commit()
 
         return {

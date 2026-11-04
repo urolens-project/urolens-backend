@@ -1,0 +1,199 @@
+{
+  "changes": {
+    "analysisResults": {
+      "created": [
+        {
+          "ai_findings": {
+            "erythrocytes": 2
+          },
+          "approved_at": null,
+          "confirmed_at": null,
+          "confirmed_by": null,
+          "field_summary": null,
+          "flagged_anomalies": {
+            "erythrocytes": 2
+          },
+          "id": "00000000-0000-0000-0000-00000000c002",
+          "image_id": null,
+          "model_version": "mvp-v1.0",
+          "particle_classes": {},
+          "released_at": null,
+          "return_reason": null,
+          "smart_diagnosis": null,
+          "smart_diagnosis_unavailable": false,
+          "specimen_id": "00000000-0000-0000-0000-00000000c001",
+          "status": "CAPTURING",
+          "updated_at": "2026-09-29T09:00:00+00:00"
+        },
+        {
+          "ai_findings": {
+            "erythrocytes": 2
+          },
+          "approved_at": "2026-11-02T08:00:00+00:00",
+          "confirmed_at": "2026-11-02T08:00:00+00:00",
+          "confirmed_by": "00000000-0000-0000-0000-00000000c0de",
+          "field_summary": {
+            "fieldCount": 10,
+            "focalFindings": [
+              {
+                "fieldNos": [
+                  7
+                ],
+                "particleType": "erythrocytes"
+              }
+            ],
+            "perClass": {
+              "casts": {
+                "aiMean": 0.1,
+                "displayValue": "<1",
+                "fieldsAboveNormal": [],
+                "fieldsSeen": 1,
+                "max": 1.0,
+                "mean": 0.1,
+                "min": 0.0,
+                "total": 1.0
+              },
+              "erythrocytes": {
+                "aiMean": 2.6,
+                "displayValue": "2",
+                "fieldsAboveNormal": [
+                  7
+                ],
+                "fieldsSeen": 10,
+                "max": 5.0,
+                "mean": 2.4,
+                "min": 1.0,
+                "total": 24.0
+              }
+            }
+          },
+          "flagged_anomalies": {
+            "erythrocytes": 2
+          },
+          "id": "00000000-0000-0000-0000-00000000c004",
+          "image_id": null,
+          "model_version": "mvp-v1.0",
+          "particle_classes": {
+            "casts": 1,
+            "erythrocytes": 2
+          },
+          "released_at": null,
+          "return_reason": null,
+          "smart_diagnosis": null,
+          "smart_diagnosis_unavailable": false,
+          "specimen_id": "00000000-0000-0000-0000-00000000c003",
+          "status": "APPROVED",
+          "updated_at": "2026-09-29T09:00:00+00:00"
+        }
+      ],
+      "deleted": [],
+      "updated": []
+    },
+    "manualOverrides": {
+      "created": [
+        {
+          "corrected_value": 2.0,
+          "id": "00000000-0000-0000-0000-00000000c006",
+          "medtech_id": "00000000-0000-0000-0000-00000000c0de",
+          "original_ai_value": 3.0,
+          "overridden_at": "2026-11-02T08:00:00+00:00",
+          "parameter_name": "erythrocytes",
+          "rationale": "double-counted",
+          "result_id": "00000000-0000-0000-0000-00000000c004"
+        }
+      ],
+      "deleted": [],
+      "updated": []
+    },
+    "queueAssignments": {
+      "created": [
+        {
+          "assigned_at": "2026-11-02T08:00:00+00:00",
+          "id": "00000000-0000-0000-0000-00000000c005",
+          "medtech_id": "00000000-0000-0000-0000-00000000c0de",
+          "specimen_id": "00000000-0000-0000-0000-00000000c001",
+          "status": "ACTIVE"
+        }
+      ],
+      "deleted": [],
+      "updated": []
+    },
+    "resultFields": {
+      "created": [
+        {
+          "aiFindings": {
+            "erythrocytes": 3.0
+          },
+          "confidenceScores": {
+            "erythrocytes": 0.81
+          },
+          "createdAt": "2026-11-02T08:00:00Z",
+          "effectiveCounts": {
+            "erythrocytes": 3.0
+          },
+          "fieldId": "00000000-0000-0000-0000-00000000c007",
+          "fieldNo": 1,
+          "imageHeight": 600,
+          "imageId": "00000000-0000-0000-0000-00000000c008",
+          "imageWidth": 800,
+          "magnification": "HPF",
+          "resultId": "00000000-0000-0000-0000-00000000c002",
+          "smartDiagnosisPreview": {
+            "gout": {
+              "level": "LOW"
+            }
+          },
+          "smartDiagnosisUnavailable": false,
+          "specimenId": "00000000-0000-0000-0000-00000000c001",
+          "status": "ANALYZED",
+          "updatedAt": "2026-11-02T08:00:00Z",
+          "version": 1
+        }
+      ],
+      "deleted": [],
+      "updated": []
+    },
+    "specimens": {
+      "created": [
+        {
+          "assigned_at": null,
+          "completed_at": null,
+          "id": "00000000-0000-0000-0000-00000000c001",
+          "medtech_id": "00000000-0000-0000-0000-00000000c0de",
+          "patient_name": "",
+          "patient_uid": "PAT-000001",
+          "priority_level": "ROUTINE",
+          "received_at": "2026-09-29T08:00:00+00:00",
+          "rejected_at": null,
+          "rejection_note": null,
+          "rejection_reason": null,
+          "sample_uid": "SMP-20261102-00001",
+          "status": "PROCESSING",
+          "test_type": "Urinalysis - Routine",
+          "updated_at": "2026-09-29T09:00:00+00:00"
+        },
+        {
+          "assigned_at": null,
+          "completed_at": "2026-11-02T08:00:00+00:00",
+          "id": "00000000-0000-0000-0000-00000000c003",
+          "medtech_id": "00000000-0000-0000-0000-00000000c0de",
+          "patient_name": "",
+          "patient_uid": "PAT-000001",
+          "priority_level": "ROUTINE",
+          "received_at": "2026-09-29T08:00:00+00:00",
+          "rejected_at": null,
+          "rejection_note": null,
+          "rejection_reason": null,
+          "sample_uid": "SMP-20261102-00002",
+          "status": "COMPLETED",
+          "test_type": "Urinalysis - Routine",
+          "updated_at": "2026-09-29T09:00:00+00:00"
+        }
+      ],
+      "deleted": [],
+      "updated": []
+    }
+  },
+  "minFields": 10,
+  "timestamp": "<server time>"
+}

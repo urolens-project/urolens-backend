@@ -6,51 +6,67 @@ SQLAlchemy version) — consolidated away; physicians now go through
 """
 import logging
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.core.encryption import decryptPii
-from src.core.supabase import supabase
+from src.models.patient import Patient
 from src.schemas.physician import PhysicianPatientItem
 
 logger = logging.getLogger(__name__)
 
-async def searchPatients(q: str) -> list[PhysicianPatientItem]:
-    """Search patients by first/last name (case-insensitive substring match).
+# Matches patient_service.PatientService's search convention (the same
+# AsyncSession, patient_uid-only pattern this fix brings physician search
+# in line with).
+_SEARCH_LIMIT = 20
+_SEARCH_MIN_QUERY_LENGTH = 3
 
-    Fetches up to 100 patient rows, decrypts each candidate's name fields in
-    Python, then filters — since names are encrypted at rest and can't be
-    matched in a SQL `WHERE` clause. Rows that fail to decrypt are skipped.
+
+async def searchPatients(db: AsyncSession, q: str) -> list[PhysicianPatientItem]:
+    """Search patients by Patient ID (patient_uid) substring match only (UROLENS-152).
+
+    Deliberately does NOT match on name: this search previously decrypted
+    and substring-matched first/last name for up to 100 rows fetched via
+    Supabase REST, and `patient_uid` was never part of the match condition
+    at all — despite the UAC explicitly requiring Patient ID search (and
+    the frontend's placeholder text already promising it), so a physician
+    searching by Patient ID always got zero results. `patient_uid` isn't
+    encrypted, so this filters in SQL directly via `AsyncSession` — no
+    scan-then-decrypt-everything needed.
 
     Args:
-        q: search text, matched against decrypted first/last name.
+        db: request-scoped `AsyncSession`.
+        q: Case-insensitive substring to match against `patient_uid`. Below
+            `_SEARCH_MIN_QUERY_LENGTH` chars, this is a no-op (empty result)
+            rather than a broad/unfiltered scan — enforced here as well as
+            by the route's `Query(min_length=...)`, since this function can
+            be called directly, not only via HTTP.
 
     Returns:
-        Matching patients, decrypted, up to the 100-row fetch window.
+        Up to `_SEARCH_LIMIT` matching patients. Each item carries only
+        `patientId`/`patientUid`/`dateOfBirth`/`sex` — the two extra fields
+        beyond the bare minimum are a stated UAC requirement, so the
+        physician can visually confirm they've found the right person
+        before selecting. `dateOfBirth` is decrypted only for this already
+        patient_uid-filtered, small result set, never for a broad scan.
     """
-    result = await supabase.table("patients").select(
-        "patient_id, patient_uid, first_name, middle_name, last_name, date_of_birth, sex"
-    ).limit(100).execute()
-    rows = result.data or []
-    qLower = q.lower()
+    if len(q) < _SEARCH_MIN_QUERY_LENGTH:
+        return []
+
+    stmt = select(Patient).where(Patient.patientUid.ilike(f"%{q}%")).limit(_SEARCH_LIMIT)
+    rows = (await db.execute(stmt)).scalars().all()
 
     items: list[PhysicianPatientItem] = []
     for row in rows:
         try:
-            first = decryptPii(row["first_name"])
-            last = decryptPii(row["last_name"])
+            dob = decryptPii(row.dateOfBirth)
         except Exception:
-            logger.exception("PII decrypt failed for patient row %s", row["patient_id"])
+            logger.exception("PII decrypt failed for patient row %s", row.patientId)
             continue
-        if qLower in first.lower() or qLower in last.lower():
-            try:
-                dob = decryptPii(row["date_of_birth"])
-            except Exception:
-                dob = ""
-            items.append(PhysicianPatientItem(
-                patientId=row["patient_id"],
-                patientUid=row["patient_uid"],
-                firstName=first,
-                middleName=decryptPii(row["middle_name"]) if row.get("middle_name") else None,
-                lastName=last,
-                dateOfBirth=dob,
-                sex=row.get("sex", "OTHER"),
-            ))
+        items.append(PhysicianPatientItem(
+            patientId=row.patientId,
+            patientUid=row.patientUid,
+            dateOfBirth=dob,
+            sex=row.sex,
+        ))
     return items

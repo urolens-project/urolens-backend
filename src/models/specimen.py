@@ -16,6 +16,7 @@ from .base import Base
 if TYPE_CHECKING:
     from .analysis_result import AnalysisResult
     from .image import Image
+    from .user import User
 
 # specimens.status is a native Postgres enum (type specimen_status), not a
 # plain VARCHAR — mapping it as String(30) let SQLAlchemy send status
@@ -80,7 +81,9 @@ class Specimen(Base):
     patientName: Mapped[str | None] = mapped_column("patient_name", Text, nullable=True)
     """Fernet-encrypted ciphertext (see core.encryption.encrypt_pii) — never plaintext."""
     patientUid: Mapped[str | None] = mapped_column("patient_uid", String(30), nullable=True)
-    testType: Mapped[str | None] = mapped_column("test_type", String(50), nullable=True)
+    testType: Mapped[str | None] = mapped_column("test_type", String(255), nullable=True)
+    """Copied verbatim from the originating LabRequest.testType (see
+    specimen_service.py) — widened alongside it by migration 0035."""
     priorityLevel: Mapped[str] = mapped_column("priority_level", 
         String(20), nullable=False, default="ROUTINE"
     )
@@ -97,6 +100,11 @@ class Specimen(Base):
     analysisResult: Mapped[AnalysisResult | None] = relationship(
         back_populates="specimen", uselist=False
     )
+    # One-directional (no back_populates — User has no relationships back to
+    # any of its FK referrers). Added so getFullResult can eager-load the
+    # assigned MedTech's username in the same query as the specimen itself,
+    # instead of a separate db.get(User, ...) round trip.
+    medtech: Mapped[User | None] = relationship(foreign_keys=[medtechId])
 
     @property
     def id(self) -> uuid.UUID:

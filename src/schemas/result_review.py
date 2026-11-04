@@ -8,7 +8,50 @@ from datetime import datetime
 from typing import Any, Literal, get_args
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
+
+from .field import FieldSummary, FieldSummaryItem
+from .omit import dropNoneKeys
+from .patient_portal import PARTICLE_LABELS
+
+# The largest particle count an override may set (UROLENS-227). The AI engine
+# reports at most 1,000 detections per image, so a larger value is a typo (e.g.
+# an extra zero), not a count. It was 300, the engine's old `max_det`, which
+# refused corrections the engine could itself produce.
+MAX_OVERRIDE_COUNT = 1000
+
+
+class ConfirmResultRequest(BaseModel):
+    """Request body for confirming an analysis result. Entirely optional —
+    posting with no body is equivalent to omitting `interpretationNotes`
+    (UROLENS-156).
+    """
+
+    interpretationNotes: str | None = Field(default=None, max_length=2000)
+    """The MedTech's lab notes, written to `AnalysisResult.interpretation` at
+    confirm time — the single source for what the patient portal shows as
+    "Laboratory notes" and what the result PDF prints as its Interpretation
+    section. Write-once, MedTech-only: there is deliberately no
+    Supervisor-side edit path for this field."""
+
+    @field_validator("interpretationNotes")
+    @classmethod
+    def blankBecomesNone(cls, v: str | None) -> str | None:
+        """Whitespace-only input is treated the same as omitting the field
+        entirely, so it can't silently defeat the PDF's "Pending review"
+        fallback.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
 
 
 class ConfirmResultResponse(BaseModel):
@@ -18,6 +61,12 @@ class ConfirmResultResponse(BaseModel):
     resultId: UUID
     confirmedBy: UUID
     confirmedAt: datetime
+    resubmitted: bool = False
+    """True when this re-confirms a result the supervisor returned for
+    correction ("re-submitted for supervisor approval"), False for a first
+    confirmation (UROLENS-226)."""
+    status: str
+    """The result's status after confirming — `PENDING_SUPERVISOR_APPROVAL`."""
 
     model_config = {"from_attributes": True}
 
@@ -25,13 +74,23 @@ class ConfirmResultResponse(BaseModel):
 class OverrideRequest(BaseModel):
     """Request body for overriding a single AI-generated result parameter."""
 
-    parameter: str = Field(..., min_length=1, max_length=100)
-    correctedValue: float = Field(..., ge=0)
-    rationale: str = Field("No rationale provided", max_length=2000)
-    """Not Optional despite having a default: `ManualOverride.rationale` is a
-    NOT NULL column, so an explicit `"rationale": null` in the request must
-    be rejected by Pydantic (a clean 422) rather than reach the service and
-    fail as an unhandled IntegrityError."""
+    parameter: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        validation_alias=AliasChoices("parameter", "parameterName"),
+    )
+    """The AI findings key being corrected. Also accepted as `parameterName`: the
+    web supervisor screen sends `parameter_name` (written for the May web-10
+    endpoint), which its case-conversion bridge turns into `parameterName`
+    (UROLENS-227). `parameter` wins if both are sent; responses always say
+    `parameter`."""
+    correctedValue: int = Field(..., ge=0, le=MAX_OVERRIDE_COUNT)
+    """A particle count: a whole number from 0 to `MAX_OVERRIDE_COUNT`. Fractions
+    (3.7) and non-finite values (Infinity) are rejected with a 422."""
+    rationale: str = Field(..., min_length=1, max_length=2000)
+    """Required (UROLENS-146/150): every correction must say why. Blank or
+    whitespace-only is rejected; surrounding whitespace is stripped."""
     originalAiValue: float | None = Field(
         None,
         ge=0,
@@ -49,6 +108,14 @@ class OverrideRequest(BaseModel):
         """
         if not v.strip():
             raise ValueError("parameter must not be blank")
+        return v.strip()
+
+    @field_validator("rationale")
+    @classmethod
+    def rationaleNoWhitespaceOnly(cls, v: str) -> str:
+        """Reject a blank or whitespace-only `rationale`; strips surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("rationale must not be blank")
         return v.strip()
 
 
@@ -75,21 +142,55 @@ class SupervisorStatsResponse(BaseModel):
     escalatedCount: int
 
 
+MedtechQueueStatus = Literal["PENDING_CONFIRM", "RETURNED_FOR_CORRECTION"]
+"""`status` filter values for the MedTech confirmation queue (UROLENS-225)."""
+
+MedtechQueueSort = Literal["oldest", "newest"]
+"""Queue order by when the specimen was received — mirrors the mobile queue's
+Earliest/Latest filters. Returned-for-correction results always come first."""
+
+
 class MedtechPendingResultItem(BaseModel):
     """One result awaiting this MedTech's confirmation (or re-confirmation,
     if a supervisor returned it), for the MedTech's own queue list.
+
+    Identifies the patient by `patientUid` only — no name, matching the mobile
+    app's privacy decision to show the patient code (UROLENS-225).
     """
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
+    testType: str | None = None
+    priorityLevel: str | None = None
+    receivedAt: datetime | None = None
     patientUid: str = ""
-    patientName: str
     patientAge: int | None = None
     patientSex: str | None = None
     status: str
     returnReason: str | None = None
     """The supervisor's reason, present only when status is
     RETURNED_FOR_CORRECTION."""
+    fieldCount: int | None = None
+    """Accepted fields. Multi-field workflow only: left out of the JSON, not sent
+    as null, while `fieldWorkflowEnabled` is off, so the response is unchanged."""
+    verifiedFieldCount: int | None = None
+    """Accepted fields a MedTech has marked as checked (same omission rule)."""
+    flaggedFieldCount: int | None = None
+    """Accepted fields with at least one review flag (same omission rule)."""
+    returnFieldId: UUID | None = None
+    """The field the supervisor's latest return points at, only while the result is
+    RETURNED_FOR_CORRECTION and only when the return named one (same omission rule)."""
+    returnParticleType: str | None = None
+    """The particle class that return is about (same omission rule)."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), (
+            "fieldCount", "verifiedFieldCount", "flaggedFieldCount",
+            "returnFieldId", "returnParticleType",
+        ))
 
 
 class MedtechPendingListResponse(BaseModel):
@@ -106,6 +207,8 @@ class PendingResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
@@ -132,6 +235,8 @@ class ApprovedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
@@ -155,6 +260,8 @@ class EscalatedResultItem(BaseModel):
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
     patientName: str
     patientAge: int | None = None
@@ -183,15 +290,120 @@ class ManualOverrideItem(BaseModel):
     correctedValue: str
     rationale: str
     overriddenAt: datetime
+    overriddenBy: UUID
+    overriddenByName: str
+    """Resolved from `overriddenBy` via a batched `User` lookup; `""` if the
+    user record can't be found (mirrors `medtechName`'s fallback elsewhere)."""
+
+
+class SpatialAnnotationItem(BaseModel):
+    """One bounding-box particle-type annotation on a result's image.
+
+    (UROLENS-149, boxes added as a bug fix after launch). `id` is
+    client-supplied and stable across saves, so the frontend can remove or
+    adjust a single annotation by resending the full list without it —
+    `saveAnnotation` always replaces the whole list. `x`/`y`/`w`/`h` are
+    percentages of the image's displayed dimensions (0-100), matching the
+    frontend canvas's coordinate system, not pixels — a pixel conversion is
+    always derivable later via the result's `Image.widthPx`/`.heightPx`
+    (UROLENS-224).
+
+    Request-side only (`AnnotationRequest`/`AnnotationResponse`) — a newly
+    saved box must have a current, known `particleType`. For reading
+    historical boxes back, see `SpatialAnnotationItemOut` below.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    x: float = Field(..., ge=0)
+    y: float = Field(..., ge=0)
+    w: float = Field(..., ge=0)
+    h: float = Field(..., ge=0)
+    particleType: str
+
+    @field_validator("particleType")
+    @classmethod
+    def particleTypeMustBeKnown(cls, v: str) -> str:
+        """Reject a `particleType` not in the canonical `PARTICLE_LABELS` set."""
+        if v not in PARTICLE_LABELS:
+            raise ValueError(f"particleType must be one of {PARTICLE_LABELS}")
+        return v
+
+
+class SpatialAnnotationItemOut(BaseModel):
+    """Read-side counterpart to `SpatialAnnotationItem`, used only in
+    `FullResultDetail` (`get_full_result`'s response).
+
+    Historical boxes in the live DB predate both the `particleType` key
+    (written as `label` before this model existed — see the
+    "spatial_annotations regression" changelog entry) and the current
+    `PARTICLE_LABELS` set (some used labels since retired/renamed, e.g.
+    `"debris"`). Rejecting those on write is correct — `SpatialAnnotationItem`
+    still does, via `AnnotationRequest` — but rejecting them on read would
+    500 the entire result detail page for any result with an old box on it.
+    So this accepts the legacy key and does not whitelist the value; it
+    passes whatever is stored straight through for display.
+    """
+
+    id: str
+    x: float
+    y: float
+    w: float
+    h: float
+    particleType: str = Field(..., validation_alias=AliasChoices("particleType", "label"))
+
+
+class AiDetectionItem(BaseModel):
+    """One AI-detected particle bounding box, as shown in a result's full
+    detail view before any reviewer has drawn their own annotation.
+
+    Read-only — there is no corresponding request schema; these come from
+    `AnalysisResult.aiDetections` and are never written back. Lenient like
+    `SpatialAnnotationItemOut`: this is the AI engine's own output, not
+    bound by the current `PARTICLE_LABELS` set a reviewer's manual save is
+    validated against.
+    """
+
+    id: str
+    x: float
+    y: float
+    w: float
+    h: float
+    particleType: str
+    confidence: float | None = None
+
+
+class AnnotationItem(BaseModel):
+    """One reviewer's annotation on a result, as shown in a result's full detail view.
+
+    A MedTech's and a Supervisor's annotations on the same result are
+    independent (`ResultReview` rows are keyed by `resultId` + `reviewedBy`)
+    — this list surfaces every reviewer's annotation, attributed, instead of
+    collapsing to whichever one was saved most recently.
+    """
+
+    reviewedBy: UUID
+    reviewerRole: str
+    """Resolved from `reviewedBy` via a batched `User` lookup; `""` if the
+    user record can't be found (mirrors `overriddenByName`'s fallback)."""
+    annotationNotes: str | None = None
+    spatialAnnotations: list[SpatialAnnotationItemOut] | None = None
+    updatedAt: datetime
 
 
 class FullResultDetail(BaseModel):
-    """Response body for the supervisor's full single-result review/detail view."""
+    """Response body for the full single-result review/detail view.
+
+    Serves the supervisor's review workspace and the MedTech's online review screen.
+    """
 
     resultId: UUID
     specimenId: UUID
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20260927-00012`)."""
     patientUid: str = ""
-    patientName: str
+    patientName: str | None = None
+    """`null` for a MedTech caller — they identify the patient by
+    `patientUid` only (UROLENS-226); set for supervisors."""
     patientAge: int | None = None
     patientSex: str | None = None
     medtechName: str
@@ -201,6 +413,7 @@ class FullResultDetail(BaseModel):
     has no Alembic history (schema-drift finding, not modeled). Kept in the
     response shape for API-contract compatibility."""
     aiFindings: dict[str, Any]
+    aiDetections: list[AiDetectionItem] = []
     flaggedAnomalies: dict[str, Any]
     particleClasses: dict[str, Any]
     modelVersion: str
@@ -209,18 +422,48 @@ class FullResultDetail(BaseModel):
     smartDiagnosis: dict[str, Any] | None = None
     smartDiagnosisUnavailable: bool
     status: str
-    annotationNotes: str | None = None
-    spatialAnnotations: list[dict[str, Any]] | None = None
-    """Persisted as of migration 0034 (JSONB) — type inferred from pre-port
-    code, not yet verified against a live database. See the ResultReview
-    model's docstring."""
+    returnReason: str | None = None
+    """The supervisor's latest reason, only while the result is
+    RETURNED_FOR_CORRECTION (UROLENS-226)."""
+    isRetakePending: bool = False
+    """True while the result's attached image is mid-retake — marked
+    IMAGE_RETAKE_REQUESTED, or pointing at a discarded image with no
+    replacement uploaded yet (UROLENS-230). Confirm, annotate and override
+    all refuse to act while this is true; surfaced here so the frontend can
+    warn before a write is attempted, not just after it 422s."""
+    annotations: list[AnnotationItem]
+    """Every reviewer's annotation, attributed. Previously flattened to a
+    single `annotationNotes`/`spatialAnnotations` pair — whichever reviewer
+    had saved most recently, with no way to tell whose notes were showing."""
+    fields: list[FieldSummaryItem] | None = None
+    """Multi-field workflow only (left out of the JSON otherwise): every field with its
+    counts, flags and a signed image URL, no detections. `imageUrl` then points at the
+    first accepted field's image."""
+    fieldCount: int | None = None
+    """Accepted fields at confirmation."""
+    fieldSummary: FieldSummary | None = None
+    """Stored per-class statistics over the accepted fields; null before confirmation and
+    for results from before multi-field. When present, `flaggedAnomalies` is empty and
+    the field flags and focal findings replace it."""
+    isLegacySingleField: bool | None = None
+    """True for a single-image result from before multi-field."""
+    returnFieldId: UUID | None = None
+    """The field the supervisor's latest return points at, while RETURNED_FOR_CORRECTION."""
+    returnParticleType: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), (
+            "fields", "fieldCount", "fieldSummary", "isLegacySingleField",
+            "returnFieldId", "returnParticleType",
+        ))
 
 
 class AnnotationRequest(BaseModel):
     """Request body for saving a supervisor's annotation on a result."""
 
     annotationNotes: str
-    spatialAnnotations: list[dict[str, Any]] | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
 
 
 class AnnotationResponse(BaseModel):
@@ -228,7 +471,7 @@ class AnnotationResponse(BaseModel):
 
     resultId: UUID
     annotationNotes: str
-    spatialAnnotations: list[dict[str, Any]] | None = None
+    spatialAnnotations: list[SpatialAnnotationItem] | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -248,7 +491,23 @@ class ApproveResponse(BaseModel):
 class ReturnRequest(BaseModel):
     """Request body for returning a pending result for correction."""
 
-    reason: str
+    reason: str = Field(..., min_length=1, max_length=2000)
+    """Required: every return must say why. Blank or whitespace-only is
+    rejected; surrounding whitespace is stripped (UROLENS-151)."""
+    fieldId: UUID | None = None
+    """Multi-field workflow: the field the MedTech should look at again. Must belong to
+    this result. Ignored (not stored) while `fieldWorkflowEnabled` is off."""
+    particleType: str | None = None
+    """Multi-field workflow: the particle class the return is about; needs `fieldId` and
+    must be in `PARTICLE_LABELS`. Ignored while the flag is off."""
+
+    @field_validator("reason")
+    @classmethod
+    def reasonNoWhitespaceOnly(cls, v: str) -> str:
+        """Reject a blank or whitespace-only `reason`; strips surrounding whitespace otherwise."""
+        if not v.strip():
+            raise ValueError("reason must not be blank")
+        return v.strip()
 
 
 class ReturnResponse(BaseModel):
@@ -257,6 +516,13 @@ class ReturnResponse(BaseModel):
     resultId: UUID
     status: str
     returnedAt: datetime
+    fieldId: UUID | None = None
+    """The field the return points at (multi-field workflow only; left out otherwise)."""
+    particleType: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldId", "particleType"))
 
 
 EscalationPath = Literal["NOTIFY_PHYSICIAN", "FLAG_SENIOR_REVIEW", "MARK_CRITICAL"]

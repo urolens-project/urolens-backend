@@ -2,7 +2,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializerFunctionWrapHandler, model_serializer
+
+from .omit import dropNoneKeys
 
 # The fixed set of particle types every result's particle_counts is normalised
 # against, in display order — see PatientResultService.get_result_detail.
@@ -30,6 +32,13 @@ class ParticleCount(BaseModel):
 
     label: str
     count: int
+    displayValue: str | None = None
+    """Multi-field results only (left out otherwise): how the average per field is shown,
+    `"<1"` for a particle seen but averaging under 0.5, never `"0"` for a seen particle."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetDisplayValue(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("displayValue",))
 
 
 class PatientResultItem(BaseModel):
@@ -48,11 +57,20 @@ class PatientResultDetailResponse(BaseModel):
     confirmedAt: datetime | None
     confirmationNotes: str | None
     analyzedBy: str | None
+    requestingPhysician: str | None
     particleCounts: list[ParticleCount]
     particleClasses: list[str]
     smartDiagnosisUnavailable: bool
     testType: str
     releasedAt: datetime | None
+    fieldCount: int | None = None
+    """Fields the counts average over (multi-field results only; left out otherwise)."""
+    countsLabel: str | None = None
+    """`average per field (N fields)`, or `single image` for a result from before multi-field."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel"))
 
 
 # Legacy alias kept for the PDF service which builds its own view of the data.

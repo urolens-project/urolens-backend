@@ -10,14 +10,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit_logger import AuditLogger
+from src.core.config import settings
+from src.core.particle_counts import settledCounts, toWholeCount
 from src.models.analysis_result import AnalysisResult
+from src.models.lab_request import LabRequest
 from src.models.patient import Patient
 from src.models.result_view import ResultView
+from src.models.specimen import Specimen
+from src.models.user import User
 from src.schemas.patient_portal import (
     PARTICLE_LABELS,
     ParticleCount,
     PatientResultDetailResponse,
     PatientResultItem,
+)
+from src.services.field_aggregation_service import (
+    SINGLE_IMAGE_LABEL,
+    countsLabelFor,
+    toContractFieldSummary,
 )
 
 # Status shown to a patient for a result that hasn't reached RELEASED yet —
@@ -142,6 +152,7 @@ class PatientResultService:
         self.db.add(ResultView(resultId=resultId, patientId=patientId))
 
         await self.auditLogger.record(
+            db=self.db,
             eventType="RESULT_VIEWED",
             entityType="analysis_result",
             entityId=row.resultId,
@@ -151,12 +162,35 @@ class PatientResultService:
 
         await self.db.commit()
 
-        # Normalise ai_findings → exactly 10 ParticleCount rows
-        rawFindings: dict = row.aiFindings or {}
+        # Normalise the settled counts → exactly 10 ParticleCount rows. Settled =
+        # ai_findings overlaid with particle_classes, so a MedTech correction
+        # reaches the patient (ai_findings alone ignored every override).
+        rawFindings = settledCounts(row.aiFindings, row.particleClasses)
         particleCounts = [
-            ParticleCount(label=label, count=int(rawFindings.get(label, 0)))
+            ParticleCount(label=label, count=toWholeCount(rawFindings.get(label, 0)))
             for label in PARTICLE_LABELS
         ]
+
+        # Multi-field results: show the average per field, with how it was averaged. A
+        # particle seen but averaging under 0.5 reads "<1", never 0. A result from before
+        # multi-field is labelled as one image; everything else is shown as before.
+        fieldCount: int | None = None
+        countsLabel: str | None = None
+        if settings.fieldWorkflowEnabled:
+            contract = toContractFieldSummary(row.fieldSummary)
+            if contract is not None:
+                shown = contract["perClass"]
+                particleCounts = [
+                    ParticleCount(
+                        label=pc.label, count=pc.count,
+                        displayValue=shown.get(pc.label, {}).get("displayValue", "0"),
+                    )
+                    for pc in particleCounts
+                ]
+                fieldCount = contract["fieldCount"]
+                countsLabel = countsLabelFor(fieldCount)
+            elif row.isLegacySingleField:
+                fieldCount, countsLabel = 1, SINGLE_IMAGE_LABEL
 
         # Extract particle_classes — stored as JSONB (dict or list)
         rawClasses = row.particleClasses or {}
@@ -167,14 +201,35 @@ class PatientResultService:
         else:
             particleClasses = []
 
+        # `AnalysisResult.medtechName` is dead — nothing writes it outside
+        # test fixtures (UROLENS-156). The real source, same as
+        # physician_result_service.getResultDetail and
+        # ResultReviewService.getFullResult: Specimen.medtechId -> User.username.
+        analyzedBy: str | None = None
+        spec = await self.db.get(Specimen, row.specimenId) if row.specimenId else None
+        if spec is not None and spec.medtechId:
+            medtech = await self.db.get(User, spec.medtechId)
+            analyzedBy = medtech.username if medtech else None
+
+        # LabRequest.physicianName is set at creation time (see
+        # lab_request_service.createLabRequest) — unlike medtechName above,
+        # it's not a dead column, so no User fallback lookup is needed here.
+        requestingPhysician: str | None = None
+        if spec is not None and spec.labRequestId:
+            labRequest = await self.db.get(LabRequest, spec.labRequestId)
+            requestingPhysician = labRequest.physicianName if labRequest else None
+
         return PatientResultDetailResponse(
             status=row.status,
             confirmedAt=row.confirmedAt,
             confirmationNotes=row.interpretation,
-            analyzedBy=row.medtechName,
+            analyzedBy=analyzedBy,
+            requestingPhysician=requestingPhysician,
             particleCounts=particleCounts,
             particleClasses=particleClasses,
             smartDiagnosisUnavailable=bool(row.smartDiagnosisUnavailable),
             testType="Urinalysis",
             releasedAt=row.releasedAt,
+            fieldCount=fieldCount,
+            countsLabel=countsLabel,
         )

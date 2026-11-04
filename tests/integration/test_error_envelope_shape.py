@@ -71,14 +71,17 @@ def _emptySupabaseChain() -> MagicMock:
 
 @pytest.fixture
 def mockQueueDeps():
-    """Overrides both `getSupabase` (backs the specimen/medtech/assignment
-    lookups) and `getDb` (backs the audit logger / notification service) so
-    the request never touches a real database.
+    """Overrides both `getSupabase` (still used by `getPendingSpecimens`,
+    untouched by UROLENS-142) and `getDb` (backs `assignSpecimen` itself
+    now — migrated off Supabase REST onto AsyncSession this pass — plus the
+    audit logger / notification service) so the request never touches a
+    real database.
     """
     sb = MagicMock()
     sb.table.side_effect = lambda _name: _emptySupabaseChain()
 
     sqlDb = AsyncMock()
+    sqlDb.get = AsyncMock(return_value=None)
 
     async def _overrideSupabase():
         return sb

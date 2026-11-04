@@ -1,0 +1,295 @@
+"""Unit tests — the captured fields in `GET /sync/pull` (multi-field workflow).
+
+- Flag off: the payload, its response JSON and the audit row are exactly as
+  before; no field query runs.
+- Flag on: `resultFields` carries every field of the window's results in the
+  published `SyncResultField` shape (camelCase, every status, never the AI
+  boxes, which are not even loaded); a delta sends fields changed since the
+  last sync and deletes the fields of samples that left the window; the audit
+  row lists the field IDs sent, also when only fields changed. Result rows
+  carry `field_summary` (the contract shape with display values, null until
+  confirmation) and the payload carries `minFields` from the settings.
+DB is mocked.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from sqlalchemy.dialects import postgresql
+
+from src.core.config import settings
+from src.models.result_field import FieldStatus, Magnification, ResultField
+from src.schemas.sync import SyncPullResponse
+from src.services import sync_service
+from tests.conftest import (
+    SYNC_MEDTECH_ID,
+    makeSyncDb,
+    syncQueries,
+    syncResult,
+    syncSpecimen,
+)
+
+SINCE = datetime(2026, 10, 27, 7, 0, tzinfo=UTC)
+
+
+def _field(resultId: uuid.UUID, specimenId: uuid.UUID, fieldNo: int, status: str = FieldStatus.ACCEPTED) -> ResultField:
+    return ResultField(
+        fieldId=uuid.uuid4(),
+        resultId=resultId,
+        specimenId=specimenId,
+        imageId=uuid.uuid4(),
+        fieldNo=fieldNo,
+        magnification=Magnification.HPF,
+        status=status,
+        aiFindings={"erythrocytes": 3},
+        effectiveCounts={"erythrocytes": 2},
+        confidenceScores={"erythrocytes": 0.81},
+        imageWidth=800,
+        imageHeight=600,
+        smartDiagnosis={"gout": {"level": "LOW"}},
+        smartDiagnosisUnavailable=False,
+        modelVersion="mvp-v1.0",
+        version=2,
+        createdAt=datetime(2026, 10, 27, 8, 0, tzinfo=UTC),
+        updatedAt=datetime(2026, 10, 27, 8, 5, tzinfo=UTC),
+    )
+
+
+async def _pull(db: AsyncMock, since: datetime | None = None) -> tuple[dict, MagicMock]:
+    auditLogger = MagicMock(record=AsyncMock())
+    with patch.object(sync_service, "AuditLogger", return_value=auditLogger):
+        payload = await sync_service.pull(db, str(SYNC_MEDTECH_ID), since)
+    return payload, auditLogger
+
+
+def _sql(statement: object) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))
+
+
+# ── Flag off: unchanged ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_withTheFlagOffNothingAboutFieldsIsSentOrRead(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+    specimen = syncSpecimen()
+    db = makeSyncDb(rows=[(specimen, syncResult(specimen))])
+
+    payload, auditLogger = await _pull(db)
+
+    assert set(payload["changes"]) == {"specimens", "queueAssignments", "analysisResults", "manualOverrides"}
+    assert syncQueries(db, ResultField, "ResultField") == []
+    assert "field_ids" not in auditLogger.record.await_args.kwargs["detailJson"]
+    dumped = SyncPullResponse.model_validate(payload).model_dump(mode="json")
+    assert "resultFields" not in dumped["changes"]
+    assert "minFields" not in dumped
+    assert "field_summary" not in payload["changes"]["analysisResults"]["created"][0]
+
+
+# ── Flag on ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_aFullSyncSendsEveryFieldInTheContractShapeWithoutBoxes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    result = syncResult(specimen, status="CAPTURING")
+    accepted = _field(result.resultId, specimen.specimenId, 1)
+    discarded = _field(result.resultId, specimen.specimenId, 2, FieldStatus.DISCARDED)
+    db = makeSyncDb(rows=[(specimen, result)], fields=[accepted, discarded])
+
+    payload, auditLogger = await _pull(db)
+
+    changes = payload["changes"]["resultFields"]
+    assert changes["updated"] == [] and changes["deleted"] == []
+    first, second = changes["created"]
+    assert first == {
+        "fieldId": str(accepted.fieldId),
+        "resultId": str(result.resultId),
+        "specimenId": str(specimen.specimenId),
+        "imageId": str(accepted.imageId),
+        "fieldNo": 1,
+        "magnification": "HPF",
+        "status": "ACCEPTED",
+        "aiFindings": {"erythrocytes": 3.0},
+        "effectiveCounts": {"erythrocytes": 2.0},
+        "confidenceScores": {"erythrocytes": 0.81},
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "smartDiagnosisPreview": {"gout": {"level": "LOW"}},
+        "smartDiagnosisUnavailable": False,
+        "version": 2,
+        "createdAt": "2026-10-27T08:00:00Z",
+        "updatedAt": "2026-10-27T08:05:00Z",
+    }
+    assert second["status"] == "DISCARDED"
+    detail = auditLogger.record.await_args.kwargs["detailJson"]
+    assert detail["field_ids"] == [str(accepted.fieldId), str(discarded.fieldId)]
+
+
+@pytest.mark.asyncio
+async def test_theFieldQueryNeverLoadsTheBoxesAndStaysInTheWindow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    db = makeSyncDb()
+
+    await _pull(db)
+
+    [query] = syncQueries(db, ResultField, "ResultField")
+    sql = _sql(query)
+    assert "result_fields.detections" not in sql
+    assert "result_fields.specimen_id IN (SELECT specimens.specimen_id" in sql
+    assert "specimens.medtech_id = " in sql
+    assert sql.rstrip().endswith("ORDER BY result_fields.result_id, result_fields.field_no")
+
+
+@pytest.mark.asyncio
+async def test_aDeltaSendsFieldsChangedSinceTheLastSync(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    field = _field(uuid.uuid4(), specimen.specimenId, 4)
+    db = makeSyncDb(fields=[field])
+
+    payload, auditLogger = await _pull(db, SINCE)
+
+    [query] = syncQueries(db, ResultField, "ResultField")
+    assert "result_fields.updated_at > " in _sql(query)
+    changes = payload["changes"]["resultFields"]
+    assert changes["created"] == [] and [f["fieldId"] for f in changes["updated"]] == [str(field.fieldId)]
+    # Only a field changed (accepted, discarded, corrected): still audited.
+    assert auditLogger.record.await_args.kwargs["detailJson"]["field_ids"] == [str(field.fieldId)]
+
+
+@pytest.mark.asyncio
+async def test_fieldsLeaveThePhoneWithTheirSample(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimenId, resultId = uuid.uuid4(), uuid.uuid4()
+    fieldIds = [uuid.uuid4(), uuid.uuid4()]
+    db = makeSyncDb(removed=[(specimenId, resultId)], removedFieldIds=fieldIds)
+
+    payload, _ = await _pull(db, SINCE)
+
+    assert payload["changes"]["resultFields"]["deleted"] == [str(i) for i in fieldIds]
+    [query] = syncQueries(db, ResultField, "fieldId")
+    assert "result_fields.result_id IN" in _sql(query)
+
+
+@pytest.mark.asyncio
+async def test_withTheFlagOffRemovedSamplesDoNotLookUpFields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+    db = makeSyncDb(removed=[(uuid.uuid4(), uuid.uuid4())])
+
+    await _pull(db, SINCE)
+
+    assert syncQueries(db, ResultField, "fieldId") == []
+
+
+@pytest.mark.asyncio
+async def test_thePayloadCarriesTheServersMinimumOfFields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    monkeypatch.setattr(settings, "minFieldsPerSpecimen", 12)
+    db = makeSyncDb()
+
+    payload, _ = await _pull(db)
+
+    assert payload["minFields"] == 12
+    assert SyncPullResponse.model_validate(payload).model_dump(mode="json")["minFields"] == 12
+
+
+@pytest.mark.asyncio
+async def test_aConfirmedResultCarriesItsFieldSummaryWithDisplayValues(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    stored = {
+        "fieldCount": 10,
+        "perClass": {
+            "casts": {"mean": 0.1, "min": 0, "max": 1, "total": 1, "fieldsSeen": 1, "aiMean": 0.1},
+            "erythrocytes": {"mean": 2.4, "min": 1, "max": 5, "total": 24, "fieldsSeen": 10, "aiMean": 2.6},
+        },
+        "focalFindings": [{"particleType": "erythrocytes", "fieldNos": [7]}],
+    }
+    result = syncResult(specimen, status="PENDING_SUPERVISOR_APPROVAL", fieldSummary=stored)
+    db = makeSyncDb(rows=[(specimen, result)])
+
+    payload, _ = await _pull(db)
+
+    [row] = payload["changes"]["analysisResults"]["created"]
+    summary = row["field_summary"]
+    assert summary["fieldCount"] == 10
+    assert summary["perClass"]["casts"]["displayValue"] == "<1"
+    assert summary["perClass"]["erythrocytes"]["displayValue"] == "2"
+    assert summary["perClass"]["erythrocytes"]["mean"] == 2.4
+    assert summary["perClass"]["erythrocytes"]["fieldsAboveNormal"] == [7]
+    assert summary["focalFindings"] == [{"particleType": "erythrocytes", "fieldNos": [7]}]
+
+
+@pytest.mark.asyncio
+async def test_aResultNotYetConfirmedHasANullFieldSummary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    specimen = syncSpecimen()
+    db = makeSyncDb(rows=[(specimen, syncResult(specimen, status="CAPTURING"))])
+
+    payload, _ = await _pull(db)
+
+    assert payload["changes"]["analysisResults"]["created"][0]["field_summary"] is None
+
+
+# ── The response JSON ─────────────────────────────────────────────────────────
+
+def test_theResponseLeavesResultFieldsOutRatherThanNullWhenOff() -> None:
+    empty = {"created": [], "updated": [], "deleted": []}
+    tables = {"specimens": empty, "queueAssignments": empty, "analysisResults": empty, "manualOverrides": empty}
+
+    off = SyncPullResponse.model_validate({"timestamp": "t", "changes": tables}).model_dump(mode="json")
+    on = SyncPullResponse.model_validate(
+        {"timestamp": "t", "changes": {**tables, "resultFields": empty}}
+    ).model_dump(mode="json")
+
+    assert "resultFields" not in off["changes"]
+    assert on["changes"]["resultFields"] == empty
+
+
+def test_theResponseLeavesMinFieldsOutRatherThanNullWhenOff() -> None:
+    empty = {"created": [], "updated": [], "deleted": []}
+    tables = {"specimens": empty, "queueAssignments": empty, "analysisResults": empty, "manualOverrides": empty}
+
+    off = SyncPullResponse.model_validate({"timestamp": "t", "changes": tables}).model_dump(mode="json")
+    on = SyncPullResponse.model_validate(
+        {"timestamp": "t", "changes": {**tables, "resultFields": empty}, "minFields": 10}
+    ).model_dump(mode="json")
+
+    assert "minFields" not in off
+    assert on["minFields"] == 10
+
+
+# ── Volume ────────────────────────────────────────────────────────────────────
+
+def _volume(specimens: int, fieldsEach: int) -> tuple[list, list[ResultField]]:
+    rows, fields = [], []
+    for _ in range(specimens):
+        specimen = syncSpecimen(specimenId=uuid.uuid4())
+        result = syncResult(specimen, status="CAPTURING")
+        rows.append((specimen, result))
+        fields += [_field(result.resultId, specimen.specimenId, n) for n in range(1, fieldsEach + 1)]
+    return rows, fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("since", [None, SINCE], ids=["full", "delta"])
+async def test_theNumberOfQueriesDoesNotGrowWithSamplesOrFields(
+    monkeypatch: pytest.MonkeyPatch, since: datetime | None
+) -> None:
+    # A MedTech's window can hold dozens of samples with 10+ fields each; one query
+    # per sample or per field would make every sync slower as the day goes on.
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    smallRows, smallFields = _volume(1, 1)
+    bigRows, bigFields = _volume(50, 15)
+    small = makeSyncDb(rows=smallRows, fields=smallFields)
+    big = makeSyncDb(rows=bigRows, fields=bigFields)
+
+    smallPayload, _ = await _pull(small, since)
+    bigPayload, _ = await _pull(big, since)
+
+    table = "updated" if since else "created"
+    assert len(bigPayload["changes"]["resultFields"][table]) == 750
+    assert big.execute.await_count == small.execute.await_count
