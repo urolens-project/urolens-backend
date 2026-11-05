@@ -14,13 +14,14 @@ and every script supports `-DryRun` (prints the commands, runs nothing).
 |---|--------|-------------|------|-------|
 | 1 | `push-image.ps1 -Tag v1.1.0` | Developer cutting the release | Every release | Docker, git tag, GHCR write PAT (`-Login`) |
 | 2 | `backup-and-migrate-live.ps1 -Tag v1.1.0` | Whoever holds the live DB URL | Releases with migrations, before step 5 | Docker, pull access to the image |
+| 2b | `init-uat-db.ps1 -Tag v1.1.0` | Whoever holds the UAT DB URL | Once, on a brand-new empty UAT Supabase project, after step 1, before step 3 | Docker, pull access to the image, UAT DB URL (never the live one) |
 | 3 | `provision.ps1 -Tag v1.1.0` | Azure subscription owner/contributor | Once (re-runnable) | `az login`, GHCR **read-only** PAT |
 | 4 | `set-config.ps1` | Same person as 3 | After 3; again on any config change | `settings.env` filled in, 5 secrets |
 | 5 | `deploy-tag.ps1 -Tag v1.1.0` | Whoever deploys | Every release | Image already pushed |
 | 6 | `smoke.ps1 [-Domain api.urolens.tech]` | Anyone | After 4, 5, DNS | Network only |
 | – | `teardown.ps1` | Subscription owner | To stop billing | Type the app name |
 
-First-time order: **1 → 2 (if migrations) → 3 → 4 → 6**. Every later release: **1 → 2 → 5 → 6**.
+First-time order: **1 → 2 (if migrations) → 2b (UAT only, empty DB) → 3 → 4 → 6**. Every later release: **1 → 2 → 5 → 6**.
 
 Before step 4: put the Supabase project URL in `deploy/settings.env`. Optionally copy
 `secrets.local.env.example` to `secrets.local.env` (gitignored) to skip the secret prompts.
