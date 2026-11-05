@@ -56,6 +56,7 @@ $pgDumpUrl = $liveDatabaseUrl -replace '^postgresql\+[a-z0-9_]+://', 'postgresql
 # Alembic loads the app settings, which refuse to start without these three
 # values. Migrations never use them, so throwaway values are enough.
 $throwawayJwtKey = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$throwawayFernetKey = [Convert]::ToBase64String([byte[]](1..32 | ForEach-Object { Get-Random -Maximum 256 })).Replace('+','-').Replace('/','_')
 
 try {
     # Docker reads these from the environment by NAME ("-e NAME" with no value),
@@ -65,6 +66,8 @@ try {
     $env:JWT_SIGNING_KEY      = $throwawayJwtKey
     $env:SUPABASE_URL         = 'https://migration-placeholder.invalid'
     $env:SUPABASE_SERVICE_KEY = 'migration-placeholder-not-used'
+    $env:ENCRYPTION_KEY       = $throwawayFernetKey
+    $env:DEDUP_HASH_KEY       = $throwawayJwtKey
 
     Write-Step 3 'Dump the live database with pg_dump (postgres:17 container)'
     # Runs the pg_dump tool from the official postgres:17 image, writes a plain-SQL
@@ -116,7 +119,7 @@ try {
     # to the live database. AWS: a one-off ECS/Fargate task running the migration command.
     $upgradeArguments = @(
         'run', '--rm',
-        '-e', 'DATABASE_URL', '-e', 'JWT_SIGNING_KEY', '-e', 'SUPABASE_URL', '-e', 'SUPABASE_SERVICE_KEY',
+        '-e', 'DATABASE_URL', '-e', 'JWT_SIGNING_KEY', '-e', 'SUPABASE_URL', '-e', 'SUPABASE_SERVICE_KEY', '-e', 'ENCRYPTION_KEY', '-e', 'DEDUP_HASH_KEY',
         $fullImageName,
         'alembic', 'upgrade', 'head'
     )
@@ -126,7 +129,7 @@ try {
     # Prints which migration the live database is now on. It should be the "head" revision.
     $currentArguments = @(
         'run', '--rm',
-        '-e', 'DATABASE_URL', '-e', 'JWT_SIGNING_KEY', '-e', 'SUPABASE_URL', '-e', 'SUPABASE_SERVICE_KEY',
+        '-e', 'DATABASE_URL', '-e', 'JWT_SIGNING_KEY', '-e', 'SUPABASE_URL', '-e', 'SUPABASE_SERVICE_KEY', '-e', 'ENCRYPTION_KEY', '-e', 'DEDUP_HASH_KEY',
         $fullImageName,
         'alembic', 'current'
     )
@@ -134,7 +137,7 @@ try {
 }
 finally {
     # Always wipe the secrets from this process, even after an error.
-    Remove-Item Env:\LIVE_DATABASE_URL, Env:\DATABASE_URL, Env:\JWT_SIGNING_KEY, Env:\SUPABASE_URL, Env:\SUPABASE_SERVICE_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:\LIVE_DATABASE_URL, Env:\DATABASE_URL, Env:\JWT_SIGNING_KEY, Env:\SUPABASE_URL, Env:\SUPABASE_SERVICE_KEY, Env:\ENCRYPTION_KEY, Env:\DEDUP_HASH_KEY -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
