@@ -68,11 +68,27 @@ function Invoke-External {
         return $null
     }
 
-    if ($CaptureOutput) {
-        $outputLines = & $Executable @Arguments 2>&1
+    # Each element of $Arguments must reach the program as exactly ONE argument
+    # (e.g. the whole `sh -c` script). pwsh 7.3+: 'Standard' passing does this correctly.
+    # Windows PowerShell 5.1 does not quote embedded spaces/quotes, so quote them by hand.
+    $nativeArguments = $Arguments
+    if ($PSVersionTable.PSVersion -ge [version]'7.3') {
+        $PSNativeCommandArgumentPassing = 'Standard'
     }
     else {
-        & $Executable @Arguments
+        $nativeArguments = @($Arguments | ForEach-Object {
+            if ($_ -match '[\s"]' -or $_ -eq '') {
+                '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+            }
+            else { $_ }
+        })
+    }
+
+    if ($CaptureOutput) {
+        $outputLines = & $Executable @nativeArguments 2>&1
+    }
+    else {
+        & $Executable @nativeArguments
         $outputLines = $null
     }
     $exitCode = $LASTEXITCODE
