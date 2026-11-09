@@ -68,3 +68,32 @@ def test_generateResultPdfFallsBackToPendingReviewWhenNotesAreNone() -> None:
     """
     text = _capturedInterpretationText(None)
     assert text == "Pending review"
+
+
+def test_generateResultPdfListsEveryParticleClassThePortalShows() -> None:
+    """Every class in PARTICLE_LABELS gets a row, so the PDF matches the portal.
+
+    Yeast, sperm cells and Trichomonas vaginalis were missing from the PDF table
+    while the patient portal listed them.
+    """
+    tables: list[list[list[str]]] = []
+
+    def _fakeTable(data, *args, **kwargs):
+        tables.append(data)
+        return MagicMock()
+
+    detail = _makeDetail(None)
+    detail.particleCounts = [
+        ParticleCount(label=label, count=index + 1) for index, label in enumerate(PARTICLE_LABELS)
+    ]
+    with patch("reportlab.platypus.Paragraph", return_value=MagicMock()), \
+         patch("reportlab.platypus.Table", side_effect=_fakeTable), \
+         patch("reportlab.platypus.SimpleDocTemplate.build", return_value=None):
+        pdf_service.generateResultPdf(detail, "Jane Doe", uuid.uuid4())
+
+    [cellTable] = [t for t in tables if t and t[0] == ["Parameter", "Count"]]
+    rows = dict(cellTable[1:])
+    assert len(rows) == len(PARTICLE_LABELS)
+    assert rows["Yeast"] == str(PARTICLE_LABELS.index("yeast") + 1)
+    assert rows["Sperm Cells"] == str(PARTICLE_LABELS.index("sperm_cells") + 1)
+    assert rows["Trichomonas vaginalis"] == str(PARTICLE_LABELS.index("trichomonas_vaginalis") + 1)

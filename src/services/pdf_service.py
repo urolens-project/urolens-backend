@@ -147,6 +147,9 @@ def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -
         ("Bacteria", _safeVal(counts.get("bacteria"))),
         ("Crystals", _safeVal(counts.get("crystals"))),
         ("Mucus Threads", _safeVal(counts.get("mucus_threads"))),
+        ("Yeast", _safeVal(counts.get("yeast"))),
+        ("Sperm Cells", _safeVal(counts.get("sperm_cells"))),
+        ("Trichomonas vaginalis", _safeVal(counts.get("trichomonas_vaginalis"))),
     ]
     cellData = [["Parameter", "Count"]]
     for param, count in params:
