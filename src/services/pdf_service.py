@@ -193,18 +193,13 @@ def generateResultPdf(result: PatientResultDetail, patientName: str, resultId) -
             ],
             [
                 Paragraph(_safeStr(result.analyzedBy), sigLabelStyle),
-                # No pathologist-review concept exists in the data model yet —
-                # always blank rather than referencing fields that were never
-                # real (result.pathologistName/pathologistLicense).
-                Paragraph(_safeStr(None), sigLabelStyle),
+                # The Laboratory Supervisor who approved the result; the data
+                # model has no separate pathologist review.
+                Paragraph(_safeStr(result.reviewedBy), sigLabelStyle),
             ],
             [
                 Paragraph("Medical Technologist", sigLabelStyle),
-                Paragraph("Pathologist", sigLabelStyle),
-            ],
-            [
-                Paragraph("", sigLabelStyle),
-                Paragraph(f"License No: {_safeStr(None)}", sigLabelStyle),
+                Paragraph("Laboratory Supervisor", sigLabelStyle),
             ],
         ],
         colWidths=[75 * mm, 75 * mm],

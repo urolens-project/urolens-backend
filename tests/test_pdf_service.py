@@ -97,3 +97,27 @@ def test_generateResultPdfListsEveryParticleClassThePortalShows() -> None:
     assert rows["Yeast"] == str(PARTICLE_LABELS.index("yeast") + 1)
     assert rows["Sperm Cells"] == str(PARTICLE_LABELS.index("sperm_cells") + 1)
     assert rows["Trichomonas vaginalis"] == str(PARTICLE_LABELS.index("trichomonas_vaginalis") + 1)
+
+
+
+def test_generateResultPdfNamesTheApprovingSupervisorAsReviewer() -> None:
+    """The "Reviewed by" column shows the approving Laboratory Supervisor, not a
+    permanently blank "Pathologist / License No: Pending".
+    """
+    tables: list[list[list]] = []
+
+    def _fakeTable(data, *args, **kwargs):
+        tables.append(data)
+        return MagicMock()
+
+    detail = _makeDetail("No significant abnormalities detected.")
+    detail.reviewedBy = "supervisor"
+    with patch("reportlab.platypus.Paragraph", side_effect=lambda text, *a, **k: text), \
+         patch("reportlab.platypus.Table", side_effect=_fakeTable), \
+         patch("reportlab.platypus.SimpleDocTemplate.build", return_value=None):
+        pdf_service.generateResultPdf(detail, "Jane Doe", uuid.uuid4())
+
+    [sigTable] = [t for t in tables if t and t[0] == ["Examined by:", "Reviewed by:"]]
+    cells = [cell for row in sigTable for cell in row]
+    assert "supervisor" in cells and "Laboratory Supervisor" in cells
+    assert not any("Pathologist" in c or "License" in c for c in cells)
