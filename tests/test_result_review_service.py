@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.api.results import getResultReviewService
+from src.core.config import settings
 from src.core.exceptions import (
     ConflictException,
     NotFoundException,
@@ -49,6 +50,7 @@ from src.models.result_review import ResultReview
 from src.models.smart_diagnosis_output import SmartDiagnosisOutput
 from src.models.specimen import Specimen
 from src.models.user import User
+from src.schemas.result_review import PendingResultItem
 from src.services.result_review_service import ResultReviewService, getSmartDiagnosis
 
 RESULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
@@ -1105,10 +1107,11 @@ def _makeCountResult(n: int) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_getPendingIncludesSampleUidFromSpecimen():
+async def test_getPendingIncludesSampleUidFromSpecimen(monkeypatch):
     """UROLENS-148: the pending list must surface the specimen's human-facing
     sampleUid (e.g. SMP-...), not the specimen's raw UUID.
     """
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
     ar = _makeResult()
     ar.confirmedAt = datetime(2026, 9, 28, tzinfo=UTC)
     specimen = _makeQueueSpecimen()
@@ -1177,3 +1180,59 @@ async def test_getEscalatedIncludesSampleUidFromSpecimen():
 
     assert response["items"][0]["sampleUid"] == "SMP-20260928-12345"
     assert response["items"][0]["sampleUid"] != str(SPECIMEN_ID)
+
+
+
+# ── Supervisor pending queue: field counts (multi-field workflow) ─────────
+
+
+def _pendingQueueDb(ar, specimen, fieldRows=None):
+    specimen.patientUid = "PAT-000001"
+    effects = [
+        _makeCountResult(1),
+        _makeScalarsResult([ar]),
+        _makeScalarsResult([specimen]),
+        _makeScalarsResult([]),  # patients (none needed for these checks)
+    ]
+    if fieldRows is not None:
+        effects.append(MagicMock(all=MagicMock(return_value=fieldRows)))
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=effects)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_getPendingLeavesFieldCountsOutWithTheFlagOff(monkeypatch):
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", False)
+    ar = _makeResult()
+    db = _pendingQueueDb(ar, _makeQueueSpecimen())
+
+    item = (await ResultReviewService(db=db).getPending(page=1, pageSize=10))["items"][0]
+
+    assert "fieldCount" not in item and "verifiedFieldCount" not in item
+    assert db.execute.await_count == 4  # count, rows, specimens, patients: no field query
+    assert "fieldCount" not in PendingResultItem(**item).model_dump()
+
+
+@pytest.mark.asyncio
+async def test_getPendingCarriesAcceptedAndCheckedFieldCountsWithTheFlagOn(monkeypatch):
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    ar = _makeResult()
+    ar.confirmedAt = datetime(2026, 11, 9, tzinfo=UTC)
+    db = _pendingQueueDb(ar, _makeQueueSpecimen(), fieldRows=[(ar.resultId, 10, 7)])
+
+    item = (await ResultReviewService(db=db).getPending(page=1, pageSize=10))["items"][0]
+
+    assert (item["fieldCount"], item["verifiedFieldCount"]) == (10, 7)
+    assert PendingResultItem(**item).model_dump()["verifiedFieldCount"] == 7
+
+
+@pytest.mark.asyncio
+async def test_getPendingGivesZerosToAResultWithNoAcceptedFields(monkeypatch):
+    monkeypatch.setattr(settings, "fieldWorkflowEnabled", True)
+    ar = _makeResult()
+    db = _pendingQueueDb(ar, _makeQueueSpecimen(), fieldRows=[])
+
+    item = (await ResultReviewService(db=db).getPending(page=1, pageSize=10))["items"][0]
+
+    assert (item["fieldCount"], item["verifiedFieldCount"]) == (0, 0)
