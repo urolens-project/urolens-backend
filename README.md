@@ -1,7 +1,36 @@
 # 🔬 UROLENS-BACKEND
 
-Core LIS Transactions & Business Logic Engine (FastAPI + PostgreSQL + Alembic DB Migrations)
-with RA 10173 encryption.
+Backend API for **UroLens**, an AI-assisted urinalysis and laboratory information system. It serves the web portal and the mobile app: staff and patient authentication, patient and specimen records, lab requests, multi-field microscope image analysis with the UroLens AI engine, Smart Diagnosis, result review and release, notifications, and an audit trail. Patient data is encrypted at rest in line with RA 10173 (Data Privacy Act).
+
+## Deployed URL
+
+- **API:** https://urolens-api.azurewebsites.net
+- **Interactive API docs:** https://urolens-api.azurewebsites.net/docs
+- **Health check:** https://urolens-api.azurewebsites.net/health/ready
+- Web portal: https://portal.urolens.app ([urolens-web](https://github.com/urolens-project/urolens-web)) · Mobile app: [urolens-mobile](https://github.com/urolens-project/urolens-mobile)
+
+## Tech stack
+
+- **Language / framework:** Python 3.13, FastAPI 0.136, Uvicorn, Pydantic 2
+- **Database:** PostgreSQL on Supabase, SQLAlchemy 2 (async, asyncpg), Alembic migrations
+- **Storage:** Supabase Storage (private bucket, signed URLs)
+- **Security:** PyJWT, bcrypt, cryptography (Fernet encryption at rest)
+- **AI:** [urolens-ai-engine](https://github.com/urolens-project/urolens-ai-engine) v0.2.1 (YOLOv8 on PyTorch CPU, input gate, Smart Diagnosis rule engine), installed from `requirements.txt`
+- **Reports:** ReportLab (PDF results)
+- **Quality:** pytest, Ruff, pre-commit
+- **Deployment:** Docker, GitHub Actions, GitHub Container Registry, Azure App Service (Linux, B1)
+
+## Environment variables (names only)
+
+See `.env.example` for descriptions and placeholder values. Never commit a real `.env`.
+
+| Group | Variables |
+|---|---|
+| Database and storage | `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_IMAGE_BUCKET` |
+| Security | `JWT_SIGNING_KEY`, `JWT_ALGORITHM`, `JWT_EXPIRY_HOURS`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `MAX_FAILED_ATTEMPTS`, `ENCRYPTION_KEY`, `DEDUP_HASH_KEY` |
+| AI engine | `AI_MODEL_VERSION`, `MODEL_WEIGHTS_PATH`, `GATE_WEIGHTS_PATH`, `RULE_ENGINE_CONFIG_PATH`, `CLASS_THRESHOLDS_PATH` (leave the four paths unset; the engine ships its own files) |
+| Multi-field workflow | `FIELD_WORKFLOW_ENABLED`, `MIN_FIELDS_PER_SPECIMEN`, `FIELD_LOW_CONFIDENCE_THRESHOLD`, `FIELD_OUTLIER_MULTIPLIER`, `FIELD_OUTLIER_MIN_ABOVE` |
+| Deployment (Azure) | `CORS_ALLOWED_ORIGINS`, `WEBSITES_PORT`, `WEBSITES_CONTAINER_START_TIME_LIMIT`, `TORCH_NUM_THREADS` |
 
 ---
 
@@ -15,7 +44,7 @@ with RA 10173 encryption.
 ### 1️⃣ 📥 Clone and create a virtual environment
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/urolens-project/urolens-backend.git
 cd urolens-backend
 python -m venv .venv
 # Windows
