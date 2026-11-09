@@ -70,6 +70,8 @@ class PhysicianResultSummary(BaseModel):
 
     resultId: str
     specimenId: str
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20261109-47580`)."""
     patientName: str
     patientUid: str
     patientAge: int | None
@@ -106,6 +108,8 @@ class PhysicianResultDetail(BaseModel):
 
     resultId: str
     specimenId: str
+    sampleUid: str | None = None
+    """The specimen's human-facing sample ID (e.g. `SMP-20261109-47580`)."""
     patientName: str
     patientUid: str
     patientAge: int | None
@@ -130,4 +134,4 @@ class PhysicianResultDetail(BaseModel):
 
     @model_serializer(mode="wrap")
     def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
-        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel", "fieldSummary"))
+        return dropNoneKeys(handler(self), ("sampleUid", "fieldCount", "countsLabel", "fieldSummary"))
