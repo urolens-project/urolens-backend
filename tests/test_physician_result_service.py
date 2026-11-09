@@ -69,6 +69,7 @@ def _makeSpecimen(labRequestId=LAB_REQUEST_ID):
     spec = MagicMock(spec=Specimen)
     spec.specimenId = SPECIMEN_ID
     spec.patientUid = "PAT-000071"
+    spec.sampleUid = "SMP-20261109-00071"
     spec.patientName = ""
     spec.medtechId = None
     spec.labRequestId = labRequestId
@@ -168,6 +169,7 @@ async def test_getResultDetailReturnsFullDetailForOwnedReleasedResult():
 
     assert result.status == "RELEASED"
     assert result.resultId == str(RESULT_ID)
+    assert result.sampleUid == "SMP-20261109-00071"
     db.add.assert_called_once()
     auditLogger.record.assert_awaited_once()
     assert auditLogger.record.call_args.kwargs["eventType"] == "RESULT_RETRIEVED"
@@ -425,6 +427,7 @@ async def test_listResultsShowsPlaceholderForUnreleasedRows():
     byId = {item.resultId: item for item in result.items}
     assert byId[str(pendingRow.resultId)].status == "PENDING"
     assert byId[str(releasedRow.resultId)].status == "RELEASED"
+    assert {item.sampleUid for item in result.items} == {"SMP-20261109-00071"}
     assert result.total == 2
 
 

@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
+from src.models.result_approval import ResultApproval
 from src.models.specimen import Specimen
 from src.models.user import User
 from src.schemas.patient_portal import PatientResultDetailResponse
@@ -372,3 +373,46 @@ async def test_patientResultDetailResponseNeverCarriesRawSmartDiagnosisScores():
     }
     assert fieldNames.isdisjoint(leakedScoreFields)
     assert "smartDiagnosisUnavailable" in fieldNames
+
+
+
+SUPERVISOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000059")
+
+
+def _withApproval(db: AsyncMock, approval) -> AsyncMock:
+    """First execute() resolves the patient; the second returns the approval."""
+    resolveResult = db.execute.return_value
+    approvalResult = MagicMock()
+    approvalResult.scalars.return_value.first.return_value = approval
+    db.execute = AsyncMock(side_effect=[resolveResult, approvalResult])
+    return db
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailReviewedByIsTheApprovingSupervisor():
+    """The PDF's "Reviewed by" line names the supervisor who approved the result."""
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    approval = ResultApproval(resultId=RESULT_ID, approvedBy=SUPERVISOR_ID)
+    getMap = {
+        (Specimen, SPECIMEN_ID): _makeSpecimen(),
+        (User, SUPERVISOR_ID): _makeUser(userId=SUPERVISOR_ID, username="supervisor"),
+    }
+    db = _withApproval(_makeDetailDb(PATIENT_ID, row, getMap), approval)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.reviewedBy == "supervisor"
+
+
+@pytest.mark.asyncio
+async def test_getResultDetailReviewedByIsLeftOutWithoutAnApproval():
+    row = _makeResultRow(resultStatus="RELEASED", patientId=PATIENT_ID)
+    getMap = {(Specimen, SPECIMEN_ID): _makeSpecimen()}
+    db = _withApproval(_makeDetailDb(PATIENT_ID, row, getMap), None)
+    service = PatientResultService(db=db, auditLogger=_makeAuditLogger())
+
+    result = await service.getResultDetail(RESULT_ID, USER_ID, _fakeRequest())
+
+    assert result.reviewedBy is None
+    assert "reviewedBy" not in result.model_dump()

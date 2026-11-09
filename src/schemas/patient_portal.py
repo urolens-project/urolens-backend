@@ -67,10 +67,12 @@ class PatientResultDetailResponse(BaseModel):
     """Fields the counts average over (multi-field results only; left out otherwise)."""
     countsLabel: str | None = None
     """`average per field (N fields)`, or `single image` for a result from before multi-field."""
+    reviewedBy: str | None = None
+    """Username of the Laboratory Supervisor who approved the result (left out when none)."""
 
     @model_serializer(mode="wrap")
     def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
-        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel"))
+        return dropNoneKeys(handler(self), ("fieldCount", "countsLabel", "reviewedBy"))
 
 
 # Legacy alias kept for the PDF service which builds its own view of the data.
