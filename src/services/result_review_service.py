@@ -362,6 +362,11 @@ class ResultReviewService:
         specMap, patMap, userMap = await self._batchPatientContext(
             [ar.specimenId for ar in arRows]
         )
+        fieldCounts = (
+            await self._acceptedFieldCounts([ar.resultId for ar in arRows])
+            if settings.fieldWorkflowEnabled
+            else {}
+        )
 
         items = []
         for ar in arRows:
@@ -379,9 +384,35 @@ class ResultReviewService:
                     "medtechName": userMap.get(spec.medtechId, "") if spec and spec.medtechId else "",
                     "confirmedAt": ar.confirmedAt,
                     "status": ar.status,
+                    **fieldCounts.get(ar.resultId, {}),
                 }
             )
         return {"items": items, "total": total, "page": page, "pageSize": pageSize}
+
+    async def _acceptedFieldCounts(self, resultIds: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int]]:
+        """Accepted and MedTech-checked field counts for a page of results.
+
+        One grouped query for the whole page. A result with no accepted fields
+        gets zeros, so the queue shows "0 / 0" rather than a blank.
+        """
+        rows = (
+            await self.db.execute(
+                select(
+                    ResultField.resultId,
+                    func.count(),
+                    func.count(ResultField.verifiedBy),
+                )
+                .where(
+                    ResultField.resultId.in_(resultIds),
+                    ResultField.status == FieldStatus.ACCEPTED,
+                )
+                .group_by(ResultField.resultId)
+            )
+        ).all()
+        counts = {resultId: {"fieldCount": 0, "verifiedFieldCount": 0} for resultId in resultIds}
+        for resultId, accepted, verified in rows:
+            counts[resultId] = {"fieldCount": accepted, "verifiedFieldCount": verified}
+        return counts
 
     # ── Approved today list ───────────────────────────────────────────────
 

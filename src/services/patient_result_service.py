@@ -15,6 +15,7 @@ from src.core.particle_counts import settledCounts, toWholeCount
 from src.models.analysis_result import AnalysisResult
 from src.models.lab_request import LabRequest
 from src.models.patient import Patient
+from src.models.result_approval import ResultApproval
 from src.models.result_view import ResultView
 from src.models.specimen import Specimen
 from src.models.user import User
@@ -219,6 +220,21 @@ class PatientResultService:
             labRequest = await self.db.get(LabRequest, spec.labRequestId)
             requestingPhysician = labRequest.physicianName if labRequest else None
 
+        # The supervisor who approved the result, for the PDF's "Reviewed by" line.
+        reviewedBy: str | None = None
+        approval = (
+            await self.db.execute(
+                select(ResultApproval)
+                .where(ResultApproval.resultId == row.resultId)
+                .order_by(ResultApproval.approvedAt.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if approval is not None:
+            supervisor = await self.db.get(User, approval.approvedBy)
+            username = getattr(supervisor, "username", None)
+            reviewedBy = username if isinstance(username, str) else None
+
         return PatientResultDetailResponse(
             status=row.status,
             confirmedAt=row.confirmedAt,
@@ -232,4 +248,5 @@ class PatientResultService:
             releasedAt=row.releasedAt,
             fieldCount=fieldCount,
             countsLabel=countsLabel,
+            reviewedBy=reviewedBy,
         )

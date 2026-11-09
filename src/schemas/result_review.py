@@ -216,6 +216,15 @@ class PendingResultItem(BaseModel):
     medtechName: str
     confirmedAt: datetime | None = None
     status: str
+    fieldCount: int | None = None
+    """Accepted fields. Multi-field workflow only: left out of the JSON, not sent
+    as null, while `fieldWorkflowEnabled` is off, so the response is unchanged."""
+    verifiedFieldCount: int | None = None
+    """Accepted fields a MedTech has marked as checked (same omission rule)."""
+
+    @model_serializer(mode="wrap")
+    def _omitUnsetFieldKeys(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
+        return dropNoneKeys(handler(self), ("fieldCount", "verifiedFieldCount"))
 
 
 class PendingResultListResponse(BaseModel):

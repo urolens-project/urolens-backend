@@ -62,6 +62,12 @@ def _computeAge(dobStr: str | None) -> int | None:
 
 
 
+
+def _sampleUidOf(spec: Specimen | None) -> str | None:
+    """The specimen's human-facing sample ID (`SMP-…`), or None when it has none yet."""
+    value = getattr(spec, "sampleUid", None)
+    return value if isinstance(value, str) else None
+
 class PhysicianResultService:
     """Read-side operations for the physician portal's result list/detail
     views, scoped to results whose own lab request was submitted by the
@@ -171,6 +177,7 @@ class PhysicianResultService:
             items.append(PhysicianResultSummary(
                 resultId=str(ar.resultId),
                 specimenId=str(ar.specimenId) if ar.specimenId else "",
+                sampleUid=_sampleUidOf(spec),
                 patientName=patientName,
                 patientUid=(spec.patientUid if spec else None)
                 or (pat.patientUid if pat else None)
@@ -360,6 +367,7 @@ class PhysicianResultService:
         return PhysicianResultDetail(
             resultId=str(ar.resultId),
             specimenId=str(ar.specimenId) if ar.specimenId else "",
+            sampleUid=_sampleUidOf(spec),
             patientName=patientName,
             patientUid=(spec.patientUid if spec else None)
             or (pat.patientUid if pat else None)

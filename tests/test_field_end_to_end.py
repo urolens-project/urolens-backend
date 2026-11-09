@@ -24,10 +24,12 @@ from src.models.analysis_result import AnalysisResult, ResultStatus
 from src.models.field_annotation_edit import FieldAnnotationEdit
 from src.models.image import Image, ImageStatus
 from src.models.manual_override import ManualOverride
+from src.models.result_approval import ResultApproval
 from src.models.result_confirmation import ResultConfirmation
 from src.models.result_field import FieldStatus, ResultField
 from src.models.result_return import ResultReturn
 from src.models.specimen import Specimen
+from src.models.user import User
 from src.schemas.field import SaveAnnotationsRequest
 from src.schemas.patient_portal import PatientResultDetail
 from src.services import pdf_service
@@ -75,6 +77,7 @@ class World:
         self.edits: list[FieldAnnotationEdit] = []
         self.overrides: list[ManualOverride] = []
         self.returns: list[ResultReturn] = []
+        self.approvals: list[ResultApproval] = []
         self.confirmation: ResultConfirmation | None = None
         self.statements: list[str] = []
         self.commit = AsyncMock()
@@ -115,6 +118,8 @@ class World:
             return self.specimen
         if model is Image:
             return self.images.get(key)
+        if model is User and key == SUPERVISOR_ID:
+            return User(userId=SUPERVISOR_ID, username="supervisor")
         return None
 
     async def refresh(self, obj, **kwargs):
@@ -130,6 +135,8 @@ class World:
             self.returns.append(obj)
         elif isinstance(obj, ResultConfirmation):
             self.confirmation = obj
+        elif isinstance(obj, ResultApproval):
+            self.approvals.append(obj)
 
     async def execute(self, stmt):
         sql = str(stmt)
@@ -193,6 +200,8 @@ class World:
             out.scalar_one.return_value = sum(1 for r in self.returns if since is not None and r.returnedAt > since)
         elif "from patients" in low:
             out.scalar_one_or_none.return_value = PATIENT_ID
+        elif "from result_approvals" in low:
+            out.scalars.return_value.first.return_value = self.approvals[-1] if self.approvals else None
         else:  # pragma: no cover - a query the world does not know about
             raise AssertionError(f"unexpected statement: {low}")
         return out
@@ -323,6 +332,7 @@ async def test_fromTheFirstOpenToThePatientsPdf(world):
     assert (byLabel["erythrocytes"].count, byLabel["erythrocytes"].displayValue) == (4, "4")
     assert (byLabel["urinary_casts"].count, byLabel["urinary_casts"].displayValue) == (1, "<1")
     assert byLabel["bacteria"].displayValue == "0"
+    assert detail.reviewedBy == "supervisor"
 
     paragraphs: list[str] = []
     rows: list = []
